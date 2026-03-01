@@ -62,12 +62,12 @@ export default function DashboardPage() {
 
       {/* Prices Section */}
       <div style={{ marginBottom: '1.5rem' }}>
-        <h2 style={{ fontSize: '0.75rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '1rem', fontWeight: '600' }}>Live Prices</h2>
+        <h2 style={{ fontSize: '0.75rem', color: '#666', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '1rem', fontWeight: '600' }}>Live Prices</h2>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.75rem' }}>
           {prices.map((price) => {
             const isPositive = price.change24h >= 0
             return (
-              <div key={price.symbol} style={{ backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '12px', padding: '1rem' }}>
+              <div key={price.symbol} style={{ backgroundColor: '#111', borderRadius: '12px', padding: '1rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
                   <span style={{ fontWeight: 'bold', fontSize: '1rem' }}>{price.symbol}</span>
                   {isPositive ? (
@@ -96,18 +96,17 @@ export default function DashboardPage() {
       {/* Two Column Section */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1rem' }}>
         {/* Trading Signals */}
-        <div style={{ backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '12px', padding: '1rem' }}>
-          <h2 style={{ fontSize: '0.75rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '1rem', fontWeight: '600' }}>Trading Signals</h2>
+        <div style={{ backgroundColor: '#111', borderRadius: '12px', padding: '1rem' }}>
+          <h2 style={{ fontSize: '0.75rem', color: '#666', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '1rem', fontWeight: '600' }}>Trading Signals</h2>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
             {signals.map((signal) => {
               const isBullish = signal.action === 'BUY'
               const isBearish = signal.action === 'SELL'
-              const bgColor = isBullish ? 'rgba(34, 197, 94, 0.1)' : isBearish ? 'rgba(239, 68, 68, 0.1)' : '#2a2a2a'
-              const borderColor = isBullish ? 'rgba(34, 197, 94, 0.3)' : isBearish ? 'rgba(239, 68, 68, 0.3)' : '#333'
-              const actionColor = isBullish ? '#22c55e' : isBearish ? '#ef4444' : '#888'
+              const bgColor = isBullish ? 'rgba(34, 197, 94, 0.15)' : isBearish ? 'rgba(239, 68, 68, 0.15)' : '#1a1a1a'
+              const actionColor = isBullish ? '#22c55e' : isBearish ? '#ef4444' : '#666'
 
               return (
-                <div key={signal.symbol} style={{ backgroundColor: bgColor, border: `1px solid ${borderColor}`, borderRadius: '8px', padding: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div key={signal.symbol} style={{ backgroundColor: bgColor, borderRadius: '8px', padding: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                     {isBullish ? (
                       <TrendingUp style={{ width: '16px', height: '16px', color: '#22c55e' }} />
@@ -118,7 +117,7 @@ export default function DashboardPage() {
                     )}
                     <div>
                       <span style={{ fontWeight: 'bold', fontSize: '0.875rem' }}>{signal.symbol}</span>
-                      <span style={{ marginLeft: '0.5rem', fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', backgroundColor: bgColor, color: actionColor, border: `1px solid ${borderColor}` }}>
+                      <span style={{ marginLeft: '0.5rem', fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', backgroundColor: '#1a1a1a', color: actionColor }}>
                         {signal.action}
                       </span>
                     </div>
@@ -131,18 +130,18 @@ export default function DashboardPage() {
         </div>
 
         {/* Portfolio */}
-        <div style={{ backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '12px', padding: '1rem' }}>
-          <h2 style={{ fontSize: '0.75rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '1rem', fontWeight: '600' }}>Portfolio</h2>
+        <div style={{ backgroundColor: '#111', borderRadius: '12px', padding: '1rem' }}>
+          <h2 style={{ fontSize: '0.75rem', color: '#666', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '1rem', fontWeight: '600' }}>Portfolio</h2>
 
           {/* Balance */}
-          <div style={{ backgroundColor: '#2a2a2a', borderRadius: '8px', padding: '1rem', marginBottom: '1rem' }}>
+          <div style={{ backgroundColor: '#1a1a1a', borderRadius: '8px', padding: '1rem', marginBottom: '1rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <div>
-                <p style={{ fontSize: '0.75rem', color: '#888', margin: '0 0 0.25rem 0' }}>Total Balance</p>
+                <p style={{ fontSize: '0.75rem', color: '#666', margin: '0 0 0.25rem 0' }}>Total Balance</p>
                 <p style={{ fontSize: '1.5rem', fontWeight: 'bold', margin: 0 }}>$10,000</p>
               </div>
               <div style={{ textAlign: 'right' }}>
-                <p style={{ fontSize: '0.75rem', color: '#888', margin: '0 0 0.25rem 0' }}>P&L</p>
+                <p style={{ fontSize: '0.75rem', color: '#666', margin: '0 0 0.25rem 0' }}>P&L</p>
                 <p style={{ fontSize: '1.125rem', fontWeight: 'bold', margin: 0, color: '#888' }}>$0.00</p>
               </div>
             </div>
@@ -151,7 +150,7 @@ export default function DashboardPage() {
           {/* No Positions */}
           <div style={{ textAlign: 'center', padding: '2rem 1rem' }}>
             <DollarSign style={{ width: '32px', height: '32px', margin: '0 auto 0.5rem', color: '#333' }} />
-            <p style={{ fontSize: '0.875rem', color: '#888', margin: 0 }}>No open positions</p>
+            <p style={{ fontSize: '0.875rem', color: '#666', margin: 0 }}>No open positions</p>
           </div>
         </div>
       </div>
