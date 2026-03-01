@@ -15,21 +15,13 @@ const INITIAL_PRICES = [
 // Trend predictions for next few days
 const TREND_PREDICTIONS = {
   BTC: {
-    shortTerm: 'bullish',
-    mediumTerm: 'bullish',
-    direction: 'UP',
-    confidence: 72,
-    targets: ['$67,500', '$69,800', '$72,000'],
-    timeframe: '3-5 days',
+    shortTerm: { direction: 'UP', confidence: 78, targets: ['$66,800', '$67,500'], timeframe: '1-3 days' },
+    mediumTerm: { direction: 'UP', confidence: 72, targets: ['$69,800', '$72,000', '$75,500'], timeframe: '3-5 days' },
     reasoning: ['Breaking above $65K resistance', 'Strong buying volume', 'Positive momentum indicators']
   },
   ETH: {
-    shortTerm: 'neutral',
-    mediumTerm: 'bullish',
-    direction: 'SIDEWAYS',
-    confidence: 58,
-    targets: ['$1,980', '$2,050', '$2,150'],
-    timeframe: '3-5 days',
+    shortTerm: { direction: 'SIDEWAYS', confidence: 65, targets: ['$1,920', '$1,950'], timeframe: '1-3 days' },
+    mediumTerm: { direction: 'UP', confidence: 58, targets: ['$2,050', '$2,150', '$2,280'], timeframe: '3-5 days' },
     reasoning: ['Consolidating near $1.9K', 'Waiting for BTC lead', 'Stable trading pattern']
   }
 }
@@ -136,36 +128,59 @@ export default function DashboardPage() {
                   {isPositive ? '+' : ''}{coin.change24h.toFixed(2)}% (24h)
                 </div>
 
-                {/* Trend Prediction */}
+                {/* Trend Predictions */}
                 {btcData && (
-                  <div style={{ backgroundColor: '#111', borderRadius: '12px', padding: '1rem', marginBottom: '1rem' }}>
-                    <div style={{ fontSize: '0.75rem', color: '#666', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.75rem', fontWeight: '600' }}>
-                      {btcData.timeframe} Forecast
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        {btcData.direction === 'UP' ? (
-                          <ArrowUpRight style={{ width: '20px', height: '20px', color: '#22c55e' }} />
-                        ) : btcData.direction === 'DOWN' ? (
-                          <ArrowDownRight style={{ width: '20px', height: '20px', color: '#ef4444' }} />
-                        ) : (
-                          <Minus style={{ width: '20px', height: '20px', color: '#888' }} />
-                        )}
-                        <span style={{ fontSize: '1.125rem', fontWeight: 'bold', color: btcData.direction === 'UP' ? '#22c55e' : btcData.direction === 'DOWN' ? '#ef4444' : '#888' }}>
-                          {btcData.direction}
-                        </span>
+                  <>
+                    {/* 1-3 Day Forecast */}
+                    <div style={{ backgroundColor: 'rgba(34, 197, 94, 0.08)', border: '1px solid rgba(34, 197, 94, 0.2)', borderRadius: '12px', padding: '1rem', marginBottom: '0.75rem' }}>
+                      <div style={{ fontSize: '0.75rem', color: '#22c55e', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem', fontWeight: '600' }}>
+                        {btcData.shortTerm.timeframe} Forecast
                       </div>
-                      <span style={{ fontSize: '0.875rem', color: '#888' }}>{btcData.confidence}% confidence</span>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          {btcData.shortTerm.direction === 'UP' ? (
+                            <ArrowUpRight style={{ width: '18px', height: '18px', color: '#22c55e' }} />
+                          ) : btcData.shortTerm.direction === 'DOWN' ? (
+                            <ArrowDownRight style={{ width: '18px', height: '18px', color: '#ef4444' }} />
+                          ) : (
+                            <Minus style={{ width: '18px', height: '18px', color: '#888' }} />
+                          )}
+                          <span style={{ fontSize: '1rem', fontWeight: 'bold', color: btcData.shortTerm.direction === 'UP' ? '#22c55e' : btcData.shortTerm.direction === 'DOWN' ? '#ef4444' : '#888' }}>
+                            {btcData.shortTerm.direction}
+                          </span>
+                        </div>
+                        <span style={{ fontSize: '0.75rem', color: '#888' }}>{btcData.shortTerm.confidence}% conf</span>
+                      </div>
+                      <div style={{ fontSize: '0.7rem', color: '#666', marginTop: '0.5rem' }}>
+                        Targets: {btcData.shortTerm.targets.join(' → ')}
+                      </div>
                     </div>
-                    <div style={{ fontSize: '0.75rem', color: '#666', marginBottom: '0.5rem' }}>Price Targets:</div>
-                    <div style={{ display: 'flex', gap: '0.5rem' }}>
-                      {btcData.targets.map((target, i) => (
-                        <span key={i} style={{ fontSize: '0.75rem', padding: '4px 8px', borderRadius: '6px', backgroundColor: '#1a1a1a', color: '#22c55e', fontWeight: '500' }}>
-                          {target}
-                        </span>
-                      ))}
+
+                    {/* 3-5 Day Forecast */}
+                    <div style={{ backgroundColor: 'rgba(139, 92, 246, 0.08)', border: '1px solid rgba(139, 92, 246, 0.2)', borderRadius: '12px', padding: '1rem', marginBottom: '1rem' }}>
+                      <div style={{ fontSize: '0.75rem', color: '#8b5cf6', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem', fontWeight: '600' }}>
+                        {btcData.mediumTerm.timeframe} Forecast
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          {btcData.mediumTerm.direction === 'UP' ? (
+                            <ArrowUpRight style={{ width: '18px', height: '18px', color: '#8b5cf6' }} />
+                          ) : btcData.mediumTerm.direction === 'DOWN' ? (
+                            <ArrowDownRight style={{ width: '18px', height: '18px', color: '#ef4444' }} />
+                          ) : (
+                            <Minus style={{ width: '18px', height: '18px', color: '#888' }} />
+                          )}
+                          <span style={{ fontSize: '1rem', fontWeight: 'bold', color: btcData.mediumTerm.direction === 'UP' ? '#8b5cf6' : btcData.mediumTerm.direction === 'DOWN' ? '#ef4444' : '#888' }}>
+                            {btcData.mediumTerm.direction}
+                          </span>
+                        </div>
+                        <span style={{ fontSize: '0.75rem', color: '#888' }}>{btcData.mediumTerm.confidence}% conf</span>
+                      </div>
+                      <div style={{ fontSize: '0.7rem', color: '#666', marginTop: '0.5rem' }}>
+                        Targets: {btcData.mediumTerm.targets.join(' → ')}
+                      </div>
                     </div>
-                  </div>
+                  </>
                 )}
 
                 {/* Micro Trend */}
