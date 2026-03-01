@@ -1,0 +1,16 @@
+[
+  {
+    "id": "pos-1772392289032-z4wibptno",
+    "symbol": "BTC",
+    "type": "LONG",
+    "entryPrice": 50000,
+    "currentPrice": 99.85675353644035,
+    "quantity": 0.1,
+    "leverage": 1,
+    "marginUsed": 5000,
+    "pnl": 4990.014324646356,
+    "pnlPercent": -99.80028649292711,
+    "timestamp": 1772392289032,
+    "status": "open"
+  }
+]
