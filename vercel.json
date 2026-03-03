@@ -5,19 +5,7 @@
   "regions": ["sin1"],
   "crons": [
     {
-      "path": "/api/cron/improvement-cycle",
-      "schedule": "0 */6 * * *"
-    },
-    {
-      "path": "/api/cron/market-analysis",
-      "schedule": "0 * * * *"
-    },
-    {
-      "path": "/api/cron/strategy-generation",
-      "schedule": "0 0 * * 0"
-    },
-    {
-      "path": "/api/cron/autonomous-improve",
+      "path": "/api/cron/intelligence-cycle",
       "schedule": "0 */12 * * *"
     }
   ]
