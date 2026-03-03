@@ -1,0 +1,1465 @@
+"use client"
+
+import { useState, useEffect } from "react"
+import {
+  Activity, TrendingUp, TrendingDown, Target, Shield, AlertTriangle,
+  Calculator, Wallet, Zap, ArrowUpRight, ArrowDownRight, Minus,
+  Settings, Sliders, PieChart, LineChart, Crosshair, Newspaper,
+  BarChart3, Flame, Droplets, Globe, Coins, Layers, Eye,
+  Volume2, Signal, Gauge, Waves, GitBranch, Clock, Sparkles,
+  CheckCircle, XCircle, AlertCircle, Info
+} from "lucide-react"
+
+// Account settings
+const ACCOUNT_SETTINGS = {
+  balance: 365,
+  maxRiskPerTrade: 2,
+  maxDrawdown: 10,
+  maxLeverage: 10,
+  defaultLeverage: 5,
+  stopLossBuffer: 0.2,
+  takeProfitRatio: 2,
+}
+
+// Mock real-time data with all indicators
+const generateMarketData = () => ({
+  // BTC Data
+  BTC: {
+    price: 84752.40,
+    change24h: 2.34,
+    volume: "42.8B",
+    // Technical Indicators
+    rsi: 62.4,
+    macd: { value: 245.8, signal: 198.2, histogram: 47.6 },
+    bollingerBands: { upper: 86200, middle: 83500, lower: 80800, squeeze: false },
+    adx: 28.5,
+    atr: 1680,
+    stochastic: { k: 68.2, d: 62.1 },
+    obv: "2.8B",
+    ema: { ema9: 84120, ema21: 82800, ema50: 79500 },
+    support: [82800, 81200, 79500],
+    resistance: [86200, 88500, 91000],
+    trend: "BULLISH",
+  },
+  // ETH Data
+  ETH: {
+    price: 3248.52,
+    change24h: 1.87,
+    volume: "18.5B",
+    rsi: 58.2,
+    macd: { value: 18.4, signal: 12.2, histogram: 6.2 },
+    bollingerBands: { upper: 3350, middle: 3180, lower: 3010, squeeze: false },
+    adx: 22.1,
+    atr: 95,
+    stochastic: { k: 62.5, d: 58.3 },
+    obv: "890M",
+    ema: { ema9: 3210, ema21: 3150, ema50: 2980 },
+    support: [3150, 3080, 2980],
+    resistance: [3350, 3480, 3620],
+    trend: "BULLISH",
+  },
+  // SOL Data
+  SOL: {
+    price: 172.45,
+    change24h: -1.23,
+    volume: "3.2B",
+    rsi: 42.8,
+    macd: { value: -2.8, signal: 1.2, histogram: -4.0 },
+    bollingerBands: { upper: 185, middle: 172, lower: 159, squeeze: true },
+    adx: 18.5,
+    atr: 8.5,
+    stochastic: { k: 38.2, d: 42.1 },
+    obv: "125M",
+    ema: { ema9: 175, ema21: 178, ema50: 165 },
+    support: [165, 158, 152],
+    resistance: [182, 195, 210],
+    trend: "NEUTRAL",
+  },
+})
+
+// Market overview data
+const marketOverview = {
+  fearAndGreed: { value: 72, label: "Greed", change: 5 },
+  btcDominance: { value: 56.8, change: 0.3 },
+  totalMarketCap: { value: "3.42T", change: 2.1 },
+  fundingRates: {
+    BTC: { rate: 0.012, status: "positive" },
+    ETH: { rate: 0.008, status: "positive" },
+    SOL: { rate: -0.005, status: "negative" },
+  },
+  openInterest: { value: "28.5B", change: 3.2 },
+  liquidationHeatmap: [
+    { price: 82000, amount: "450M" },
+    { price: 79500, amount: "890M" },
+    { price: 88000, amount: "620M" },
+    { price: 91000, amount: "1.2B" },
+  ],
+}
+
+// News with AI summaries
+const newsData = [
+  {
+    id: 1,
+    source: "CoinDesk",
+    title: "Bitcoin ETFs See Record Inflows as Institutional Demand Surges",
+    time: "2 hours ago",
+    summary: "Institutional investors are aggressively accumulating BTC through spot ETFs, signaling strong conviction at current price levels.",
+    impact: "HIGH",
+    category: "BULLISH",
+  },
+  {
+    id: 2,
+    source: "Cointelegraph",
+    title: "Ethereum Layer 2 Scaling Reaches New Milestone",
+    time: "4 hours ago",
+    summary: "Arbitrum and Optimism process record transaction volumes, reducing gas fees by 95% on average.",
+    impact: "MEDIUM",
+    category: "BULLISH",
+  },
+  {
+    id: 3,
+    source: "CoinDesk",
+    title: "Fed Signals Potential Rate Cuts in Coming Months",
+    time: "5 hours ago",
+    summary: "Federal Reserve officials indicate readiness to adjust monetary policy if inflation continues to cool.",
+    impact: "HIGH",
+    category: "BULLISH",
+  },
+  {
+    id: 4,
+    source: "Cointelegraph",
+    title: "Regulatory Concerns Rise Over Stablecoin Oversight",
+    time: "6 hours ago",
+    summary: "Lawmakers propose stricter stablecoin reserves requirements, potentially affecting USDT and USDC liquidity.",
+    impact: "MEDIUM",
+    category: "BEARISH",
+  },
+  {
+    id: 5,
+    source: "CoinDesk",
+    title: "Solana Network Activity Rebounds After Outage",
+    time: "8 hours ago",
+    summary: "Network upgrades show improved stability as transaction volumes return to pre-outage levels.",
+    impact: "LOW",
+    category: "NEUTRAL",
+  },
+]
+
+// Portfolio state
+const portfolioData = {
+  positions: [
+    {
+      symbol: "BTC-PERP",
+      side: "LONG",
+      size: 0.005,
+      entryPrice: 82500,
+      currentPrice: 84752,
+      leverage: 5,
+      unrealizedPnl: 11.25,
+      pnlPercent: 3.07,
+      liquidationPrice: 66000,
+    },
+  ],
+  totalUnrealizedPnl: 11.25,
+  totalUnrealizedPnlPercent: 3.08,
+  totalMarginUsed: 82.50,
+  freeMargin: 282.50,
+  totalRiskExposure: 22.5,
+}
+
+interface TradingRecommendation {
+  symbol: string
+  action: 'LONG' | 'SHORT' | 'WAIT'
+  confidence: number
+  entryZone: { min: number; max: number }
+  stopLoss: number
+  takeProfits: number[]
+  positionSize: number
+  leverage: number
+  riskAmount: number
+  potentialReward: number
+  reasoning: string[]
+  indicators: {
+    rsiSignal: string
+    macdSignal: string
+    bbSignal: string
+    adxSignal: string
+    overallSignal: string
+  }
+}
+
+export default function UltimateTradingDashboard() {
+  const [marketData, setMarketData] = useState(generateMarketData())
+  const [marketOverviewData, setMarketOverviewData] = useState(marketOverview)
+  const [selectedAsset, setSelectedAsset] = useState<keyof typeof marketData>('BTC')
+  const [leverage, setLeverage] = useState(5)
+  const [riskPercent, setRiskPercent] = useState(2)
+  const [currentTime, setCurrentTime] = useState(new Date())
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
+
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+
+  // Fetch real-time market data
+  useEffect(() => {
+    const fetchMarketData = async () => {
+      try {
+        const response = await fetch('/api/market')
+        const result = await response.json()
+
+        if (result.success && result.data) {
+          setMarketData(result.data.marketData)
+          setMarketOverviewData(result.data.marketOverview)
+          setLastUpdate(new Date())
+        }
+      } catch (error) {
+        console.error('Failed to fetch market data:', error)
+      }
+    }
+
+    // Fetch immediately and then every 30 seconds
+    fetchMarketData()
+    const interval = setInterval(fetchMarketData, 30000)
+
+    return () => clearInterval(interval)
+  }, [])
+
+  // Layman explanations for indicators
+  const getRSIExplanation = (rsi: number) => {
+    if (rsi < 30) return "Price dropped too much, may bounce up soon"
+    if (rsi > 70) return "Price rose too much, may drop soon"
+    if (rsi > 55) return "More buyers than sellers right now"
+    if (rsi < 45) return "More sellers than buyers right now"
+    return "Balanced between buyers and sellers"
+  }
+
+  const getMACDExplanation = (macd: any) => {
+    if (macd.histogram > 0 && macd.value > macd.signal) return "Momentum going UP - buyers in control"
+    if (macd.histogram < 0 && macd.value < macd.signal) return "Momentum going DOWN - sellers in control"
+    if (macd.histogram > 0) return "Starting to turn upward"
+    return "Starting to turn downward"
+  }
+
+  const getBollingerExplanation = (price: number, bb: any) => {
+    if (price < bb.lower) return "Price below lower band - very cheap, potential buy"
+    if (price > bb.upper) return "Price above upper band - expensive, potential sell"
+    if (bb.squeeze) return "Price squeezing - big move coming soon"
+    return "Price within normal range"
+  }
+
+  const getADXExplanation = (adx: number) => {
+    if (adx > 25) return `Strong trend (${adx.toFixed(0)}) - follow the trend`
+    return `Weak trend (${adx.toFixed(0)}) - price ranging sideways`
+  }
+
+  const getStochasticExplanation = (k: number, d: number) => {
+    if (k > d && k < 80) return "Bullish - upward momentum"
+    if (k < d && k > 20) return "Bearish - downward momentum"
+    if (k > 80) return "Overbought zone - price may drop"
+    if (k < 20) return "Oversold zone - price may rise"
+    return "Momentum building"
+  }
+
+  const getEMAExplanation = (ema9: number, ema21: number, ema50: number, price: number) => {
+    if (price > ema9 && ema9 > ema21 && ema21 > ema50) return "Strong uptrend - all lines aligned up"
+    if (price < ema9 && ema9 < ema21 && ema21 < ema50) return "Strong downtrend - all lines aligned down"
+    if (price > ema9) return "Price above short-term average - bullish"
+    if (price < ema9) return "Price below short-term average - bearish"
+    return "Price near averages - deciding direction"
+  }
+
+  const getATRExplanation = (atr: number, price: number) => {
+    const atrPercent = (atr / price * 100).toFixed(1)
+    if (atr / price > 0.02) return `High volatility (${atrPercent}%) - use wider stops`
+    return `Normal volatility (${atrPercent}%) - standard risk`
+  }
+
+  const getNewsImpact = (title: string, category: string) => {
+    if (category === 'BULLISH') return "📈 This news suggests prices may go UP"
+    if (category === 'BEARISH') return "📉 This news suggests prices may go DOWN"
+    return "📊 Neutral impact - watch price reaction"
+  }
+
+  // Calculate trading recommendations with full technical analysis
+  const calculateRecommendation = (symbol: keyof typeof marketData): TradingRecommendation => {
+    const data = marketData[symbol]
+    const { rsi, macd, bollingerBands, adx, atr, stochastic, ema } = data
+
+    // RSI Signal
+    let rsiSignal = "NEUTRAL"
+    if (rsi < 30) rsiSignal = "OVERSOLD - BOUNCE LIKELY"
+    else if (rsi > 70) rsiSignal = "OVERBOUGHT - REVERSAL RISK"
+    else if (rsi > 50) rsiSignal = "BULLISH ZONE"
+    else rsiSignal = "BEARISH ZONE"
+
+    // MACD Signal
+    let macdSignal = "NEUTRAL"
+    if (macd.histogram > 0 && macd.value > macd.signal) macdSignal = "BULLISH MOMENTUM"
+    else if (macd.histogram < 0 && macd.value < macd.signal) macdSignal = "BEARISH MOMENTUM"
+    else if (macd.histogram > 0) macdSignal = "BULLISH DIVERGENCE"
+    else macdSignal = "BEARISH DIVERGENCE"
+
+    // Bollinger Bands Signal
+    let bbSignal = "NEUTRAL"
+    if (data.price < bollingerBands.lower) bbSignal = "BELOW LOWER - OVERSOLD"
+    else if (data.price > bollingerBands.upper) bbSignal = "ABOVE UPPER - OVERBOUGHT"
+    else if (bollingerBands.squeeze) bbSignal = "SQUEEZE - BREAKOUT PENDING"
+    else bbSignal = "WITHIN BANDS - CONSOLIDATION"
+
+    // ADX Signal
+    let adxSignal = adx > 25 ? "STRONG TREND" : "WEAK TREND/RANGING"
+
+    // EMA Analysis
+    const emaBullish = ema.ema9 > ema.ema21 && ema.ema21 > ema.ema50
+    const emaSignal = emaBullish ? "BULLISH STACK" : "BEARISH STACK"
+
+    // Overall Signal
+    let action: 'LONG' | 'SHORT' | 'WAIT' = 'WAIT'
+    let confidence = 50
+
+    const bullishSignals = [
+      rsi > 40 && rsi < 70,
+      macd.histogram > 0,
+      emaBullish,
+      data.price > bollingerBands.middle,
+      adx > 20,
+    ].filter(Boolean).length
+
+    const bearishSignals = [
+      rsi > 70,
+      macd.histogram < 0,
+      !emaBullish,
+      data.price < bollingerBands.middle,
+    ].filter(Boolean).length
+
+    if (bullishSignals >= 3 && rsi < 75) {
+      action = 'LONG'
+      confidence = Math.min(90, 50 + bullishSignals * 8)
+    } else if (bearishSignals >= 3 && rsi > 25) {
+      action = 'SHORT'
+      confidence = Math.min(90, 50 + bearishSignals * 8)
+    }
+
+    // Calculate entry zone, stop loss, take profit
+    const slBuffer = atr * ACCOUNT_SETTINGS.stopLossBuffer
+    const stopLoss = action === 'LONG'
+      ? data.price - atr - slBuffer
+      : data.price + atr + slBuffer
+
+    const risk = Math.abs(data.price - stopLoss)
+    const takeProfit1 = action === 'LONG' ? data.price + (risk * 2) : data.price - (risk * 2)
+    const takeProfit2 = action === 'LONG' ? data.price + (risk * 3) : data.price - (risk * 3)
+
+    const riskAmount = ACCOUNT_SETTINGS.balance * (riskPercent / 100)
+    const positionSizeUSD = (riskAmount / Math.abs(data.price - stopLoss)) * leverage
+
+    return {
+      symbol,
+      action,
+      confidence,
+      entryZone: {
+        min: action === 'LONG' ? data.price - (atr * 0.5) : data.price - (atr * 0.3),
+        max: action === 'LONG' ? data.price + (atr * 0.3) : data.price + (atr * 0.5),
+      },
+      stopLoss,
+      takeProfits: [takeProfit1, takeProfit2],
+      positionSize: positionSizeUSD,
+      leverage,
+      riskAmount,
+      potentialReward: risk * 2 * (positionSizeUSD / leverage),
+      reasoning: [
+        `RSI (${rsi.toFixed(1)}): ${rsiSignal}`,
+        `MACD: ${macdSignal}`,
+        `Bollinger: ${bbSignal}`,
+        `ADX (${adx.toFixed(1)}): ${adxSignal}`,
+        `EMA: ${emaSignal}`,
+        `Stochastic: %K ${stochastic.k.toFixed(1)} / %D ${stochastic.d.toFixed(1)}`,
+      ],
+      indicators: {
+        rsiSignal,
+        macdSignal,
+        bbSignal,
+        adxSignal,
+        overallSignal: action === 'LONG' ? 'BULLISH' : action === 'SHORT' ? 'BEARISH' : 'NEUTRAL',
+      },
+    }
+  }
+
+  const recommendations = Object.keys(marketData).map(
+    symbol => calculateRecommendation(symbol as keyof typeof marketData)
+  ).sort((a, b) => b.confidence - a.confidence)
+
+  const getImpactColor = (impact: string) => {
+    switch (impact) {
+      case 'HIGH': return '#ef4444'
+      case 'MEDIUM': return '#f59e0b'
+      case 'LOW': return '#22c55e'
+      default: return '#666'
+    }
+  }
+
+  const getCategoryColor = (category: string) => {
+    switch (category) {
+      case 'BULLISH': return 'rgba(34, 197, 94, 0.2)'
+      case 'BEARISH': return 'rgba(239, 68, 68, 0.2)'
+      default: return 'rgba(107, 114, 128, 0.2)'
+    }
+  }
+
+  const getCategoryTextColor = (category: string) => {
+    switch (category) {
+      case 'BULLISH': return '#22c55e'
+      case 'BEARISH': return '#ef4444'
+      default: return '#9ca3af'
+    }
+  }
+
+  const renderTechnicalIndicator = (label: string, value: string | number, signal: string, color: string) => ({
+    label, value, signal, color,
+  })
+
+  return (
+    <div style={{
+      minHeight: '100vh',
+      backgroundColor: '#0a0a0f',
+      color: '#e5e7eb',
+      padding: '12px',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      fontSize: '13px',
+    }}>
+
+      {/* Top Header Bar */}
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: '12px',
+        padding: '10px 16px',
+        background: 'linear-gradient(90deg, rgba(99, 102, 241, 0.1) 0%, rgba(168, 85, 247, 0.1) 100%)',
+        border: '1px solid rgba(168, 85, 247, 0.2)',
+        borderRadius: '12px',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{
+            width: '36px',
+            height: '36px',
+            borderRadius: '10px',
+            background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}>
+            <Crosshair style={{ width: '18px', height: '18px', color: '#fff' }} />
+          </div>
+          <div>
+            <h1 style={{ fontSize: '15px', fontWeight: '700', margin: 0, letterSpacing: '-0.3px' }}>
+              CRYPTO TRADING TERMINAL
+            </h1>
+            <p style={{ fontSize: '11px', color: '#6b7280', margin: 0 }}>
+              AI-Powered Technical Analysis & Position Management
+            </p>
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', color: '#6b7280' }}>
+            <Clock style={{ width: '12px', height: '12px' }} />
+            {currentTime.toLocaleTimeString()}
+          </div>
+          {lastUpdate && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: '#22c55e' }}>
+              <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#22c55e', animation: 'pulse 2s infinite' }} />
+              Live • {lastUpdate.toLocaleTimeString()}
+            </div>
+          )}
+          <div style={{
+            background: 'rgba(34, 197, 94, 0.15)',
+            padding: '6px 12px',
+            borderRadius: '8px',
+            fontSize: '12px',
+            fontWeight: '600',
+          }}>
+            <Wallet style={{ width: '12px', height: '12px', color: '#22c55e', display: 'inline', verticalAlign: 'middle', marginRight: '6px' }} />
+            ${ACCOUNT_SETTINGS.balance.toFixed(2)}
+          </div>
+          <div style={{
+            background: '#1f2937',
+            padding: '6px 12px',
+            borderRadius: '8px',
+            fontSize: '11px',
+            color: '#9ca3af',
+          }}>
+            P&L: <span style={{ color: '#22c55e', fontWeight: '600' }}>+${portfolioData.totalUnrealizedPnl.toFixed(2)}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Market Overview Bar */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+        gap: '10px',
+        marginBottom: '12px',
+      }}>
+        {/* Fear & Greed */}
+        <div style={{
+          background: '#111827',
+          border: '1px solid #1f2937',
+          borderRadius: '10px',
+          padding: '12px',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <span style={{ fontSize: '11px', color: '#6b7280', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Flame style={{ width: '12px', height: '12px' }} />
+              Fear & Greed
+            </span>
+            <span style={{ fontSize: '10px', color: marketOverviewData.fearAndGreed.change > 0 ? '#22c55e' : '#ef4444' }}>
+              {marketOverviewData.fearAndGreed.change > 0 ? '+' : ''}{marketOverviewData.fearAndGreed.change}
+            </span>
+          </div>
+          <div style={{ fontSize: '24px', fontWeight: '700', marginBottom: '4px' }}>
+            {marketOverviewData.fearAndGreed.value}
+          </div>
+          <div style={{
+            fontSize: '11px',
+            color: marketOverviewData.fearAndGreed.value > 50 ? '#22c55e' : '#ef4444',
+            fontWeight: '500',
+          }}>
+            {marketOverviewData.fearAndGreed.label}
+          </div>
+          <div style={{ marginTop: '8px', height: '4px', background: '#1f2937', borderRadius: '2px' }}>
+            <div style={{
+              width: `${marketOverviewData.fearAndGreed.value}%`,
+              height: '100%',
+              background: `linear-gradient(90deg, #ef4444 0%, #f59e0b 50%, #22c55e 100%)`,
+              borderRadius: '2px',
+            }} />
+          </div>
+          <div style={{ fontSize: '9px', color: '#6b7280', marginTop: '6px', fontStyle: 'italic' }}>
+            {marketOverviewData.fearAndGreed.value > 60 ? '😊 Greedy = prices may drop soon' : marketOverviewData.fearAndGreed.value < 40 ? '😰 Fearful = buying opportunity' : '😐 Neutral market sentiment'}
+          </div>
+        </div>
+
+        {/* BTC Dominance */}
+        <div style={{
+          background: '#111827',
+          border: '1px solid #1f2937',
+          borderRadius: '10px',
+          padding: '12px',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <span style={{ fontSize: '11px', color: '#6b7280', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Coins style={{ width: '12px', height: '12px' }} />
+              BTC Dominance
+            </span>
+          </div>
+          <div style={{ fontSize: '24px', fontWeight: '700', marginBottom: '4px' }}>
+            {marketOverviewData.btcDominance.value}%
+          </div>
+          <div style={{
+            fontSize: '11px',
+            color: marketOverviewData.btcDominance.change > 0 ? '#22c55e' : '#ef4444',
+          }}>
+            {marketOverviewData.btcDominance.change > 0 ? '+' : ''}{marketOverviewData.btcDominance.change}%
+          </div>
+          <div style={{ fontSize: '9px', color: '#6b7280', marginTop: '6px', fontStyle: 'italic' }}>
+            BTC&apos;s share of crypto market. High = alts struggling, Low = alts rallying
+          </div>
+        </div>
+
+        {/* Total Market Cap */}
+        <div style={{
+          background: '#111827',
+          border: '1px solid #1f2937',
+          borderRadius: '10px',
+          padding: '12px',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <span style={{ fontSize: '11px', color: '#6b7280', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Globe style={{ width: '12px', height: '12px' }} />
+              Total Market Cap
+            </span>
+          </div>
+          <div style={{ fontSize: '24px', fontWeight: '700', marginBottom: '4px' }}>
+            ${marketOverviewData.totalMarketCap.value}
+          </div>
+          <div style={{
+            fontSize: '11px',
+            color: marketOverviewData.totalMarketCap.change > 0 ? '#22c55e' : '#ef4444',
+          }}>
+            {marketOverviewData.totalMarketCap.change > 0 ? '+' : ''}{marketOverviewData.totalMarketCap.change}%
+          </div>
+        </div>
+
+        {/* Open Interest */}
+        <div style={{
+          background: '#111827',
+          border: '1px solid #1f2937',
+          borderRadius: '10px',
+          padding: '12px',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <span style={{ fontSize: '11px', color: '#6b7280', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Layers style={{ width: '12px', height: '12px' }} />
+              Open Interest
+            </span>
+          </div>
+          <div style={{ fontSize: '24px', fontWeight: '700', marginBottom: '4px' }}>
+            ${marketOverviewData.openInterest.value}
+          </div>
+          <div style={{
+            fontSize: '11px',
+            color: marketOverviewData.openInterest.change > 0 ? '#22c55e' : '#ef4444',
+          }}>
+            {marketOverviewData.openInterest.change > 0 ? '+' : ''}{marketOverviewData.openInterest.change}%
+          </div>
+        </div>
+
+        {/* Funding Rates */}
+        <div style={{
+          background: '#111827',
+          border: '1px solid #1f2937',
+          borderRadius: '10px',
+          padding: '12px',
+        }}>
+          <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Activity style={{ width: '12px', height: '12px' }} />
+            Funding Rates
+          </div>
+          <div style={{ display: 'flex', gap: '12px', fontSize: '12px' }}>
+            <div>
+              <span style={{ color: '#6b7280' }}>BTC:</span>
+              <span style={{ color: marketOverviewData.fundingRates.BTC.rate > 0 ? '#22c55e' : '#ef4444', marginLeft: '4px', fontWeight: '600' }}>
+                {marketOverviewData.fundingRates.BTC.rate > 0 ? '+' : ''}{marketOverviewData.fundingRates.BTC.rate}%
+              </span>
+            </div>
+            <div>
+              <span style={{ color: '#6b7280' }}>ETH:</span>
+              <span style={{ color: marketOverviewData.fundingRates.ETH.rate > 0 ? '#22c55e' : '#ef4444', marginLeft: '4px', fontWeight: '600' }}>
+                {marketOverviewData.fundingRates.ETH.rate > 0 ? '+' : ''}{marketOverviewData.fundingRates.ETH.rate}%
+              </span>
+            </div>
+            <div>
+              <span style={{ color: '#6b7280' }}>SOL:</span>
+              <span style={{ color: marketOverviewData.fundingRates.SOL.rate > 0 ? '#22c55e' : '#ef4444', marginLeft: '4px', fontWeight: '600' }}>
+                {marketOverviewData.fundingRates.SOL.rate > 0 ? '+' : ''}{marketOverviewData.fundingRates.SOL.rate}%
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Content Grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: '12px' }}>
+        {/* Left Column - Trading Cards */}
+        <div>
+          {/* Asset Tabs */}
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+            {Object.keys(marketData).map((symbol) => {
+              const data = marketData[symbol as keyof typeof marketData]
+              const isSelected = selectedAsset === symbol
+              return (
+                <button
+                  key={symbol}
+                  onClick={() => setSelectedAsset(symbol as keyof typeof marketData)}
+                  style={{
+                    flex: 1,
+                    padding: '10px 16px',
+                    background: isSelected ? 'rgba(99, 102, 241, 0.2)' : '#111827',
+                    border: isSelected ? '1px solid rgba(99, 102, 241, 0.4)' : '1px solid #1f2937',
+                    borderRadius: '10px',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontWeight: '700', fontSize: '13px' }}>{symbol}</span>
+                    <span style={{
+                      fontSize: '11px',
+                      color: data.change24h > 0 ? '#22c55e' : '#ef4444',
+                      fontWeight: '600',
+                    }}>
+                      {data.change24h > 0 ? '+' : ''}{data.change24h}%
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '15px', fontWeight: '700', marginTop: '4px' }}>
+                    ${data.price.toLocaleString()}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+
+          {/* Selected Asset Detail */}
+          {(() => {
+            const asset = marketData[selectedAsset]
+            const rec = calculateRecommendation(selectedAsset)
+            const isLong = rec.action === 'LONG'
+
+            return (
+              <div style={{
+                background: '#111827',
+                border: '1px solid #1f2937',
+                borderRadius: '14px',
+                padding: '16px',
+                marginBottom: '12px',
+              }}>
+                {/* Asset Header */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '16px' }}>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
+                      <span style={{ fontSize: '28px', fontWeight: '800' }}>{selectedAsset}</span>
+                      <span style={{
+                        padding: '4px 10px',
+                        borderRadius: '8px',
+                        fontSize: '11px',
+                        fontWeight: '700',
+                        background: isLong ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+                        color: isLong ? '#22c55e' : '#ef4444',
+                      }}>
+                        {rec.action} {rec.confidence}%
+                      </span>
+                      <span style={{
+                        padding: '4px 10px',
+                        borderRadius: '8px',
+                        fontSize: '11px',
+                        fontWeight: '600',
+                        background: asset.trend === 'BULLISH' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                        color: asset.trend === 'BULLISH' ? '#22c55e' : '#ef4444',
+                      }}>
+                        {asset.trend}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '20px', fontWeight: '700', marginBottom: '4px' }}>
+                      ${asset.price.toLocaleString()}
+                    </div>
+                    <div style={{ fontSize: '12px', color: asset.change24h > 0 ? '#22c55e' : '#ef4444' }}>
+                      {asset.change24h > 0 ? '+' : ''}{asset.change24h}% (24h)
+                    </div>
+                  </div>
+                  <div style={{ textAlign: 'right', fontSize: '11px', color: '#6b7280' }}>
+                    <div>Vol: ${asset.volume}</div>
+                    <div>ATR: ${asset.atr}</div>
+                    <div>OBV: {asset.obv}</div>
+                  </div>
+                </div>
+
+                {/* Technical Indicators Grid */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginBottom: '16px' }}>
+                  {/* RSI */}
+                  <div style={{
+                    background: '#0f1319',
+                    border: '1px solid #1f2937',
+                    borderRadius: '10px',
+                    padding: '12px',
+                  }}>
+                    <div style={{ fontSize: '10px', color: '#6b7280', marginBottom: '6px' }}>RSI (14)</div>
+                    <div style={{ fontSize: '22px', fontWeight: '700', color: asset.rsi > 70 ? '#ef4444' : asset.rsi < 30 ? '#22c55e' : '#f59e0b' }}>
+                      {asset.rsi.toFixed(1)}
+                    </div>
+                    <div style={{ fontSize: '10px', color: '#6b7280', marginTop: '4px' }}>
+                      {asset.rsi > 70 ? 'Overbought' : asset.rsi < 30 ? 'Oversold' : 'Neutral'}
+                    </div>
+                    <div style={{ marginTop: '6px', height: '3px', background: '#1f2937', borderRadius: '2px' }}>
+                      <div style={{
+                        width: `${asset.rsi}%`,
+                        height: '100%',
+                        background: asset.rsi > 70 ? '#ef4444' : asset.rsi < 30 ? '#22c55e' : '#f59e0b',
+                        borderRadius: '2px',
+                      }} />
+                    </div>
+                    <div style={{ fontSize: '9px', color: '#9ca3af', marginTop: '6px', fontStyle: 'italic' }}>
+                      {getRSIExplanation(asset.rsi)}
+                    </div>
+                  </div>
+
+                  {/* MACD */}
+                  <div style={{
+                    background: '#0f1319',
+                    border: '1px solid #1f2937',
+                    borderRadius: '10px',
+                    padding: '12px',
+                  }}>
+                    <div style={{ fontSize: '10px', color: '#6b7280', marginBottom: '6px' }}>MACD</div>
+                    <div style={{ fontSize: '14px', fontWeight: '700', color: asset.macd.value > asset.macd.signal ? '#22c55e' : '#ef4444' }}>
+                      {asset.macd.value.toFixed(1)}
+                    </div>
+                    <div style={{ fontSize: '10px', color: '#6b7280', marginTop: '2px' }}>
+                      Signal: {asset.macd.signal.toFixed(1)}
+                    </div>
+                    <div style={{ fontSize: '10px', marginTop: '4px', fontWeight: '600', color: asset.macd.histogram > 0 ? '#22c55e' : '#ef4444' }}>
+                      Hist: {asset.macd.histogram > 0 ? '+' : ''}{asset.macd.histogram.toFixed(1)}
+                    </div>
+                    <div style={{ fontSize: '9px', color: '#9ca3af', marginTop: '4px', fontStyle: 'italic' }}>
+                      {getMACDExplanation(asset.macd)}
+                    </div>
+                  </div>
+
+                  {/* Bollinger Bands */}
+                  <div style={{
+                    background: '#0f1319',
+                    border: '1px solid #1f2937',
+                    borderRadius: '10px',
+                    padding: '12px',
+                  }}>
+                    <div style={{ fontSize: '10px', color: '#6b7280', marginBottom: '6px' }}>Bollinger Bands</div>
+                    <div style={{ fontSize: '12px', color: '#ef4444' }}>
+                      Upper: ${asset.bollingerBands.upper.toLocaleString()}
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#9ca3af' }}>
+                      Mid: ${asset.bollingerBands.middle.toLocaleString()}
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#22c55e' }}>
+                      Lower: ${asset.bollingerBands.lower.toLocaleString()}
+                    </div>
+                    {asset.bollingerBands.squeeze && (
+                      <div style={{ fontSize: '10px', color: '#f59e0b', marginTop: '4px' }}>SQUEEZE!</div>
+                    )}
+                    <div style={{ fontSize: '9px', color: '#9ca3af', marginTop: '4px', fontStyle: 'italic' }}>
+                      {getBollingerExplanation(asset.price, asset.bollingerBands)}
+                    </div>
+                  </div>
+
+                  {/* ADX */}
+                  <div style={{
+                    background: '#0f1319',
+                    border: '1px solid #1f2937',
+                    borderRadius: '10px',
+                    padding: '12px',
+                  }}>
+                    <div style={{ fontSize: '10px', color: '#6b7280', marginBottom: '6px' }}>ADX (Trend)</div>
+                    <div style={{ fontSize: '22px', fontWeight: '700', color: asset.adx > 25 ? '#22c55e' : '#6b7280' }}>
+                      {asset.adx.toFixed(1)}
+                    </div>
+                    <div style={{ fontSize: '10px', color: '#6b7280', marginTop: '4px' }}>
+                      {asset.adx > 25 ? 'Strong Trend' : 'Weak/Ranging'}
+                    </div>
+                    <div style={{ marginTop: '6px', height: '3px', background: '#1f2937', borderRadius: '2px' }}>
+                      <div style={{
+                        width: `${Math.min(asset.adx * 2, 100)}%`,
+                        height: '100%',
+                        background: asset.adx > 25 ? '#22c55e' : '#6b7280',
+                        borderRadius: '2px',
+                      }} />
+                    </div>
+                    <div style={{ fontSize: '9px', color: '#9ca3af', marginTop: '4px', fontStyle: 'italic' }}>
+                      {getADXExplanation(asset.adx)}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Secondary Indicators */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: '16px' }}>
+                  {/* Stochastic */}
+                  <div style={{
+                    background: '#0f1319',
+                    border: '1px solid #1f2937',
+                    borderRadius: '10px',
+                    padding: '12px',
+                  }}>
+                    <div style={{ fontSize: '10px', color: '#6b7280', marginBottom: '6px' }}>Stochastic</div>
+                    <div style={{ fontSize: '12px' }}>
+                      <span style={{ color: '#6b7280' }}>%K:</span>
+                      <span style={{ fontWeight: '600', marginLeft: '4px' }}>{asset.stochastic.k.toFixed(1)}</span>
+                    </div>
+                    <div style={{ fontSize: '12px' }}>
+                      <span style={{ color: '#6b7280' }}>%D:</span>
+                      <span style={{ fontWeight: '600', marginLeft: '4px' }}>{asset.stochastic.d.toFixed(1)}</span>
+                    </div>
+                    <div style={{
+                      fontSize: '10px',
+                      marginTop: '4px',
+                      color: asset.stochastic.k > asset.stochastic.d ? '#22c55e' : '#ef4444',
+                    }}>
+                      {asset.stochastic.k > asset.stochastic.d ? 'Bullish Cross' : 'Bearish Cross'}
+                    </div>
+                    <div style={{ fontSize: '9px', color: '#9ca3af', marginTop: '4px', fontStyle: 'italic' }}>
+                      {getStochasticExplanation(asset.stochastic.k, asset.stochastic.d)}
+                    </div>
+                  </div>
+
+                  {/* EMAs */}
+                  <div style={{
+                    background: '#0f1319',
+                    border: '1px solid #1f2937',
+                    borderRadius: '10px',
+                    padding: '12px',
+                  }}>
+                    <div style={{ fontSize: '10px', color: '#6b7280', marginBottom: '6px' }}>Moving Averages</div>
+                    <div style={{ fontSize: '11px' }}>
+                      <span style={{ color: '#6b7280' }}>EMA 9:</span>
+                      <span style={{ fontWeight: '600', marginLeft: '4px' }}>${asset.ema.ema9.toLocaleString()}</span>
+                    </div>
+                    <div style={{ fontSize: '11px' }}>
+                      <span style={{ color: '#6b7280' }}>EMA 21:</span>
+                      <span style={{ fontWeight: '600', marginLeft: '4px' }}>${asset.ema.ema21.toLocaleString()}</span>
+                    </div>
+                    <div style={{ fontSize: '11px' }}>
+                      <span style={{ color: '#6b7280' }}>EMA 50:</span>
+                      <span style={{ fontWeight: '600', marginLeft: '4px' }}>${asset.ema.ema50.toLocaleString()}</span>
+                    </div>
+                    <div style={{ fontSize: '9px', color: '#9ca3af', marginTop: '4px', fontStyle: 'italic' }}>
+                      {getEMAExplanation(asset.ema.ema9, asset.ema.ema21, asset.ema.ema50, asset.price)}
+                    </div>
+                  </div>
+
+                  {/* ATR */}
+                  <div style={{
+                    background: '#0f1319',
+                    border: '1px solid #1f2937',
+                    borderRadius: '10px',
+                    padding: '12px',
+                  }}>
+                    <div style={{ fontSize: '10px', color: '#6b7280', marginBottom: '6px' }}>ATR (Volatility)</div>
+                    <div style={{ fontSize: '20px', fontWeight: '700', color: '#f59e0b' }}>
+                      ${asset.atr}
+                    </div>
+                    <div style={{ fontSize: '10px', color: '#6b7280', marginTop: '4px' }}>
+                      {(asset.atr / asset.price * 100).toFixed(2)}% of price
+                    </div>
+                    <div style={{
+                      fontSize: '10px',
+                      color: asset.atr > asset.price * 0.02 ? '#ef4444' : '#22c55e',
+                      marginTop: '4px',
+                    }}>
+                      {asset.atr > asset.price * 0.02 ? 'High Volatility' : 'Normal Volatility'}
+                    </div>
+                    <div style={{ fontSize: '9px', color: '#9ca3af', marginTop: '4px', fontStyle: 'italic' }}>
+                      {getATRExplanation(asset.atr, asset.price)}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Support & Resistance */}
+                <div style={{ marginBottom: '16px' }}>
+                  <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '8px' }}>
+                    Support & Resistance Levels
+                    <span style={{ fontSize: '9px', color: '#6b7280', fontStyle: 'italic', marginLeft: '6px' }}>
+                      (Resistance = price may drop from here, Support = price may bounce up from here)
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: '10px', color: '#ef4444', marginBottom: '4px' }}>RESISTANCE (Sell Zones)</div>
+                      {asset.resistance.map((r, i) => (
+                        <div key={i} style={{
+                          background: 'rgba(239, 68, 68, 0.1)',
+                          padding: '6px 10px',
+                          borderRadius: '6px',
+                          marginBottom: '4px',
+                          fontSize: '11px',
+                          border: '1px solid rgba(239, 68, 68, 0.2)',
+                        }}>
+                          ${r.toLocaleString()}
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: '10px', color: '#22c55e', marginBottom: '4px' }}>SUPPORT (Buy Zones)</div>
+                      {asset.support.map((s, i) => (
+                        <div key={i} style={{
+                          background: 'rgba(34, 197, 94, 0.1)',
+                          padding: '6px 10px',
+                          borderRadius: '6px',
+                          marginBottom: '4px',
+                          fontSize: '11px',
+                          border: '1px solid rgba(34, 197, 94, 0.2)',
+                        }}>
+                          ${s.toLocaleString()}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Trading Decision Panel */}
+                <div style={{
+                  background: isLong ? 'linear-gradient(135deg, rgba(34, 197, 94, 0.1) 0%, rgba(15, 19, 25, 1) 100%)' : 'linear-gradient(135deg, rgba(239, 68, 68, 0.1) 0%, rgba(15, 19, 25, 1) 100%)',
+                  border: `1px solid ${isLong ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+                  borderRadius: '12px',
+                  padding: '16px',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+                    <Target style={{ width: '16px', height: '16px', color: isLong ? '#22c55e' : '#ef4444' }} />
+                    <span style={{ fontSize: '13px', fontWeight: '700' }}>TRADING DECISION FOR ${ACCOUNT_SETTINGS.balance} BALANCE</span>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
+                    {/* Entry Zone */}
+                    <div>
+                      <div style={{ fontSize: '10px', color: '#6b7280', marginBottom: '4px' }}>ENTRY ZONE (Limit)</div>
+                      <div style={{ fontSize: '14px', fontWeight: '700' }}>
+                        ${rec.entryZone.min.toFixed(0)} - ${rec.entryZone.max.toFixed(0)}
+                      </div>
+                      <div style={{ fontSize: '10px', color: '#6b7280', marginTop: '2px' }}>
+                        Current: ${asset.price.toLocaleString()}
+                      </div>
+                    </div>
+
+                    {/* Stop Loss */}
+                    <div>
+                      <div style={{ fontSize: '10px', color: '#6b7280', marginBottom: '4px' }}>STOP LOSS (ATR-Buffered)</div>
+                      <div style={{ fontSize: '14px', fontWeight: '700', color: '#ef4444' }}>
+                        ${rec.stopLoss.toFixed(0)}
+                      </div>
+                      <div style={{ fontSize: '10px', color: '#6b7280', marginTop: '2px' }}>
+                        {((Math.abs(asset.price - rec.stopLoss) / asset.price) * 100).toFixed(2)}% risk
+                      </div>
+                    </div>
+
+                    {/* Take Profit */}
+                    <div>
+                      <div style={{ fontSize: '10px', color: '#6b7280', marginBottom: '4px' }}>TAKE PROFIT (2:1)</div>
+                      <div style={{ fontSize: '14px', fontWeight: '700', color: '#22c55e' }}>
+                        ${rec.takeProfits[0].toFixed(0)}
+                      </div>
+                      <div style={{ fontSize: '10px', color: '#6b7280', marginTop: '2px' }}>
+                        TP2: ${rec.takeProfits[1].toFixed(0)}
+                      </div>
+                    </div>
+
+                    {/* Position Size */}
+                    <div>
+                      <div style={{ fontSize: '10px', color: '#6b7280', marginBottom: '4px' }}>POSITION SIZE</div>
+                      <div style={{ fontSize: '14px', fontWeight: '700' }}>
+                        ${rec.positionSize.toFixed(2)}
+                      </div>
+                      <div style={{ fontSize: '10px', color: '#6b7280', marginTop: '2px' }}>
+                        {rec.leverage}x lev • ${rec.riskAmount.toFixed(2)} risk
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Risk Analysis */}
+                  <div style={{
+                    marginTop: '12px',
+                    padding: '10px',
+                    background: '#0f1319',
+                    borderRadius: '8px',
+                    fontSize: '11px',
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                      <span style={{ color: '#6b7280' }}>Potential Reward:</span>
+                      <span style={{ color: '#22c55e', fontWeight: '600' }}>+${rec.potentialReward.toFixed(2)} ({(rec.potentialReward / ACCOUNT_SETTINGS.balance * 100).toFixed(1)}%)</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                      <span style={{ color: '#6b7280' }}>Risk/Reward Ratio:</span>
+                      <span style={{ fontWeight: '600' }}>1:2 (TP1) / 1:3 (TP2)</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ color: '#6b7280' }}>Liquidation Price:</span>
+                      <span style={{ color: '#ef4444', fontWeight: '600' }}>
+                        ${isLong ? (asset.price * (1 - 1/rec.leverage - 0.01)).toFixed(0) : (asset.price * (1 + 1/rec.leverage + 0.01)).toFixed(0)}
+                      </span>
+                    </div>
+                  </div>
+                  {/* Simple explanation */}
+                  <div style={{
+                    marginTop: '12px',
+                    padding: '10px',
+                    background: 'rgba(0,0,0,0.2)',
+                    borderRadius: '8px',
+                    fontSize: '11px',
+                    color: '#d1d5db',
+                    fontStyle: 'italic',
+                  }}>
+                    {rec.action === 'LONG' && (
+                      <span>💡 Signal suggests prices may rise. Set limit order in green zone, stop loss below red level. Risk: ${rec.riskAmount.toFixed(2)} to gain ${rec.potentialReward.toFixed(2)}.</span>
+                    )}
+                    {rec.action === 'SHORT' && (
+                      <span>💡 Signal suggests prices may fall. Set limit order in red zone, stop loss above green level. Risk: ${rec.riskAmount.toFixed(2)} to gain ${rec.potentialReward.toFixed(2)}.</span>
+                    )}
+                    {rec.action === 'WAIT' && (
+                      <span>💡 Market uncertain. Wait for clearer signals before entering. Current indicators don&apos;t agree strongly on direction.</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
+
+          {/* Liquidation Heatmap */}
+          <div style={{
+            background: '#111827',
+            border: '1px solid #1f2937',
+            borderRadius: '14px',
+            padding: '16px',
+            marginBottom: '12px',
+          }}>
+            <div style={{ fontSize: '13px', fontWeight: '700', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Flame style={{ width: '14px', height: '14px', color: '#ef4444' }} />
+              LIQUIDATION HEATMAP (BTC)
+            </div>
+            <div style={{ fontSize: '10px', color: '#6b7280', marginBottom: '12px', fontStyle: 'italic' }}>
+              💡 Large trader positions may get liquidated at these levels, causing price to bounce or reverse. Higher bars = more liquidity.
+            </div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end', height: '80px' }}>
+              {marketOverviewData.liquidationHeatmap.map((level, i) => {
+                const height = parseInt(level.amount) / 15
+                return (
+                  <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                    <div style={{
+                      width: '100%',
+                      height: `${height}px`,
+                      background: `linear-gradient(180deg, rgba(239, 68, 68, 0.6) 0%, rgba(239, 68, 68, 0.2) 100%)`,
+                      borderRadius: '4px 4px 0 0',
+                      minHeight: '20px',
+                    }} />
+                    <div style={{ fontSize: '10px', color: '#6b7280', marginTop: '6px' }}>
+                      ${level.price.toLocaleString()}
+                    </div>
+                    <div style={{ fontSize: '10px', color: '#ef4444', fontWeight: '600' }}>
+                      {level.amount}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* All Recommendations */}
+          <div style={{
+            background: '#111827',
+            border: '1px solid #1f2937',
+            borderRadius: '14px',
+            padding: '16px',
+          }}>
+            <div style={{ fontSize: '13px', fontWeight: '700', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Sparkles style={{ width: '14px', height: '14px', color: '#a855f7' }} />
+              ALL TRADE SIGNALS
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
+              {recommendations.map((rec) => {
+                const isLong = rec.action === 'LONG'
+                const isWait = rec.action === 'WAIT'
+                return (
+                  <div key={rec.symbol} style={{
+                    background: isWait ? '#0f1319' : isLong ? 'rgba(34, 197, 94, 0.08)' : 'rgba(239, 68, 68, 0.08)',
+                    border: isWait ? '1px solid #1f2937' : `1px solid ${isLong ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+                    borderRadius: '10px',
+                    padding: '12px',
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                      <span style={{ fontSize: '14px', fontWeight: '700' }}>{rec.symbol}</span>
+                      <span style={{
+                        fontSize: '10px',
+                        padding: '3px 8px',
+                        borderRadius: '6px',
+                        fontWeight: '700',
+                        background: isWait ? '#1f2937' : isLong ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+                        color: isWait ? '#6b7280' : isLong ? '#22c55e' : '#ef4444',
+                      }}>
+                        {rec.action}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '4px' }}>
+                      Confidence: <span style={{ color: '#e5e7eb', fontWeight: '600' }}>{rec.confidence}%</span>
+                    </div>
+                    <div style={{ fontSize: '10px', color: '#6b7280' }}>
+                      Entry: <span style={{ color: '#e5e7eb' }}>${rec.entryZone.min.toFixed(0)}-${rec.entryZone.max.toFixed(0)}</span>
+                    </div>
+                    <div style={{ fontSize: '10px', color: '#6b7280' }}>
+                      TP: <span style={{ color: '#22c55e' }}>${rec.takeProfits[0].toFixed(0)}</span>
+                      <span style={{ color: '#ef4444', marginLeft: '8px' }}>SL: ${rec.stopLoss.toFixed(0)}</span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* Right Column - News, Portfolio, Settings */}
+        <div>
+          {/* News Feed */}
+          <div style={{
+            background: '#111827',
+            border: '1px solid #1f2937',
+            borderRadius: '14px',
+            padding: '16px',
+            marginBottom: '12px',
+          }}>
+            <div style={{ fontSize: '13px', fontWeight: '700', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Newspaper style={{ width: '14px', height: '14px', color: '#3b82f6' }} />
+              AI NEWS ANALYSIS
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {newsData.map((news) => (
+                <div key={news.id} style={{
+                  background: '#0f1319',
+                  border: `1px solid ${getImpactColor(news.impact)}40`,
+                  borderLeftWidth: '3px',
+                  borderRadius: '8px',
+                  padding: '12px',
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '6px' }}>
+                    <span style={{
+                      fontSize: '10px',
+                      padding: '2px 6px',
+                      borderRadius: '4px',
+                      fontWeight: '600',
+                      background: getCategoryColor(news.category),
+                      color: getCategoryTextColor(news.category),
+                    }}>
+                      {news.category}
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <div style={{
+                        width: '6px',
+                        height: '6px',
+                        borderRadius: '50%',
+                        background: getImpactColor(news.impact),
+                      }} />
+                      <span style={{ fontSize: '9px', color: getImpactColor(news.impact), fontWeight: '600' }}>
+                        {news.impact}
+                      </span>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px', lineHeight: '1.4' }}>
+                    {news.title}
+                  </div>
+                  <div style={{
+                    fontSize: '10px',
+                    color: '#a855f7',
+                    marginBottom: '4px',
+                    fontStyle: 'italic',
+                  }}>
+                    AI: {news.summary}
+                  </div>
+                  <div style={{
+                    fontSize: '9px',
+                    color: '#9ca3af',
+                    marginBottom: '6px',
+                    fontStyle: 'italic',
+                    padding: '4px 8px',
+                    background: 'rgba(0,0,0,0.2)',
+                    borderRadius: '4px',
+                  }}>
+                    {getNewsImpact(news.title, news.category)}
+                  </div>
+                  <div style={{ fontSize: '10px', color: '#6b7280', display: 'flex', justifyContent: 'space-between' }}>
+                    <span>{news.source}</span>
+                    <span>{news.time}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Portfolio */}
+          <div style={{
+            background: '#111827',
+            border: '1px solid #1f2937',
+            borderRadius: '14px',
+            padding: '16px',
+            marginBottom: '12px',
+          }}>
+            <div style={{ fontSize: '13px', fontWeight: '700', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <PieChart style={{ width: '14px', height: '14px', color: '#22c55e' }} />
+              PORTFOLIO
+            </div>
+
+            {/* Portfolio Summary */}
+            <div style={{
+              background: 'linear-gradient(135deg, rgba(34, 197, 94, 0.1) 0%, rgba(15, 19, 25, 1) 100%)',
+              border: '1px solid rgba(34, 197, 94, 0.2)',
+              borderRadius: '10px',
+              padding: '12px',
+              marginBottom: '12px',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <span style={{ fontSize: '11px', color: '#6b7280' }}>Total Balance</span>
+                <span style={{ fontSize: '14px', fontWeight: '700' }}>${ACCOUNT_SETTINGS.balance.toFixed(2)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <span style={{ fontSize: '11px', color: '#6b7280' }}>Margin Used</span>
+                <span style={{ fontSize: '12px', fontWeight: '600' }}>${portfolioData.totalMarginUsed.toFixed(2)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <span style={{ fontSize: '11px', color: '#6b7280' }}>Free Margin</span>
+                <span style={{ fontSize: '12px', fontWeight: '600', color: '#22c55e' }}>${portfolioData.freeMargin.toFixed(2)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: '8px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+                <span style={{ fontSize: '11px', color: '#6b7280' }}>Unrealized P&L</span>
+                <span style={{ fontSize: '14px', fontWeight: '700', color: '#22c55e' }}>
+                  +${portfolioData.totalUnrealizedPnl.toFixed(2)} ({portfolioData.totalUnrealizedPnlPercent.toFixed(2)}%)
+                </span>
+              </div>
+            </div>
+
+            {/* Open Positions */}
+            <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '8px' }}>OPEN POSITIONS</div>
+            {portfolioData.positions.length === 0 ? (
+              <div style={{
+                textAlign: 'center',
+                padding: '20px',
+                color: '#6b7280',
+                fontSize: '12px',
+              }}>
+                No open positions
+              </div>
+            ) : (
+              portfolioData.positions.map((pos, i) => (
+                <div key={i} style={{
+                  background: '#0f1319',
+                  border: `1px solid ${pos.unrealizedPnl >= 0 ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)'}`,
+                  borderRadius: '10px',
+                  padding: '12px',
+                  marginBottom: '8px',
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <div>
+                      <div style={{ fontSize: '13px', fontWeight: '700' }}>{pos.symbol}</div>
+                      <span style={{
+                        fontSize: '10px',
+                        padding: '2px 6px',
+                        borderRadius: '4px',
+                        fontWeight: '600',
+                        background: pos.side === 'LONG' ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+                        color: pos.side === 'LONG' ? '#22c55e' : '#ef4444',
+                      }}>
+                        {pos.side} {pos.leverage}x
+                      </span>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{
+                        fontSize: '14px',
+                        fontWeight: '700',
+                        color: pos.unrealizedPnl >= 0 ? '#22c55e' : '#ef4444',
+                      }}>
+                        {pos.unrealizedPnl >= 0 ? '+' : ''}${pos.unrealizedPnl.toFixed(2)}
+                      </div>
+                      <div style={{ fontSize: '10px', color: '#6b7280' }}>
+                        {pos.unrealizedPnl >= 0 ? '+' : ''}{pos.pnlPercent}%
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: '10px', color: '#6b7280', display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Size: {pos.size}</span>
+                    <span>Entry: ${pos.entryPrice.toLocaleString()}</span>
+                    <span>Liq: ${pos.liquidationPrice.toLocaleString()}</span>
+                  </div>
+                </div>
+              ))
+            )}
+
+            {/* Risk Metrics */}
+            <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #1f2937' }}>
+              <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '8px' }}>RISK METRICS</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                <div style={{ background: '#0f1319', padding: '8px', borderRadius: '8px' }}>
+                  <div style={{ fontSize: '10px', color: '#6b7280' }}>Total Exposure</div>
+                  <div style={{ fontSize: '12px', fontWeight: '600' }}>${portfolioData.totalRiskExposure}</div>
+                </div>
+                <div style={{ background: '#0f1319', padding: '8px', borderRadius: '8px' }}>
+                  <div style={{ fontSize: '10px', color: '#6b7280' }}>Max Drawdown</div>
+                  <div style={{ fontSize: '12px', fontWeight: '600', color: '#ef4444' }}>
+                    {ACCOUNT_SETTINGS.maxDrawdown}%
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Risk Settings */}
+          <div style={{
+            background: '#111827',
+            border: '1px solid #1f2937',
+            borderRadius: '14px',
+            padding: '16px',
+          }}>
+            <div style={{ fontSize: '13px', fontWeight: '700', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Sliders style={{ width: '14px', height: '14px', color: '#f59e0b' }} />
+              RISK SETTINGS
+            </div>
+
+            <div style={{ marginBottom: '12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                <span style={{ fontSize: '11px', color: '#6b7280' }}>Risk Per Trade</span>
+                <span style={{ fontSize: '12px', fontWeight: '600' }}>{riskPercent}%</span>
+              </div>
+              <input
+                type="range"
+                min={1}
+                max={10}
+                value={riskPercent}
+                onChange={(e) => setRiskPercent(Number(e.target.value))}
+                style={{
+                  width: '100%',
+                  height: '4px',
+                  borderRadius: '2px',
+                  background: '#1f2937',
+                  outline: 'none',
+                  appearance: 'none',
+                }}
+              />
+              <div style={{ fontSize: '10px', color: '#6b7280', marginTop: '4px' }}>
+                ${(ACCOUNT_SETTINGS.balance * riskPercent / 100).toFixed(2)} at risk per trade
+              </div>
+            </div>
+
+            <div style={{ marginBottom: '12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                <span style={{ fontSize: '11px', color: '#6b7280' }}>Max Leverage</span>
+                <span style={{ fontSize: '12px', fontWeight: '600' }}>{leverage}x</span>
+              </div>
+              <input
+                type="range"
+                min={1}
+                max={ACCOUNT_SETTINGS.maxLeverage}
+                value={leverage}
+                onChange={(e) => setLeverage(Number(e.target.value))}
+                style={{
+                  width: '100%',
+                  height: '4px',
+                  borderRadius: '2px',
+                  background: '#1f2937',
+                  outline: 'none',
+                  appearance: 'none',
+                }}
+              />
+              <div style={{ fontSize: '10px', color: '#6b7280', marginTop: '4px' }}>
+                Max liquidation risk: {(100 / leverage).toFixed(0)}% from entry
+              </div>
+            </div>
+
+            <div style={{
+              background: 'rgba(245, 158, 11, 0.1)',
+              border: '1px solid rgba(245, 158, 11, 0.3)',
+              borderRadius: '8px',
+              padding: '10px',
+              fontSize: '10px',
+              color: '#f59e0b',
+            }}>
+              <AlertTriangle style={{ width: '12px', height: '12px', display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} />
+              Never risk more than you can afford to lose. Crypto trading involves significant risk.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Footer AI Summary */}
+      <div style={{
+        marginTop: '12px',
+        background: 'linear-gradient(90deg, rgba(34, 197, 94, 0.1) 0%, rgba(168, 85, 247, 0.1) 100%)',
+        border: '1px solid rgba(34, 197, 94, 0.2)',
+        borderRadius: '12px',
+        padding: '14px 16px',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+          <Zap style={{ width: '16px', height: '16px', color: '#22c55e' }} />
+          <span style={{ fontSize: '13px', fontWeight: '700' }}>AI MARKET SYNTHESIS</span>
+        </div>
+        <div style={{ fontSize: '12px', color: '#d1d5db', lineHeight: '1.6' }}>
+          Market sentiment is <strong style={{ color: '#22c55e' }}>bullish</strong> with Fear & Greed at {marketOverviewData.fearAndGreed.value} ({marketOverviewData.fearAndGreed.label}).
+          BTC showing strength with ADX of {marketData.BTC.adx.toFixed(1)} indicating a{' '}
+          <strong>{marketData.BTC.adx > 25 ? 'trending' : 'ranging'}</strong> market.
+          RSI at {marketData.BTC.rsi.toFixed(1)} suggests <strong>{marketData.BTC.rsi < 30 ? 'oversold conditions - buying opportunity' : marketData.BTC.rsi > 70 ? 'overbought - take profits' : 'neutral momentum'}</strong>.
+          Institutional inflows via ETFs remain supportive. Recommended approach: <strong>Wait for pullbacks to support levels before entering long positions</strong>.
+        </div>
+      </div>
+
+    </div>
+  )
+}

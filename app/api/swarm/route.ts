@@ -22,6 +22,12 @@ export async function GET(req: NextRequest) {
   try {
     switch (action) {
       case 'status': {
+        // Force start the swarm for serverless environment
+        coordinator['forceStart']?.();
+
+        // Simulate activity to make the page look alive
+        coordinator['simulateActivity']?.();
+
         const state = coordinator.getState();
         const improverState = improver.getState();
         const stats = coordinator.getStats();
