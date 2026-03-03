@@ -15,6 +15,10 @@
     {
       "path": "/api/cron/strategy-generation",
       "schedule": "0 0 * * 0"
+    },
+    {
+      "path": "/api/cron/autonomous-improve",
+      "schedule": "0 */12 * * *"
     }
   ]
 }
