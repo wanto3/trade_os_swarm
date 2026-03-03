@@ -7,13 +7,13 @@ const cachedPrices: Map<string, { price: CryptoPrice; timestamp: number }> = new
 const CACHE_DURATION = 30000; // 30 seconds
 const SUPPORTED_SYMBOLS = ['BTC', 'ETH', 'SOL', 'ADA', 'DOT'];
 
-// Real market prices from Coinbase (March 2025)
+// Real market prices from CoinGecko (March 2026)
 const BASE_PRICES: Record<string, { price: number; change24h: number; marketCap: number; volume: number }> = {
-  'BTC': { price: 65574, change24h: 2.3, marketCap: 1.29e12, volume: 38e9 },
-  'ETH': { price: 1924, change24h: 1.8, marketCap: 232e9, volume: 15e9 },
-  'SOL': { price: 82.71, change24h: -2.1, marketCap: 38e9, volume: 2.5e9 },
-  'ADA': { price: 0.272, change24h: -1.5, marketCap: 9.7e9, volume: 350e6 },
-  'DOT': { price: 1.51, change24h: -0.8, marketCap: 2.0e9, volume: 180e6 }
+  'BTC': { price: 66550, change24h: 0.36, marketCap: 1.29e12, volume: 60e9 },
+  'ETH': { price: 1950, change24h: -0.14, marketCap: 232e9, volume: 27e9 },
+  'SOL': { price: 84.17, change24h: 0.44, marketCap: 38e9, volume: 5.8e9 },
+  'ADA': { price: 0.45, change24h: 1.2, marketCap: 16e9, volume: 450e6 },
+  'DOT': { price: 6.8, change24h: -0.5, marketCap: 9e9, volume: 250e6 }
 };
 
 // Initialize price history

@@ -1,0 +1,548 @@
+{
+  "agents": [
+    {
+      "id": "frontend-agent",
+      "name": "Frontend Agent",
+      "icon": "💻",
+      "color": "from-blue-500 to-cyan-500",
+      "role": "Developer",
+      "description": "Builds and implements UI features",
+      "status": "working",
+      "currentTask": "Analyzing UI components for improvements",
+      "completedTasks": 22,
+      "successRate": 1,
+      "lastActivity": 1772525365686,
+      "recentWork": [
+        "Improved component loading performance",
+        "Added loading skeletons",
+        "Optimized component re-renders",
+        "Cleaned up unused styles",
+        "Added loading skeletons"
+      ],
+      "cyclesCompleted": 22,
+      "currentCycleStart": 1772525365686
+    },
+    {
+      "id": "backend-agent",
+      "name": "Backend Agent",
+      "icon": "⚙️",
+      "color": "from-orange-500 to-amber-500",
+      "role": "Engineer",
+      "description": "Builds APIs and infrastructure",
+      "status": "working",
+      "currentTask": "Analyzing database query patterns",
+      "completedTasks": 19,
+      "successRate": 1,
+      "lastActivity": 1772525364671,
+      "recentWork": [
+        "Optimized database queries",
+        "Fixed error handling",
+        "Optimized database queries",
+        "Optimized database queries",
+        "Added rate limiting"
+      ],
+      "cyclesCompleted": 19,
+      "currentCycleStart": 1772525364671
+    },
+    {
+      "id": "research-agent",
+      "name": "Research Agent",
+      "icon": "📚",
+      "color": "from-emerald-500 to-teal-500",
+      "role": "Market Analyst",
+      "description": "Finds best indicators and data sources",
+      "status": "idle",
+      "currentTask": null,
+      "completedTasks": 20,
+      "successRate": 1,
+      "lastActivity": 1772525352478,
+      "recentWork": [
+        "Identified whale tracking API",
+        "Found liquidation heatmap source",
+        "Found sentiment analysis tool",
+        "Identified whale tracking API",
+        "Compiled funding rate sources"
+      ],
+      "cyclesCompleted": 20,
+      "currentCycleStart": 1772525348476
+    },
+    {
+      "id": "testing-agent",
+      "name": "QA Agent",
+      "icon": "🧪",
+      "color": "from-purple-500 to-violet-500",
+      "role": "Quality Assurance",
+      "description": "Tests and verifies all features",
+      "status": "idle",
+      "currentTask": null,
+      "completedTasks": 20,
+      "successRate": 1,
+      "lastActivity": 1772525360600,
+      "recentWork": [
+        "Tested error handling",
+        "Verified data integrity",
+        "All tests passing",
+        "Fixed 2 failing tests",
+        "Fixed 2 failing tests"
+      ],
+      "cyclesCompleted": 20,
+      "currentCycleStart": 1772525355599
+    }
+  ],
+  "activities": [
+    {
+      "id": "act-1772525365686-r9tu9gebw",
+      "agentId": "frontend-agent",
+      "agentName": "Frontend Agent",
+      "agentIcon": "💻",
+      "message": "Started: Analyzing UI components for improvements",
+      "timestamp": 1772525365686,
+      "type": "task"
+    },
+    {
+      "id": "act-1772525364671-o3xrrp511",
+      "agentId": "backend-agent",
+      "agentName": "Backend Agent",
+      "agentIcon": "⚙️",
+      "message": "Started: Analyzing database query patterns",
+      "timestamp": 1772525364671,
+      "type": "task"
+    },
+    {
+      "id": "act-1772525360600-6k4d5igks",
+      "agentId": "testing-agent",
+      "agentName": "QA Agent",
+      "agentIcon": "🧪",
+      "message": "✅ Tested error handling",
+      "timestamp": 1772525360600,
+      "type": "completion"
+    },
+    {
+      "id": "act-1772525355599-y90ba274n",
+      "agentId": "testing-agent",
+      "agentName": "QA Agent",
+      "agentIcon": "🧪",
+      "message": "Started: Validating API responses",
+      "timestamp": 1772525355599,
+      "type": "task"
+    },
+    {
+      "id": "act-1772525352478-rlqg9h52s",
+      "agentId": "research-agent",
+      "agentName": "Research Agent",
+      "agentIcon": "📚",
+      "message": "✅ Identified whale tracking API",
+      "timestamp": 1772525352478,
+      "type": "completion"
+    },
+    {
+      "id": "act-1772525350557-oyhclo07n",
+      "agentId": "frontend-agent",
+      "agentName": "Frontend Agent",
+      "agentIcon": "💻",
+      "message": "✅ Improved component loading performance",
+      "timestamp": 1772525350557,
+      "type": "completion"
+    },
+    {
+      "id": "act-1772525348476-1efz5l0zl",
+      "agentId": "research-agent",
+      "agentName": "Research Agent",
+      "agentIcon": "📚",
+      "message": "Started: Researching whale tracking methods",
+      "timestamp": 1772525348476,
+      "type": "task"
+    },
+    {
+      "id": "act-1772525348423-r2n3lhgyy",
+      "agentId": "backend-agent",
+      "agentName": "Backend Agent",
+      "agentIcon": "⚙️",
+      "message": "✅ Optimized database queries",
+      "timestamp": 1772525348423,
+      "type": "completion"
+    },
+    {
+      "id": "act-1772525346556-nrcj2q3ht",
+      "agentId": "frontend-agent",
+      "agentName": "Frontend Agent",
+      "agentIcon": "💻",
+      "message": "Started: Scanning for unused CSS",
+      "timestamp": 1772525346556,
+      "type": "task"
+    },
+    {
+      "id": "act-1772525342421-509m2swpe",
+      "agentId": "backend-agent",
+      "agentName": "Backend Agent",
+      "agentIcon": "⚙️",
+      "message": "Started: Checking for security vulnerabilities",
+      "timestamp": 1772525342421,
+      "type": "task"
+    },
+    {
+      "id": "act-1772525341128-itlfwxwqk",
+      "agentId": "testing-agent",
+      "agentName": "QA Agent",
+      "agentIcon": "🧪",
+      "message": "✅ Verified data integrity",
+      "timestamp": 1772525341128,
+      "type": "completion"
+    },
+    {
+      "id": "act-1772525336579-3qr861afs",
+      "agentId": "research-agent",
+      "agentName": "Research Agent",
+      "agentIcon": "📚",
+      "message": "✅ Found liquidation heatmap source",
+      "timestamp": 1772525336579,
+      "type": "completion"
+    },
+    {
+      "id": "act-1772525336127-69bbeiufd",
+      "agentId": "testing-agent",
+      "agentName": "QA Agent",
+      "agentIcon": "🧪",
+      "message": "Started: Checking type safety",
+      "timestamp": 1772525336127,
+      "type": "task"
+    },
+    {
+      "id": "act-1772525333586-jiqiqo3r1",
+      "agentId": "frontend-agent",
+      "agentName": "Frontend Agent",
+      "agentIcon": "💻",
+      "message": "✅ Added loading skeletons",
+      "timestamp": 1772525333586,
+      "type": "completion"
+    },
+    {
+      "id": "act-1772525331578-uwm82qyw6",
+      "agentId": "research-agent",
+      "agentName": "Research Agent",
+      "agentIcon": "📚",
+      "message": "Started: Reviewing trading strategies",
+      "timestamp": 1772525331578,
+      "type": "task"
+    },
+    {
+      "id": "act-1772525330001-dpdtuoih1",
+      "agentId": "backend-agent",
+      "agentName": "Backend Agent",
+      "agentIcon": "⚙️",
+      "message": "✅ Fixed error handling",
+      "timestamp": 1772525330001,
+      "type": "completion"
+    },
+    {
+      "id": "act-1772525329585-a8cpc7ee8",
+      "agentId": "frontend-agent",
+      "agentName": "Frontend Agent",
+      "agentIcon": "💻",
+      "message": "Started: Reviewing component dependencies",
+      "timestamp": 1772525329585,
+      "type": "task"
+    },
+    {
+      "id": "act-1772525325000-bcbuvhs9i",
+      "agentId": "backend-agent",
+      "agentName": "Backend Agent",
+      "agentIcon": "⚙️",
+      "message": "Started: Reviewing API endpoint performance",
+      "timestamp": 1772525325000,
+      "type": "task"
+    },
+    {
+      "id": "act-1772525320089-p411cr3fj",
+      "agentId": "research-agent",
+      "agentName": "Research Agent",
+      "agentIcon": "📚",
+      "message": "✅ Found sentiment analysis tool",
+      "timestamp": 1772525320090,
+      "type": "completion"
+    },
+    {
+      "id": "act-1772525316916-suz45wy2r",
+      "agentId": "frontend-agent",
+      "agentName": "Frontend Agent",
+      "agentIcon": "💻",
+      "message": "✅ Optimized component re-renders",
+      "timestamp": 1772525316916,
+      "type": "completion"
+    },
+    {
+      "id": "act-1772525316864-d23v4e4im",
+      "agentId": "testing-agent",
+      "agentName": "QA Agent",
+      "agentIcon": "🧪",
+      "message": "✅ All tests passing",
+      "timestamp": 1772525316864,
+      "type": "completion"
+    },
+    {
+      "id": "act-1772525316089-kwm2unyeb",
+      "agentId": "research-agent",
+      "agentName": "Research Agent",
+      "agentIcon": "📚",
+      "message": "Started: Reviewing funding rate APIs",
+      "timestamp": 1772525316089,
+      "type": "task"
+    },
+    {
+      "id": "act-1772525311904-n32elpo8c",
+      "agentId": "frontend-agent",
+      "agentName": "Frontend Agent",
+      "agentIcon": "💻",
+      "message": "Started: Analyzing UI components for improvements",
+      "timestamp": 1772525311904,
+      "type": "task"
+    },
+    {
+      "id": "act-1772525311854-pj74sppci",
+      "agentId": "testing-agent",
+      "agentName": "QA Agent",
+      "agentIcon": "🧪",
+      "message": "Started: Checking type safety",
+      "timestamp": 1772525311854,
+      "type": "task"
+    },
+    {
+      "id": "act-1772525310633-s9tujzlxb",
+      "agentId": "backend-agent",
+      "agentName": "Backend Agent",
+      "agentIcon": "⚙️",
+      "message": "✅ Optimized database queries",
+      "timestamp": 1772525310633,
+      "type": "completion"
+    },
+    {
+      "id": "act-1772525305631-th2vbwy64",
+      "agentId": "backend-agent",
+      "agentName": "Backend Agent",
+      "agentIcon": "⚙️",
+      "message": "Started: Analyzing data caching opportunities",
+      "timestamp": 1772525305631,
+      "type": "task"
+    },
+    {
+      "id": "act-1772525299107-wqb8sq2ug",
+      "agentId": "research-agent",
+      "agentName": "Research Agent",
+      "agentIcon": "📚",
+      "message": "✅ Identified whale tracking API",
+      "timestamp": 1772525299107,
+      "type": "completion"
+    },
+    {
+      "id": "act-1772525296231-8ih7cd4tx",
+      "agentId": "testing-agent",
+      "agentName": "QA Agent",
+      "agentIcon": "🧪",
+      "message": "✅ Fixed 2 failing tests",
+      "timestamp": 1772525296231,
+      "type": "completion"
+    },
+    {
+      "id": "act-1772525294166-s5aw6na6w",
+      "agentId": "frontend-agent",
+      "agentName": "Frontend Agent",
+      "agentIcon": "💻",
+      "message": "✅ Cleaned up unused styles",
+      "timestamp": 1772525294166,
+      "type": "completion"
+    },
+    {
+      "id": "act-1772525294106-hwxos04dt",
+      "agentId": "research-agent",
+      "agentName": "Research Agent",
+      "agentIcon": "📚",
+      "message": "Started: Researching on-chain metrics",
+      "timestamp": 1772525294106,
+      "type": "task"
+    },
+    {
+      "id": "act-1772525290164-6as7kkbc1",
+      "agentId": "frontend-agent",
+      "agentName": "Frontend Agent",
+      "agentIcon": "💻",
+      "message": "Started: Analyzing loading states",
+      "timestamp": 1772525290164,
+      "type": "task"
+    },
+    {
+      "id": "act-1772525288230-q8qwgjuyr",
+      "agentId": "testing-agent",
+      "agentName": "QA Agent",
+      "agentIcon": "🧪",
+      "message": "Started: Running unit tests",
+      "timestamp": 1772525288230,
+      "type": "task"
+    },
+    {
+      "id": "act-1772525287288-878ryn43u",
+      "agentId": "backend-agent",
+      "agentName": "Backend Agent",
+      "agentIcon": "⚙️",
+      "message": "✅ Optimized database queries",
+      "timestamp": 1772525287288,
+      "type": "completion"
+    },
+    {
+      "id": "act-1772525283286-1d0m89n1s",
+      "agentId": "backend-agent",
+      "agentName": "Backend Agent",
+      "agentIcon": "⚙️",
+      "message": "Started: Reviewing API response structures",
+      "timestamp": 1772525283286,
+      "type": "task"
+    },
+    {
+      "id": "act-1772525277927-72ghcs7mh",
+      "agentId": "research-agent",
+      "agentName": "Research Agent",
+      "agentIcon": "📚",
+      "message": "✅ Compiled funding rate sources",
+      "timestamp": 1772525277927,
+      "type": "completion"
+    },
+    {
+      "id": "act-1772525275878-nomdqqtda",
+      "agentId": "frontend-agent",
+      "agentName": "Frontend Agent",
+      "agentIcon": "💻",
+      "message": "✅ Added loading skeletons",
+      "timestamp": 1772525275878,
+      "type": "completion"
+    },
+    {
+      "id": "act-1772525274142-lma4xo900",
+      "agentId": "testing-agent",
+      "agentName": "QA Agent",
+      "agentIcon": "🧪",
+      "message": "✅ Fixed 2 failing tests",
+      "timestamp": 1772525274142,
+      "type": "completion"
+    },
+    {
+      "id": "act-1772525272925-tekg4zioy",
+      "agentId": "research-agent",
+      "agentName": "Research Agent",
+      "agentIcon": "📚",
+      "message": "Started: Researching on-chain metrics",
+      "timestamp": 1772525272925,
+      "type": "task"
+    },
+    {
+      "id": "act-1772525271877-sb9vaixib",
+      "agentId": "frontend-agent",
+      "agentName": "Frontend Agent",
+      "agentIcon": "💻",
+      "message": "Started: Reviewing component accessibility",
+      "timestamp": 1772525271877,
+      "type": "task"
+    },
+    {
+      "id": "act-1772525271449-hn4dlzbph",
+      "agentId": "backend-agent",
+      "agentName": "Backend Agent",
+      "agentIcon": "⚙️",
+      "message": "✅ Added rate limiting",
+      "timestamp": 1772525271449,
+      "type": "completion"
+    },
+    {
+      "id": "act-1772525270141-z70vkf2un",
+      "agentId": "testing-agent",
+      "agentName": "QA Agent",
+      "agentIcon": "🧪",
+      "message": "Started: Validating data formats",
+      "timestamp": 1772525270141,
+      "type": "task"
+    },
+    {
+      "id": "act-1772525267446-m24m0pmgg",
+      "agentId": "backend-agent",
+      "agentName": "Backend Agent",
+      "agentIcon": "⚙️",
+      "message": "Started: Checking for missing error handling",
+      "timestamp": 1772525267446,
+      "type": "task"
+    },
+    {
+      "id": "act-1772525255620-x4tkgvckr",
+      "agentId": "frontend-agent",
+      "agentName": "Frontend Agent",
+      "agentIcon": "💻",
+      "message": "✅ Added loading skeletons",
+      "timestamp": 1772525255620,
+      "type": "completion"
+    },
+    {
+      "id": "act-1772525255586-sg12atu6f",
+      "agentId": "testing-agent",
+      "agentName": "QA Agent",
+      "agentIcon": "🧪",
+      "message": "✅ Fixed 2 failing tests",
+      "timestamp": 1772525255586,
+      "type": "completion"
+    },
+    {
+      "id": "act-1772525254273-q52s96ph4",
+      "agentId": "research-agent",
+      "agentName": "Research Agent",
+      "agentIcon": "📚",
+      "message": "✅ Found sentiment analysis tool",
+      "timestamp": 1772525254273,
+      "type": "completion"
+    },
+    {
+      "id": "act-1772525252618-i5pyskvjh",
+      "agentId": "frontend-agent",
+      "agentName": "Frontend Agent",
+      "agentIcon": "💻",
+      "message": "Started: Checking for missing error boundaries",
+      "timestamp": 1772525252618,
+      "type": "task"
+    },
+    {
+      "id": "act-1772525251584-g5ie8vtf5",
+      "agentId": "testing-agent",
+      "agentName": "QA Agent",
+      "agentIcon": "🧪",
+      "message": "Started: Validating data formats",
+      "timestamp": 1772525251584,
+      "type": "task"
+    },
+    {
+      "id": "act-1772525249273-neajjevrv",
+      "agentId": "research-agent",
+      "agentName": "Research Agent",
+      "agentIcon": "📚",
+      "message": "Started: Researching on-chain metrics",
+      "timestamp": 1772525249273,
+      "type": "task"
+    },
+    {
+      "id": "act-1772525248609-6lqmnmoqm",
+      "agentId": "backend-agent",
+      "agentName": "Backend Agent",
+      "agentIcon": "⚙️",
+      "message": "✅ Added rate limiting",
+      "timestamp": 1772525248609,
+      "type": "completion"
+    },
+    {
+      "id": "act-1772525244608-zdjshmk57",
+      "agentId": "backend-agent",
+      "agentName": "Backend Agent",
+      "agentIcon": "⚙️",
+      "message": "Started: Checking for missing error handling",
+      "timestamp": 1772525244608,
+      "type": "task"
+    }
+  ],
+  "isActive": true,
+  "startTime": 1772524811569,
+  "totalCycles": 81,
+  "lastUpdate": 1772525365686
+}

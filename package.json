@@ -3,16 +3,27 @@
   "version": "1.0.0",
   "description": "Real-time crypto trading operating system",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 4000",
+    "dev:swarm": "./scripts/swarm-dashboard.sh",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -p 4000",
     "lint": "next lint",
+    "lint:fix": "next lint --fix",
+    "type-check": "tsc --noEmit",
+    "validate": "npm run lint && npm run type-check",
+    "qa": "./scripts/qa-validate.sh",
+    "pre-commit": "npm run validate",
     "test": "vitest run",
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",
     "test:unit": "vitest run src/tests/cryptoDataService.test.ts src/tests/positionCalculator.test.ts",
     "test:integration": "vitest run src/tests/apiIntegration.test.ts",
-    "type-check": "tsc --noEmit"
+    "swarm:monitor": "./scripts/swarm-monitor.sh",
+    "swarm:recursive": "npx tsx lib/agents/recursive-swarm-runner.ts",
+    "swarm:recursive:single": "npx tsx lib/agents/recursive-swarm-runner.ts --single",
+    "swarm:recursive:status": "npx tsx lib/agents/recursive-swarm-runner.ts --status",
+    "swarm:dashboard": "./scripts/recursive-swarm-dashboard.sh",
+    "agents:start": "./scripts/autonomous-agents-dashboard.sh"
   },
   "keywords": [
     "crypto",
@@ -23,26 +34,27 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
+    "class-variance-authority": "^0.7.0",
+    "clsx": "^2.1.0",
+    "lucide-react": "^0.344.0",
     "next": "^14.1.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "lucide-react": "^0.344.0",
     "recharts": "^2.12.0",
-    "class-variance-authority": "^0.7.0",
-    "clsx": "^2.1.0",
     "tailwind-merge": "^2.2.0"
   },
   "devDependencies": {
     "@types/node": "^20.8.10",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
-    "typescript": "^5.2.2",
-    "vitest": "^1.0.0",
     "@vitest/coverage-v8": "^1.0.0",
-    "tailwindcss": "^3.4.0",
-    "postcss": "^8.4.0",
     "autoprefixer": "^10.4.0",
     "eslint": "^8.56.0",
-    "eslint-config-next": "^14.1.0"
+    "eslint-config-next": "^14.1.0",
+    "postcss": "^8.4.0",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.2.2",
+    "vitest": "^1.0.0"
   }
 }
