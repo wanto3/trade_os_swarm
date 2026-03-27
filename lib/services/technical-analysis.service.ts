@@ -79,14 +79,27 @@ function calculateEMA(prices: number[], period: number): number {
 
 function calculateRSI(prices: number[], period = 14): number {
   if (prices.length < period + 1) return 50
-  let gains = 0, losses = 0
-  for (let i = prices.length - period; i < prices.length; i++) {
-    const diff = prices[i] - prices[i - 1]
-    if (diff > 0) gains += diff
-    else losses += Math.abs(diff)
+
+  // First: compute all price changes
+  const changes: number[] = []
+  for (let i = 1; i < prices.length; i++) {
+    changes.push(prices[i] - prices[i - 1])
   }
-  const avgGain = gains / period
-  const avgLoss = losses / period
+
+  // Separate gains and losses
+  const gains: number[] = changes.map(c => (c > 0 ? c : 0))
+  const losses: number[] = changes.map(c => (c < 0 ? Math.abs(c) : 0))
+
+  // First average: simple mean
+  let avgGain = gains.slice(0, period).reduce((a, b) => a + b, 0) / period
+  let avgLoss = losses.slice(0, period).reduce((a, b) => a + b, 0) / period
+
+  // Wilder smoothing for remaining periods
+  for (let i = period; i < changes.length; i++) {
+    avgGain = (avgGain * (period - 1) + gains[i]) / period
+    avgLoss = (avgLoss * (period - 1) + losses[i]) / period
+  }
+
   if (avgLoss === 0) return 100
   const rs = avgGain / avgLoss
   return 100 - 100 / (1 + rs)
