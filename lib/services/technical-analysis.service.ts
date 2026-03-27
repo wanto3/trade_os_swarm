@@ -41,30 +41,68 @@ interface TAResult {
 const cache = new Map<string, { data: TAResult; expiry: number }>()
 const CACHE_TTL = 60_000 // 60 seconds
 
+// Binance Kline response: [openTime, open, high, low, close, volume, closeTime, ...]
+type BinanceKline = [
+  string, // openTime
+  string, // open
+  string, // high
+  string, // low
+  string, // close
+  string, // volume
+  string, // closeTime
+  string, // ignore
+  string, // ignore
+  string, // ignore
+  string, // ignore
+  string, // ignore
+  string, // ignore
+]
+
+// Signal thresholds
+const RSI_OVERSOLD = 30
+const RSI_OVERBOUGHT = 70
+const RSI_WEAK_BUY = 40
+const RSI_WEAK_SELL = 60
+const MOMENTUM_BULL = 55
+const MOMENTUM_BEAR = 45
+const SIGNAL_MARGIN = 2 // buyScore must exceed sellScore by this much
+
 async function fetchKlines(symbol: string, interval: string, limit = 100): Promise<Kline[]> {
   const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`
-  const res = await fetch(url)
-  if (!res.ok) throw new Error(`Binance API error: ${res.status}`)
-  const raw: any[][] = await res.json()
-  return raw.map(k => ({
-    openTime: k[0],
-    open: parseFloat(k[1]),
-    high: parseFloat(k[2]),
-    low: parseFloat(k[3]),
-    close: parseFloat(k[4]),
-    volume: parseFloat(k[5]),
-    closeTime: k[6],
-  }))
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 10_000)
+  try {
+    const res = await fetch(url, { signal: controller.signal })
+    if (!res.ok) throw new Error(`Binance API error: ${res.status}`)
+    const raw: BinanceKline[] = await res.json() as BinanceKline[]
+    return raw.map(k => ({
+      openTime: Number(k[0]),
+      open: parseFloat(k[1]),
+      high: parseFloat(k[2]),
+      low: parseFloat(k[3]),
+      close: parseFloat(k[4]),
+      volume: parseFloat(k[5]),
+      closeTime: Number(k[6]),
+    }))
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 async function fetchPriceAndChange(symbol: string): Promise<{ price: number; change24h: number }> {
   const url = `https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}`
-  const res = await fetch(url)
-  if (!res.ok) throw new Error(`Binance ticker error: ${res.status}`)
-  const data = await res.json()
-  return {
-    price: parseFloat(data.lastPrice),
-    change24h: parseFloat(data.priceChangePercent),
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 10_000)
+  try {
+    const res = await fetch(url, { signal: controller.signal })
+    if (!res.ok) throw new Error(`Binance ticker error: ${res.status}`)
+    const data = await res.json()
+    return {
+      price: parseFloat(data.lastPrice),
+      change24h: parseFloat(data.priceChangePercent),
+    }
+  } finally {
+    clearTimeout(timeout)
   }
 }
 
@@ -110,8 +148,10 @@ function calculateMACD(prices: number[]): { value: number; signal: number; histo
   const ema26 = calculateEMA(prices, 26)
   const macdLine = ema12 - ema26
   // Build array of MACD values for signal line calculation
+  // Limit to last 20 to reduce O(n²) complexity (~800 steps vs ~2800 for 100 candles)
   const macdValues: number[] = []
-  for (let i = 26; i < prices.length; i++) {
+  const limit = Math.min(20, prices.length - 26)
+  for (let i = prices.length - limit; i < prices.length; i++) {
     const e12 = calculateEMA(prices.slice(0, i + 1), 12)
     const e26 = calculateEMA(prices.slice(0, i + 1), 26)
     macdValues.push(e12 - e26)
@@ -165,10 +205,10 @@ function deriveSignal(indicators: Omit<TAIndicators, 'signal' | 'signalReason'>,
   let buyScore = 0, sellScore = 0
 
   // RSI
-  if (indicators.rsi < 30) { buyScore += 2 }
-  else if (indicators.rsi > 70) { sellScore += 2 }
-  else if (indicators.rsi < 40) buyScore += 1
-  else if (indicators.rsi > 60) sellScore += 1
+  if (indicators.rsi < RSI_OVERSOLD) { buyScore += 2 }
+  else if (indicators.rsi > RSI_OVERBOUGHT) { sellScore += 2 }
+  else if (indicators.rsi < RSI_WEAK_BUY) buyScore += 1
+  else if (indicators.rsi > RSI_WEAK_SELL) sellScore += 1
 
   // MACD
   if (indicators.macd.histogram > 0) buyScore += 1.5
@@ -183,13 +223,13 @@ function deriveSignal(indicators: Omit<TAIndicators, 'signal' | 'signalReason'>,
   else if (price < indicators.ema9 && price < indicators.ema21 && price < indicators.ema50) sellScore += 1
 
   // Momentum
-  if (indicators.momentum > 55) buyScore += 1
-  else if (indicators.momentum < 45) sellScore += 1
+  if (indicators.momentum > MOMENTUM_BULL) buyScore += 1
+  else if (indicators.momentum < MOMENTUM_BEAR) sellScore += 1
 
-  if (buyScore > sellScore + 1) {
+  if (buyScore > sellScore + SIGNAL_MARGIN) {
     return { signal: 'BUY', signalReason: `RSI ${indicators.rsi.toFixed(1)}, MACD ${indicators.macd.histogram >= 0 ? 'bullish' : 'bearish'}, momentum ${indicators.momentum.toFixed(1)}` }
   }
-  if (sellScore > buyScore + 1) {
+  if (sellScore > buyScore + SIGNAL_MARGIN) {
     return { signal: 'SELL', signalReason: `RSI ${indicators.rsi.toFixed(1)}, MACD ${indicators.macd.histogram >= 0 ? 'bullish' : 'bearish'}, momentum ${indicators.momentum.toFixed(1)}` }
   }
   return { signal: 'HOLD', signalReason: `Mixed signals — RSI ${indicators.rsi.toFixed(1)}, MACD flat` }
