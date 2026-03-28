@@ -52,8 +52,8 @@ interface ApiResponse {
   }
 }
 
-type SortKey = 'fastestProfit' | 'safety' | 'ev' | 'closing'
-type FilterKey = 'all' | 'thisWeek' | 'thisMonth' | 'anyEdge'
+type SortKey = 'fastestProfit' | 'safety' | 'ev' | 'closing' | 'confidence'
+type FilterKey = 'all' | 'high' | 'medium' | 'low' | 'thisWeek' | 'anyEdge'
 type KellyMode = 'quarter' | 'half' | 'full'
 
 // No fallback — only real Polymarket API data with verified URLs is shown
@@ -202,6 +202,10 @@ export function PolymarketSection() {
       return scoreB - scoreA
     }
     if (sortKey === 'safety') return b.safetyScore - a.safetyScore
+    if (sortKey === 'confidence') {
+      const confOrder = { high: 0, medium: 1, low: 2 }
+      return confOrder[a.confidence] - confOrder[b.confidence]
+    }
     if (sortKey === 'ev') return b.expectedValue - a.expectedValue
     if (sortKey === 'closing') return a.daysToClose - b.daysToClose
     return 0
@@ -209,8 +213,10 @@ export function PolymarketSection() {
 
   // Apply filters
   const filtered = sorted.filter(rec => {
+    if (filterKey === 'high') return rec.confidence === 'high'
+    if (filterKey === 'medium') return rec.confidence === 'medium'
+    if (filterKey === 'low') return rec.confidence === 'low'
     if (filterKey === 'thisWeek') return rec.daysToClose <= 7
-    if (filterKey === 'thisMonth') return rec.daysToClose <= 30
     if (filterKey === 'anyEdge') return rec.expectedValue > 0.03 && rec.safetyScore >= 40
     return true // 'all'
   })
@@ -241,7 +247,7 @@ export function PolymarketSection() {
               Prediction Market Opportunities
             </h2>
             <p style={{ fontSize: '0.65rem', color: '#6e7681', margin: 0 }}>
-              {opportunities.length} high-certainty trades • Sorted by conviction
+              {opportunities.length} opportunities • All confidence levels
             </p>
           </div>
         </div>
@@ -413,10 +419,11 @@ export function PolymarketSection() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
           <span style={{ fontSize: '0.6rem', color: '#6e7681', marginRight: '0.25rem' }}>Sort:</span>
           {([
-            { key: 'fastestProfit' as SortKey, label: '⚡ Fastest Profit', color: '#3fb950' },
-            { key: 'safety' as SortKey, label: '🎯 High Conviction', color: '#8b5cf6' },
-            { key: 'closing' as SortKey, label: '⏱️ Closing Soon', color: '#f0883e' },
+            { key: 'safety' as SortKey, label: '⚡ Conviction', color: '#8b5cf6' },
+            { key: 'confidence' as SortKey, label: '🎯 Confidence', color: '#3fb950' },
             { key: 'ev' as SortKey, label: '📊 Highest EV', color: '#58a6ff' },
+            { key: 'closing' as SortKey, label: '⏱️ Closing Soon', color: '#f0883e' },
+            { key: 'fastestProfit' as SortKey, label: '💰 Fastest Profit', color: '#f0883e' },
           ]).map(opt => (
             <button
               key={opt.key}
@@ -443,8 +450,10 @@ export function PolymarketSection() {
           <span style={{ fontSize: '0.6rem', color: '#6e7681', marginRight: '0.25rem' }}>Filter:</span>
           {([
             { key: 'all' as FilterKey, label: `All (${filtered.length})` },
+            { key: 'high' as FilterKey, label: `HIGH` },
+            { key: 'medium' as FilterKey, label: `MEDIUM` },
+            { key: 'low' as FilterKey, label: `LOW` },
             { key: 'thisWeek' as FilterKey, label: `≤7 days` },
-            { key: 'thisMonth' as FilterKey, label: `≤30 days` },
             { key: 'anyEdge' as FilterKey, label: `Any edge` },
           ]).map(tab => (
             <button

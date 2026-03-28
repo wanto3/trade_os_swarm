@@ -277,7 +277,7 @@ function scoreMarket(market: GammaMarket): TradeRecommendation | null {
     if (evPct < 3 || evPct > 50) continue
 
     const safetyScore = calculateSafetyScore(market, estimatedProb, marketProb)
-    if (safetyScore < 40) continue
+    if (safetyScore < 20) continue
 
     const { kellyFraction } = calculateKellyBet(1000, estimatedProb, marketProb)
 
@@ -395,7 +395,8 @@ export async function GET() {
       return b.expectedValue - a.expectedValue
     })
 
-    const topCertain = recommendations.filter(r => r.safetyScore >= 40).slice(0, 20)
+    // Return ALL opportunities across all confidence levels — no artificial cap
+    const allOpportunities = recommendations.filter(r => r.safetyScore >= 20)
 
     const hotMarkets: PolymarketMarket[] = rawMarkets
       .filter(m => !m.negRisk && m.liquidityNum > 5000 && m.volumeNum > 50000)
@@ -426,7 +427,7 @@ export async function GET() {
     return NextResponse.json({
       success: true,
       timestamp: Date.now(),
-      opportunities: topCertain.map(rec => ({
+      opportunities: allOpportunities.map(rec => ({
         ...rec,
         closingDate: rec.market.endDateIso ? new Date(rec.market.endDateIso).getTime() : Date.now() + 365 * 24 * 60 * 60 * 1000,
         daysToClose: rec.market.endDateIso
@@ -436,10 +437,10 @@ export async function GET() {
       hotMarkets,
       stats: {
         marketsAnalyzed: rawMarkets.length,
-        opportunitiesFound: topCertain.length,
-        highestSafety: topCertain[0]?.safetyScore || null,
-        avgSafety: topCertain.length > 0
-          ? Math.round(topCertain.reduce((s, r) => s + r.safetyScore, 0) / topCertain.length)
+        opportunitiesFound: allOpportunities.length,
+        highestSafety: allOpportunities[0]?.safetyScore || null,
+        avgSafety: allOpportunities.length > 0
+          ? Math.round(allOpportunities.reduce((s, r) => s + r.safetyScore, 0) / allOpportunities.length)
           : null
       }
     })
