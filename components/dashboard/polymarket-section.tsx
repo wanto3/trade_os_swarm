@@ -170,7 +170,7 @@ export function PolymarketSection() {
   const fetchData = async () => {
     setLoading(true)
     try {
-      const res = await fetch('/api/polymarket')
+      const res = await fetch('/api/polymarket', { cache: 'no-store' })
       const json: ApiResponse = await res.json()
       if (json.success) {
         setData(json)

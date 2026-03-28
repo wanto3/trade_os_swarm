@@ -335,11 +335,12 @@ function scoreMarket(market: GammaMarket): TradeRecommendation | null {
 
 export async function GET() {
   try {
+    // No caching — always fetch fresh data so opportunities reflect current market prices
     const response = await fetch(
       'https://gamma-api.polymarket.com/markets?closed=false&accepting_orders=true&order=volumeNum&ascending=false&limit=500',
       {
         headers: { 'Accept': 'application/json' },
-        next: { revalidate: 30 }
+        cache: 'no-store',
       }
     )
 
@@ -352,12 +353,13 @@ export async function GET() {
       'https://gamma-api.polymarket.com/markets?closed=false&accepting_orders=true&order=endDate&ascending=true&limit=200',
       {
         headers: { 'Accept': 'application/json' },
-        next: { revalidate: 30 }
+        cache: 'no-store',
       }
     )
 
     const rawMarkets: GammaMarket[] = await response.json()
-    
+    const now = Date.now()
+
     // Merge closing-soon markets (deduplicated by id)
     if (closingSoonResponse.ok) {
       const closingSoonMarkets: GammaMarket[] = await closingSoonResponse.json()
@@ -373,6 +375,10 @@ export async function GET() {
     const recommendations: TradeRecommendation[] = []
 
     for (const market of rawMarkets) {
+      // Skip markets past their end date — these have resolved
+      if (market.endDateIso && new Date(market.endDateIso).getTime() < now) {
+        continue
+      }
       const rec = scoreMarket(market)
       if (rec) recommendations.push(rec)
     }
