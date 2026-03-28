@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server'
 
+// Force dynamic rendering — never cache Polymarket data
+export const dynamic = 'force-dynamic'
+
 export interface PolymarketMarket {
   id: string
   question: string
