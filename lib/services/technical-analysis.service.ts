@@ -41,22 +41,38 @@ interface TAResult {
 const cache = new Map<string, { data: TAResult; expiry: number }>()
 const CACHE_TTL = 60_000 // 60 seconds
 
-// Binance Kline response: [openTime, open, high, low, close, volume, closeTime, ...]
-type BinanceKline = [
-  string, // openTime
-  string, // open
-  string, // high
-  string, // low
-  string, // close
-  string, // volume
-  string, // closeTime
-  string, // ignore
-  string, // ignore
-  string, // ignore
-  string, // ignore
-  string, // ignore
-  string, // ignore
-]
+// CryptoCompare Kline response type
+interface CryptoCompareKline {
+  time: number
+  open: number
+  high: number
+  low: number
+  close: number
+  volumefrom: number
+  volumeto: number
+}
+
+// Symbol mapping: our format -> CryptoCompare fsym, CoinGecko id
+const SYMBOL_MAP: Record<string, { cc: string; cg: string }> = {
+  BTCUSDT: { cc: 'BTC', cg: 'bitcoin' },
+  ETHUSDT: { cc: 'ETH', cg: 'ethereum' },
+  BNBUSDT: { cc: 'BNB', cg: 'binancecoin' },
+  SOLUSDT: { cc: 'SOL', cg: 'solana' },
+  XRPUSDT: { cc: 'XRP', cg: 'ripple' },
+  ADAUSDT: { cc: 'ADA', cg: 'cardano' },
+  DOGEUSDT: { cc: 'DOGE', cg: 'dogecoin' },
+  MATICUSDT: { cc: 'MATIC', cg: 'matic-network' },
+}
+
+// Map our interval format to CryptoCompare aggregate parameter
+const INTERVAL_MAP: Record<string, { cc: string; limit: number }> = {
+  '1m': { cc: 'minute', limit: 100 },
+  '5m': { cc: 'minute', limit: 100 },
+  '15m': { cc: 'minute', limit: 100 },
+  '1h': { cc: 'hour', limit: 100 },
+  '4h': { cc: 'hour', limit: 100 },
+  '1d': { cc: 'day', limit: 100 },
+}
 
 // Signal thresholds
 const RSI_OVERSOLD = 30
@@ -68,21 +84,24 @@ const MOMENTUM_BEAR = 45
 const SIGNAL_MARGIN = 2 // buyScore must exceed sellScore by this much
 
 async function fetchKlines(symbol: string, interval: string, limit = 100): Promise<Kline[]> {
-  const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`
+  const cfg = SYMBOL_MAP[symbol]
+  if (!cfg) throw new Error(`Unknown symbol: ${symbol}`)
+  const intCfg = INTERVAL_MAP[interval] || INTERVAL_MAP['1h']
+  const url = `https://min-api.cryptocompare.com/data/v2/histo${intCfg.cc}?fsym=${cfg.cc}&tsym=USDT&limit=${intCfg.limit}&aggregate=1`
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 10_000)
   try {
     const res = await fetch(url, { signal: controller.signal })
-    if (!res.ok) throw new Error(`Binance API error: ${res.status}`)
-    const raw: BinanceKline[] = await res.json() as BinanceKline[]
-    return raw.map(k => ({
-      openTime: Number(k[0]),
-      open: parseFloat(k[1]),
-      high: parseFloat(k[2]),
-      low: parseFloat(k[3]),
-      close: parseFloat(k[4]),
-      volume: parseFloat(k[5]),
-      closeTime: Number(k[6]),
+    if (!res.ok) throw new Error(`CryptoCompare API error: ${res.status}`)
+    const json = await res.json() as { Data: { Data: CryptoCompareKline[] } }
+    return json.Data.Data.map(k => ({
+      openTime: k.time * 1000,
+      open: k.open,
+      high: k.high,
+      low: k.low,
+      close: k.close,
+      volume: k.volumefrom,
+      closeTime: (k.time + (intCfg.cc === 'hour' ? 3600 : intCfg.cc === 'minute' ? 60 : 86400)) * 1000,
     }))
   } finally {
     clearTimeout(timeout)
@@ -90,16 +109,20 @@ async function fetchKlines(symbol: string, interval: string, limit = 100): Promi
 }
 
 async function fetchPriceAndChange(symbol: string): Promise<{ price: number; change24h: number }> {
-  const url = `https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}`
+  const cfg = SYMBOL_MAP[symbol]
+  if (!cfg) throw new Error(`Unknown symbol: ${symbol}`)
+  const url = `https://api.coingecko.com/api/v3/simple/price?ids=${cfg.cg}&vs_currencies=usd&include_24hr_change=true`
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 10_000)
   try {
     const res = await fetch(url, { signal: controller.signal })
-    if (!res.ok) throw new Error(`Binance ticker error: ${res.status}`)
-    const data = await res.json()
+    if (!res.ok) throw new Error(`CoinGecko API error: ${res.status}`)
+    const data = await res.json() as Record<string, { usd: number; usd_24h_change: number }>
+    const coinData = data[cfg.cg]
+    if (!coinData) throw new Error(`No data for ${symbol}`)
     return {
-      price: parseFloat(data.lastPrice),
-      change24h: parseFloat(data.priceChangePercent),
+      price: coinData.usd,
+      change24h: coinData.usd_24h_change,
     }
   } finally {
     clearTimeout(timeout)

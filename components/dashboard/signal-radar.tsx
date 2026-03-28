@@ -9,14 +9,73 @@ interface RadarAxis {
 }
 
 interface SignalRadarProps {
-  axes: RadarAxis[]
   title?: string
   size?: number
 }
 
-export function SignalRadar({ axes, title = 'Signal Radar', size = 180 }: SignalRadarProps) {
+// Derive radar axes from real TA data
+function useSignalRadarData(symbol = 'BTCUSDT', interval = '1h') {
+  const [axes, setAxes] = useState<RadarAxis[]>([
+    { label: 'RSI', value: 50, max: 100 },
+    { label: 'MACD', value: 50, max: 100 },
+    { label: 'Volume', value: 50, max: 100 },
+    { label: 'Trend', value: 50, max: 100 },
+    { label: 'Momentum', value: 50, max: 100 },
+    { label: 'Signal', value: 50, max: 100 },
+  ])
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const res = await fetch(`/api/prices?symbol=${symbol}&interval=${interval}`)
+        const data = await res.json()
+        const ind = data.indicators || {}
+
+        // RSI: 0-100 directly
+        const rsi = Math.min(100, Math.max(0, ind.rsi || 50))
+
+        // MACD histogram: roughly -200 to +200, map to 0-100
+        const macdHist = ind.macd?.histogram || 0
+        const macd = Math.min(100, Math.max(0, ((macdHist + 200) / 400) * 100))
+
+        // Volume: high/normal/low → 80/50/20
+        const volumeMap: Record<string, number> = { high: 80, normal: 50, low: 20 }
+        const volume = volumeMap[ind.volume?.level || 'normal'] || 50
+
+        // Trend: bullish/bearish/neutral → 80/20/50
+        const trendMap: Record<string, number> = { bullish: 80, bearish: 20, neutral: 50 }
+        const trend = trendMap[ind.trend || 'neutral'] || 50
+
+        // Momentum: RSI 10 period, 0-100
+        const momentum = Math.min(100, Math.max(0, ind.momentum || 50))
+
+        // Signal: composite from RSI + trend
+        const signalMap: Record<string, number> = { BUY: 80, SELL: 20, HOLD: 50 }
+        const signal = signalMap[ind.signal || 'HOLD'] || 50
+
+        setAxes([
+          { label: 'RSI', value: rsi, max: 100 },
+          { label: 'MACD', value: macd, max: 100 },
+          { label: 'Volume', value: volume, max: 100 },
+          { label: 'Trend', value: trend, max: 100 },
+          { label: 'Momentum', value: momentum, max: 100 },
+          { label: 'Signal', value: signal, max: 100 },
+        ])
+      } catch (e) {
+        // Keep defaults on error
+      }
+    }
+
+    fetchData()
+  }, [symbol, interval])
+
+  return axes
+}
+
+export function SignalRadar({ title = 'Signal Radar', size = 180 }: SignalRadarProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [mounted, setMounted] = useState(false)
+  const axes = useSignalRadarData()
 
   useEffect(() => {
     setMounted(true)

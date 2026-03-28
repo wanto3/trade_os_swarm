@@ -21,6 +21,16 @@ import { MarginHealth, FundingRates, OpenInterest, Liquidations } from '@/compon
 import { PositionManager } from '@/components/dashboard/position-manager'
 import { KellyCalculator } from '@/components/dashboard/kelly-optimizer'
 import { MultiTimeframe, SupportResistanceLevels } from '@/components/dashboard/multi-timeframe'
+import RSIIndicator from '@/components/dashboard/rsi-indicator'
+import MACDIndicator from '@/components/dashboard/macd-indicator'
+import BollingerIndicator from '@/components/dashboard/bollinger-indicator'
+import MovingAveragesIndicator from '@/components/dashboard/moving-averages-indicator'
+import VolumeAnalyzer from '@/components/dashboard/volume-analyzer'
+import MomentumIndicator from '@/components/dashboard/momentum-indicator'
+import { VolatilityATRIndicator } from '@/components/dashboard/volatility-indicator'
+import VolatilityMeter from '@/components/dashboard/volatility-meter'
+import TrendScanner from '@/components/dashboard/trend-scanner'
+import SupportResistance from '@/components/dashboard/support-resistance'
 import { TabNavigation } from '@/components/dashboard/tab-nav'
 import { StatusBar } from '@/components/dashboard/status-bar'
 import { PolymarketSection } from '@/components/dashboard/polymarket-section'
@@ -38,11 +48,11 @@ type TabId = 'overview' | 'technical' | 'onchain' | 'trading' | 'markets'
 
 // === FALLBACK DATA ===
 const FALLBACK_PRICES: PriceData[] = [
-  { symbol: 'BTC', price: 84350, change24h: 1.2, volume24h: 42e9, marketCap: 1.67e12 },
-  { symbol: 'ETH', price: 2025, change24h: 0.8, volume24h: 14e9, marketCap: 243e9 },
-  { symbol: 'SOL', price: 128.5, change24h: 3.5, volume24h: 3.2e9, marketCap: 56e9 },
-  { symbol: 'ADA', price: 0.62, change24h: -0.5, volume24h: 480e6, marketCap: 22e9 },
-  { symbol: 'DOT', price: 7.25, change24h: 2.1, volume24h: 320e6, marketCap: 9.8e9 },
+  { symbol: 'BTC', price: 67661, change24h: -2.68, volume24h: 42e9, marketCap: 1.33e12 },
+  { symbol: 'ETH', price: 2039, change24h: -1.75, volume24h: 14e9, marketCap: 246e9 },
+  { symbol: 'SOL', price: 84.98, change24h: -3.43, volume24h: 3.2e9, marketCap: 37e9 },
+  { symbol: 'ADA', price: 0.2507, change24h: -2.45, volume24h: 480e6, marketCap: 8.9e9 },
+  { symbol: 'DOT', price: 1.29, change24h: -1.01, volume24h: 320e6, marketCap: 1.8e9 },
 ]
 
 // === UTILITY ===
@@ -80,11 +90,25 @@ export default function DashboardPage() {
   const fetchPrices = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetch('/api/prices')
-      const json = await res.json()
-      if (json.success && json.data) {
-        setPrices(json.data)
-        setDataSource(json.source || 'coingecko')
+      // Fetch BTC real data from the TA service
+      const btcRes = await fetch('/api/prices?symbol=BTCUSDT&interval=1h')
+      const btcJson = await btcRes.json()
+      const btcPrice = btcJson.price ? { symbol: 'BTC', price: btcJson.price, change24h: btcJson.change24h, volume24h: 42e9, marketCap: btcJson.price * 19800000 } : null
+
+      // Fetch ETH, SOL, ADA, DOT from CoinGecko for multi-coin display
+      const cgRes = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum,solana,cardano,polkadot&vs_currencies=usd&include_24hr_change=true')
+      const cgJson = await cgRes.json()
+
+      const fetchedPrices: PriceData[] = []
+      if (btcPrice) fetchedPrices.push(btcPrice)
+      if (cgJson.ethereum) fetchedPrices.push({ symbol: 'ETH', price: cgJson.ethereum.usd, change24h: cgJson.ethereum.usd_24h_change ?? 0, volume24h: 14e9, marketCap: cgJson.ethereum.usd * 120e6 })
+      if (cgJson.solana) fetchedPrices.push({ symbol: 'SOL', price: cgJson.solana.usd, change24h: cgJson.solana.usd_24h_change ?? 0, volume24h: 3.2e9, marketCap: cgJson.solana.usd * 440e6 })
+      if (cgJson.cardano) fetchedPrices.push({ symbol: 'ADA', price: cgJson.cardano.usd, change24h: cgJson.cardano.usd_24h_change ?? 0, volume24h: 480e6, marketCap: cgJson.cardano.usd * 35e9 })
+      if (cgJson.polkadot) fetchedPrices.push({ symbol: 'DOT', price: cgJson.polkadot.usd, change24h: cgJson.polkadot.usd_24h_change ?? 0, volume24h: 320e6, marketCap: cgJson.polkadot.usd * 1.4e9 })
+
+      if (fetchedPrices.length > 0) {
+        setPrices(fetchedPrices)
+        setDataSource('live')
         setLastUpdated(Date.now())
       }
     } catch {
@@ -122,15 +146,7 @@ export default function DashboardPage() {
   mockBids.forEach(b => { bidTotal += b.size; b.total = bidTotal })
   mockAsks.forEach(a => { askTotal += a.size; a.total = askTotal })
 
-  // Signal radar axes
-  const radarAxes = [
-    { label: 'RSI', value: 50 + selectedPrice.change24h * 5, max: 100 },
-    { label: 'MACD', value: selectedPrice.change24h > 0 ? 70 : 35, max: 100 },
-    { label: 'Volume', value: 45 + Math.random() * 30, max: 100 },
-    { label: 'Trend', value: selectedPrice.change24h > 0 ? 75 : 40, max: 100 },
-    { label: 'Momentum', value: 55 + Math.random() * 30, max: 100 },
-    { label: 'Sentiment', value: 60 + Math.random() * 25, max: 100 },
-  ]
+  // Signal radar — fetches its own real data internally
 
   const formatClock = (ts: number) =>
     new Date(ts).toLocaleTimeString('en-US', { hour12: false })
@@ -789,7 +805,7 @@ export default function DashboardPage() {
                       Signal Radar
                     </span>
                   </div>
-                  <SignalRadar axes={radarAxes} size={200} />
+                  <SignalRadar size={200} />
                 </GlassPanel>
               </div>
 
@@ -934,38 +950,36 @@ export default function DashboardPage() {
           {/* === TAB: TECHNICAL === */}
           {activeTab === 'technical' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', animation: 'fade-in-up 0.4s ease-out' }}>
-              {/* Indicator gauges row */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '12px' }}>
-                {[
-                  { label: 'RSI (14)', value: 50 + selectedPrice.change24h * 3 },
-                  { label: 'MACD', value: selectedPrice.change24h > 0 ? 72 : 38 },
-                  { label: 'ADX', value: 45 + Math.random() * 20 },
-                  { label: 'Stoch', value: 30 + Math.random() * 40 },
-                  { label: 'ATR %', value: 1.5 + Math.random() * 1.5 },
-                  { label: 'VWAP', value: 98 + Math.random() * 4 },
-                ].map((ind, i) => (
-                  <GlassPanel key={ind.label} glow={i === 0 ? 'green' : i === 1 ? 'cyan' : 'none'} hoverable padding="12px">
-                    <GaugeIndicator
-                      value={ind.value}
-                      label={ind.label}
-                      size="md"
-                      zones={ind.label === 'RSI (14)' ? undefined : [
-                        { from: 0, to: 30, color: 'var(--magenta)', label: '' },
-                        { from: 30, to: 70, color: 'var(--purple)', label: '' },
-                        { from: 70, to: 100, color: 'var(--green)', label: '' },
-                      ]}
-                    />
-                  </GlassPanel>
-                ))}
+              {/* Indicator gauges row — real data from TA service */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
+                <RSIIndicator />
+                <MACDIndicator />
+                <MomentumIndicator />
+                <VolatilityMeter />
               </div>
 
-              {/* Moving averages */}
-              <GlassPanel padding="16px">
+              {/* Moving averages — real data from TA service */}
+              <MovingAveragesIndicator />
+
+              {/* Bollinger + Volume — real data from TA service */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                <BollingerIndicator />
+                <VolumeAnalyzer />
+              </div>
+
+              {/* Additional indicators — real data */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                <TrendScanner />
+                <SupportResistance />
+              </div>
+
+              {/* Multi-timeframe trend */}
+              <GlassPanel padding="14px">
                 <div style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: '8px',
-                  marginBottom: '12px',
+                  marginBottom: '10px',
                 }}>
                   <LineIcon size={12} color="var(--cyan)" />
                   <span style={{
@@ -975,268 +989,11 @@ export default function DashboardPage() {
                     letterSpacing: '0.1em',
                     color: 'var(--text-muted)',
                   }}>
-                    Moving Averages — {selectedSymbol}
+                    Multi-Timeframe — {selectedSymbol}
                   </span>
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '12px' }}>
-                  {[
-                    { label: 'SMA 20', value: selectedPrice.price * 0.985 },
-                    { label: 'SMA 50', value: selectedPrice.price * 0.975 },
-                    { label: 'SMA 200', value: selectedPrice.price * 0.92 },
-                    { label: 'EMA 12', value: selectedPrice.price * 1.005 },
-                    { label: 'EMA 26', value: selectedPrice.price * 0.995 },
-                    { label: 'EMA 200', value: selectedPrice.price * 0.91 },
-                  ].map((ma) => {
-                    const diff = ((selectedPrice.price - ma.value) / ma.value) * 100
-                    const above = selectedPrice.price > ma.value
-                    return (
-                      <div key={ma.label} style={{
-                        padding: '10px',
-                        borderRadius: '8px',
-                        background: 'rgba(10,10,18,0.5)',
-                        border: `1px solid ${above ? 'rgba(0,255,136,0.15)' : 'rgba(255,0,128,0.15)'}`,
-                        textAlign: 'center',
-                      }}>
-                        <div style={{ fontSize: '8px', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
-                          {ma.label}
-                        </div>
-                        <div style={{
-                          fontSize: '12px',
-                          fontFamily: 'var(--font-mono)',
-                          fontWeight: 700,
-                          color: above ? 'var(--green)' : 'var(--magenta)',
-                        }}>
-                          ${ma.value >= 1000 ? ma.value.toLocaleString('en-US', { maximumFractionDigits: 0 }) : ma.value.toFixed(2)}
-                        </div>
-                        <div style={{
-                          fontSize: '8px',
-                          fontFamily: 'var(--font-mono)',
-                          color: above ? 'var(--green)' : 'var(--magenta)',
-                        }}>
-                          {above ? '+' : ''}{diff.toFixed(2)}%
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
+                <MultiTimeframe symbol={selectedSymbol} />
               </GlassPanel>
-
-              {/* Bollinger + Volume */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                <GlassPanel padding="16px">
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    marginBottom: '10px',
-                  }}>
-                    <BarChart3 size={12} color="var(--purple)" />
-                    <span style={{
-                      fontSize: '9px',
-                      fontWeight: 600,
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.1em',
-                      color: 'var(--text-muted)',
-                    }}>
-                      Bollinger Bands
-                    </span>
-                  </div>
-                  {(() => {
-                    const mid = selectedPrice.price
-                    const upper = mid * 1.04
-                    const lower = mid * 0.96
-                    const pct = ((mid - lower) / (upper - lower)) * 100
-                    return (
-                      <div>
-                        <div style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          fontSize: '10px',
-                          fontFamily: 'var(--font-mono)',
-                          color: 'var(--text-muted)',
-                          marginBottom: '8px',
-                        }}>
-                          <span>Upper: ${upper >= 1000 ? upper.toLocaleString('en-US', { maximumFractionDigits: 0 }) : upper.toFixed(2)}</span>
-                          <span>Lower: ${lower >= 1000 ? lower.toLocaleString('en-US', { maximumFractionDigits: 0 }) : lower.toFixed(2)}</span>
-                        </div>
-                        <div style={{ position: 'relative', height: '40px', background: 'var(--border)', borderRadius: '4px', overflow: 'hidden' }}>
-                          {/* Lower band */}
-                          <div style={{
-                            position: 'absolute',
-                            bottom: 0,
-                            left: 0,
-                            right: 0,
-                            height: '2px',
-                            background: 'var(--purple)',
-                            boxShadow: '0 0 4px var(--purple)',
-                          }} />
-                          {/* Middle band */}
-                          <div style={{
-                            position: 'absolute',
-                            top: '40%',
-                            left: 0,
-                            right: 0,
-                            height: '1px',
-                            background: 'var(--purple)',
-                            opacity: 0.5,
-                          }} />
-                          {/* Price line */}
-                          <div style={{
-                            position: 'absolute',
-                            top: `${100 - pct}%`,
-                            left: 0,
-                            right: 0,
-                            height: '2px',
-                            background: 'var(--cyan)',
-                            boxShadow: '0 0 8px var(--cyan)',
-                          }} />
-                          {/* Upper band */}
-                          <div style={{
-                            position: 'absolute',
-                            top: 0,
-                            left: 0,
-                            right: 0,
-                            height: '2px',
-                            background: 'var(--purple)',
-                            boxShadow: '0 0 4px var(--purple)',
-                          }} />
-                        </div>
-                        <div style={{
-                          display: 'flex',
-                          justifyContent: 'center',
-                          marginTop: '6px',
-                          fontSize: '9px',
-                          color: 'var(--text-muted)',
-                          fontFamily: 'var(--font-mono)',
-                        }}>
-                          Position: {pct.toFixed(1)}% ({(pct > 50 ? 'Above' : 'Below')} middle)
-                        </div>
-                      </div>
-                    )
-                  })()}
-                </GlassPanel>
-
-                <GlassPanel padding="16px">
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    marginBottom: '10px',
-                  }}>
-                    <Activity size={12} color="var(--green)" />
-                    <span style={{
-                      fontSize: '9px',
-                      fontWeight: 600,
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.1em',
-                      color: 'var(--text-muted)',
-                    }}>
-                      Volume Analysis
-                    </span>
-                  </div>
-                  {(() => {
-                    const volumes = [65, 78, 45, 92, 88, 55, 73, 98, 82, 71, 85, 90]
-                    const avgVol = volumes.reduce((a, b) => a + b, 0) / volumes.length
-                    return (
-                      <div style={{ display: 'flex', alignItems: 'flex-end', gap: '4px', height: '60px' }}>
-                        {volumes.map((v, i) => (
-                          <div key={i} style={{
-                            flex: 1,
-                            display: 'flex',
-                            flexDirection: 'column',
-                            alignItems: 'center',
-                            gap: '2px',
-                          }}>
-                            <div style={{
-                              width: '100%',
-                              height: `${v}%`,
-                              background: v > avgVol
-                                ? 'linear-gradient(180deg, var(--cyan), var(--purple))'
-                                : 'var(--border)',
-                              borderRadius: '2px',
-                              boxShadow: v > avgVol ? '0 0 4px rgba(0,245,255,0.3)' : 'none',
-                              transition: 'height 0.3s ease-out',
-                            }} />
-                          </div>
-                        ))}
-                      </div>
-                    )
-                  })()}
-                  <div style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    marginTop: '6px',
-                    fontSize: '8px',
-                    color: 'var(--text-muted)',
-                    fontFamily: 'var(--font-mono)',
-                  }}>
-                    <span>Vol: ABOVE AVG (Bullish volume)</span>
-                  </div>
-                </GlassPanel>
-              </div>
-
-              {/* More indicators */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
-                {[
-                  { label: 'CCI', value: 45 + Math.random() * 60, range: [-100, 100] },
-                  { label: 'MFI', value: 50 + Math.random() * 40, range: [0, 100] },
-                  { label: 'ROC', value: 1 + Math.random() * 4, range: [-5, 5] },
-                ].map((ind) => (
-                  <GlassPanel key={ind.label} hoverable padding="12px">
-                    <GaugeIndicator
-                      value={ind.value}
-                      min={ind.range[0]}
-                      max={ind.range[1]}
-                      label={ind.label}
-                      size="md"
-                    />
-                  </GlassPanel>
-                ))}
-              </div>
-
-              {/* S/R + Multi-timeframe */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                <GlassPanel padding="14px">
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    marginBottom: '10px',
-                  }}>
-                    <LineIcon size={12} color="var(--cyan)" />
-                    <span style={{
-                      fontSize: '9px',
-                      fontWeight: 600,
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.1em',
-                      color: 'var(--text-muted)',
-                    }}>
-                      Support & Resistance
-                    </span>
-                  </div>
-                  <SupportResistanceLevels />
-                </GlassPanel>
-                <GlassPanel padding="14px">
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    marginBottom: '10px',
-                  }}>
-                    <LineIcon size={12} color="var(--cyan)" />
-                    <span style={{
-                      fontSize: '9px',
-                      fontWeight: 600,
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.1em',
-                      color: 'var(--text-muted)',
-                    }}>
-                      Multi-Timeframe — {selectedSymbol}
-                    </span>
-                  </div>
-                  <MultiTimeframe symbol={selectedSymbol} />
-                </GlassPanel>
-              </div>
             </div>
           )}
 
