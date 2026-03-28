@@ -56,58 +56,7 @@ type SortKey = 'fastestProfit' | 'safety' | 'ev' | 'closing'
 type FilterKey = 'all' | 'thisWeek' | 'thisMonth' | 'anyEdge'
 type KellyMode = 'quarter' | 'half' | 'full'
 
-// Real Polymarket markets sorted by closing speed + conviction
-const FALLBACK_OPPORTUNITIES: TradeRecommendation[] = [
-  {
-    market: { id: '553901', question: 'Will Bitcoin hit $70k today?', outcomes: ['Yes', 'No'], outcomePrices: [0.15, 0.85], volumeNum: 1500000, liquidityNum: 250000, volume24hr: 800000, bestBid: 0.14, bestAsk: 0.16, spread: 0.02, endDateIso: new Date(Date.now() + 86400000).toISOString(), slug: 'btc-70k-today', url: 'https://polymarket.com/' },
-    outcome: 'No', odds: 0.85, estimatedProbability: 0.95, marketImpliedProb: 0.85, expectedValue: 0.117, confidence: 'high',
-    reasoning: 'Momentum has stalled and intraday volume is dropping. Unlikely to push 8% in 12 hours.',
-    upside: 'Market: 85.0% → Est: 95.0% | EV: +11.7%', riskLevel: 'low', maxBet: 200, safetyScore: 88, recommendedBet: 0, kellyFraction: 0.08, halfKellyBet: 0,
-    closingDate: Date.now() + 43200000, daysToClose: 0
-  },
-  {
-    market: { id: '553902', question: 'Will ETH daily volume exceed $15B today?', outcomes: ['Yes', 'No'], outcomePrices: [0.60, 0.40], volumeNum: 450000, liquidityNum: 80000, volume24hr: 150000, bestBid: 0.59, bestAsk: 0.61, spread: 0.02, endDateIso: new Date(Date.now() + 86400000).toISOString(), slug: 'eth-vol-15b-today', url: 'https://polymarket.com/' },
-    outcome: 'Yes', odds: 0.60, estimatedProbability: 0.75, marketImpliedProb: 0.60, expectedValue: 0.25, confidence: 'medium',
-    reasoning: 'Current run-rate puts end of day volume comfortably over $16B. Strong on-chain activity supports this.',
-    upside: 'Market: 60.0% → Est: 75.0% | EV: +25.0%', riskLevel: 'medium', maxBet: 100, safetyScore: 75, recommendedBet: 0, kellyFraction: 0.06, halfKellyBet: 0,
-    closingDate: Date.now() + 21600000, daysToClose: 0
-  },
-  {
-    market: { id: '553903', question: 'Will Solana outpace BNB market cap today?', outcomes: ['Yes', 'No'], outcomePrices: [0.25, 0.75], volumeNum: 850000, liquidityNum: 110000, volume24hr: 320000, bestBid: 0.24, bestAsk: 0.26, spread: 0.02, endDateIso: new Date(Date.now() + 86400000).toISOString(), slug: 'sol-bnb-flippening-today', url: 'https://polymarket.com/' },
-    outcome: 'Yes', odds: 0.25, estimatedProbability: 0.40, marketImpliedProb: 0.25, expectedValue: 0.60, confidence: 'high',
-    reasoning: 'Massive surge in SOL DEX volume and price action makes a temporary cross highly probable before daily close.',
-    upside: 'Market: 25.0% → Est: 40.0% | EV: +60.0%', riskLevel: 'high', maxBet: 50, safetyScore: 65, recommendedBet: 0, kellyFraction: 0.05, halfKellyBet: 0,
-    closingDate: Date.now() + 10800000, daysToClose: 0
-  },
-  {
-    market: { id: '553821', question: 'Will Bitcoin dip to $65,000 in March 2026?', outcomes: ['Yes', 'No'], outcomePrices: [0.55, 0.45], volumeNum: 850000, liquidityNum: 45000, volume24hr: 12000, bestBid: 0.54, bestAsk: 0.56, spread: 0.02, endDateIso: '2026-03-31', slug: 'btc-dip-65k-march', url: 'https://polymarket.com/' },
-    outcome: 'No', odds: 0.45, estimatedProbability: 0.55, marketImpliedProb: 0.45, expectedValue: 0.182, confidence: 'high',
-    reasoning: 'Strong support at $65K with buying pressure. ETF inflows and institutional accumulation suggest dip buyers will step in.',
-    upside: 'Market: 45.0% → Est: 55.0% | EV: +18.2%', riskLevel: 'low', maxBet: 100, safetyScore: 85, recommendedBet: 0, kellyFraction: 0.07, halfKellyBet: 0,
-    closingDate: 1777612800000, daysToClose: 11
-  },
-  {
-    market: { id: '553822', question: 'Will Bitcoin be above $80,000 by end of March?', outcomes: ['Yes', 'No'], outcomePrices: [0.38, 0.62], volumeNum: 620000, liquidityNum: 32000, volume24hr: 8500, bestBid: 0.37, bestAsk: 0.39, spread: 0.02, endDateIso: '2026-03-31', slug: 'btc-80k-march', url: 'https://polymarket.com/' },
-    outcome: 'Yes', odds: 0.38, estimatedProbability: 0.48, marketImpliedProb: 0.38, expectedValue: 0.161, confidence: 'medium',
-    reasoning: 'Price action and momentum suggest upside bias. Strong volume on recent dips indicates accumulation.',
-    upside: 'Market: 38.0% → Est: 48.0% | EV: +16.1%', riskLevel: 'low', maxBet: 100, safetyScore: 78, recommendedBet: 0, kellyFraction: 0.06, halfKellyBet: 0,
-    closingDate: 1777612800000, daysToClose: 11
-  },
-  {
-    market: { id: '553823', question: 'Will Ethereum exceed $2,200 by April 2026?', outcomes: ['Yes', 'No'], outcomePrices: [0.42, 0.58], volumeNum: 480000, liquidityNum: 28000, volume24hr: 6000, bestBid: 0.41, bestAsk: 0.43, spread: 0.02, endDateIso: '2026-04-30', slug: 'eth-2200-april', url: 'https://polymarket.com/' },
-    outcome: 'Yes', odds: 0.42, estimatedProbability: 0.53, marketImpliedProb: 0.42, expectedValue: 0.190, confidence: 'high',
-    reasoning: 'ETH holding key support levels. Pectra upgrade and increased DeFi activity on L2s provide catalysts.',
-    upside: 'Market: 42.0% → Est: 53.0% | EV: +19.0%', riskLevel: 'low', maxBet: 100, safetyScore: 82, recommendedBet: 0, kellyFraction: 0.065, halfKellyBet: 0,
-    closingDate: 1780521600000, daysToClose: 41
-  },
-  {
-    market: { id: '553826', question: 'Will Chelsea win the 2025–26 English Premier League?', outcomes: ['Yes', 'No'], outcomePrices: [0.12, 0.88], volumeNum: 2800000, liquidityNum: 120000, volume24hr: 15000, bestBid: 0.11, bestAsk: 0.13, spread: 0.02, endDateIso: '2026-05-15', slug: 'chelsea-epl-2026', url: 'https://polymarket.com/' },
-    outcome: 'No', odds: 0.88, estimatedProbability: 0.92, marketImpliedProb: 0.88, expectedValue: 0.333, confidence: 'high',
-    reasoning: 'Liverpool/Arsenal remain strong favorites. Chelsea squad depth unlikely to close the gap this season.',
-    upside: 'Market: 88.0% → Est: 92.0% | EV: +33.3%', riskLevel: 'low', maxBet: 100, safetyScore: 90, recommendedBet: 0, kellyFraction: 0.045, halfKellyBet: 0,
-    closingDate: 1781644800000, daysToClose: 56
-  }
-]
+// No fallback — only real Polymarket API data with verified URLs is shown
 
 function SafetyBar({ score }: { score: number }) {
   const color = score >= 70 ? '#3fb950' : score >= 55 ? '#f0883e' : '#8b949e'
@@ -176,10 +125,10 @@ export function PolymarketSection() {
         setData(json)
         setLastUpdated(json.timestamp > 0 ? json.timestamp : null)
       } else {
-        setData({ success: true, timestamp: 0, opportunities: FALLBACK_OPPORTUNITIES, hotMarkets: [], stats: { marketsAnalyzed: 0, opportunitiesFound: 6, highestSafety: 82, avgSafety: 71 } })
+        setData({ success: true, timestamp: 0, opportunities: [], hotMarkets: [], stats: { marketsAnalyzed: 0, opportunitiesFound: 0, highestSafety: null, avgSafety: null } })
       }
     } catch {
-      setData({ success: true, timestamp: 0, opportunities: FALLBACK_OPPORTUNITIES, hotMarkets: [], stats: { marketsAnalyzed: 0, opportunitiesFound: 6, highestSafety: 82, avgSafety: 71 } })
+      setData({ success: true, timestamp: 0, opportunities: [], hotMarkets: [], stats: { marketsAnalyzed: 0, opportunitiesFound: 0, highestSafety: null, avgSafety: null } })
     }
     setLoading(false)
   }
@@ -238,10 +187,8 @@ export function PolymarketSection() {
     return bankroll * rec.kellyFraction / divisor
   }
 
-  // Combine live API opportunities with the fast-closing fallback ones
-  const opportunities = data?.opportunities?.length 
-    ? [...data.opportunities, ...FALLBACK_OPPORTUNITIES.filter(f => f.daysToClose <= 1)]
-    : FALLBACK_OPPORTUNITIES
+  // Only show real Polymarket API data
+  const opportunities = data?.opportunities ?? []
 
   // Apply sorting
   const sorted = [...opportunities].sort((a, b) => {
