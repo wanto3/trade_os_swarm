@@ -53,7 +53,7 @@ interface ApiResponse {
 }
 
 type SortKey = 'fastestProfit' | 'safety' | 'ev' | 'closing' | 'confidence'
-type FilterKey = 'all' | 'high' | 'medium' | 'low' | 'thisWeek' | 'anyEdge'
+type FilterKey = 'all' | 'high' | 'medium' | 'low' | 'today' | '3days' | '7days' | '30days' | 'anyEdge'
 type KellyMode = 'quarter' | 'half' | 'full'
 
 // No fallback — only real Polymarket API data with verified URLs is shown
@@ -216,7 +216,10 @@ export function PolymarketSection() {
     if (filterKey === 'high') return rec.confidence === 'high'
     if (filterKey === 'medium') return rec.confidence === 'medium'
     if (filterKey === 'low') return rec.confidence === 'low'
-    if (filterKey === 'thisWeek') return rec.daysToClose <= 7
+    if (filterKey === 'today') return rec.daysToClose <= 1
+    if (filterKey === '3days') return rec.daysToClose <= 3
+    if (filterKey === '7days') return rec.daysToClose <= 7
+    if (filterKey === '30days') return rec.daysToClose <= 30
     if (filterKey === 'anyEdge') return rec.expectedValue > 0.03 && rec.safetyScore >= 40
     return true // 'all'
   })
@@ -453,7 +456,10 @@ export function PolymarketSection() {
             { key: 'high' as FilterKey, label: `HIGH` },
             { key: 'medium' as FilterKey, label: `MEDIUM` },
             { key: 'low' as FilterKey, label: `LOW` },
-            { key: 'thisWeek' as FilterKey, label: `≤7 days` },
+            { key: 'today' as FilterKey, label: `≤24h` },
+            { key: '3days' as FilterKey, label: `≤3d` },
+            { key: '7days' as FilterKey, label: `≤7d` },
+            { key: '30days' as FilterKey, label: `≤30d` },
             { key: 'anyEdge' as FilterKey, label: `Any edge` },
           ]).map(tab => (
             <button
