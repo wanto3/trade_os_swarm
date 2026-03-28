@@ -278,7 +278,7 @@ export function PolymarketSection() {
                 const val = parseFloat(e.target.value)
                 if (!isNaN(val) && val > 0) setBankroll(val)
               }}
-              style={{ background: 'none', border: 'none', color: '#fff', fontSize: '0.75rem', fontWeight: 600, width: '70px', outline: 'none' }}
+              style={{ background: 'none', border: 'none', color: '#fff', fontSize: '0.75rem', fontWeight: 600, width: '80px', outline: 'none' }}
               placeholder="Bankroll"
             />
             <button
@@ -395,7 +395,7 @@ export function PolymarketSection() {
       {/* Portfolio Summary Row */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.75rem', marginBottom: '1rem' }}>
         {[
-          { label: 'Total Kelly Bet', value: `$${totalKellyBet.toFixed(0)}`, sub: `across ${filtered.length} trades`, color: '#58a6ff', icon: <Target style={{ width: 14, height: 14 }} /> },
+          { label: 'Total Kelly Bet', value: `$${totalKellyBet.toFixed(2)}`, sub: `across ${filtered.length} trades`, color: '#58a6ff', icon: <Target style={{ width: 14, height: 14 }} /> },
           { label: 'Expected Profit', value: potentialProfit > 0 ? `+$${potentialProfit.toFixed(2)}` : '$0.00', sub: 'if all resolve correctly', color: '#3fb950', icon: <TrendingUp style={{ width: 14, height: 14 }} /> },
           { label: 'Avg Conviction', value: `${avgSafety}/100`, sub: 'across all trades', color: avgSafety >= 70 ? '#3fb950' : avgSafety >= 55 ? '#f0883e' : '#8b949e', icon: <BarChart3 style={{ width: 14, height: 14 }} /> },
           { label: 'Avg EV per Trade', value: `${(avgEV * 100).toFixed(1)}%`, sub: kellyLabel, color: '#8b5cf6', icon: <Zap style={{ width: 14, height: 14 }} /> },
@@ -559,7 +559,7 @@ export function PolymarketSection() {
                     <SafetyBar score={rec.safetyScore} />
                     <KellyBar fraction={rec.kellyFraction} />
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
-                      <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#f0883e' }}>${kellyBet.toFixed(0)}</div>
+                      <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#f0883e' }}>${kellyBet.toFixed(2)}</div>
                       <span style={{ fontSize: '0.55rem', color: '#6e7681' }}>Bet ({kellyMode === 'quarter' ? '¼' : kellyMode === 'half' ? '½' : '1'}K)</span>
                     </div>
                   </div>
@@ -575,7 +575,7 @@ export function PolymarketSection() {
                       <div style={{ fontSize: '0.5rem', color: '#6e7681' }}>Expected</div>
                     </div>
                     <div style={{ textAlign: 'center' }}>
-                      <div style={{ fontSize: '0.7rem', fontWeight: 600, color: '#f85149' }}>-${kellyBet.toFixed(0)}</div>
+                      <div style={{ fontSize: '0.7rem', fontWeight: 600, color: '#f85149' }}>-${kellyBet.toFixed(2)}</div>
                       <div style={{ fontSize: '0.5rem', color: '#6e7681' }}>If Lose</div>
                     </div>
                   </div>
