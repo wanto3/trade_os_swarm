@@ -73,14 +73,14 @@ function slugify(text: string): string {
 }
 
 function makeMarketUrl(market: GammaMarket): string {
-  // Priority: market.slug first (direct market page, returns 200 for regular markets),
-  // then events[0].slug (parent event, works for some), then slugify as last resort.
-  // NegRisk sub-markets are filtered out upstream, so most of these are regular markets.
-  if (market.slug) {
-    return `https://polymarket.com/event/${market.slug}`
-  }
+  // Strategy: events[0].slug (parent event page) works for non-negRisk markets
+  // (BTC markets, individual team markets). market.slug works for standalone markets.
+  // NegRisk sub-markets are filtered out upstream.
   if (market.events && market.events.length > 0 && market.events[0].slug) {
     return `https://polymarket.com/event/${market.events[0].slug}`
+  }
+  if (market.slug) {
+    return `https://polymarket.com/event/${market.slug}`
   }
   // Last resort: question-based slug
   const slug = slugify(market.question)
