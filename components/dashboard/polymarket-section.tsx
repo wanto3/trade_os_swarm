@@ -520,6 +520,14 @@ export function PolymarketSection() {
                     <span style={{ fontSize: '0.6rem', fontWeight: 700, color: '#8b949e', backgroundColor: 'rgba(139, 92, 246, 0.1)', padding: '2px 8px', borderRadius: '4px' }}>
                       {rec.outcome}
                     </span>
+                    <span style={{
+                      fontSize: '0.58rem', fontWeight: 700,
+                      color: rec.confidence === 'high' ? '#3fb950' : rec.confidence === 'medium' ? '#f0883e' : '#8b949e',
+                      backgroundColor: rec.confidence === 'high' ? 'rgba(63, 185, 80, 0.1)' : rec.confidence === 'medium' ? 'rgba(240, 136, 62, 0.1)' : 'rgba(139, 148, 158, 0.1)',
+                      padding: '2px 7px', borderRadius: '4px'
+                    }}>
+                      {rec.confidence.toUpperCase()}
+                    </span>
                     <span style={{ fontSize: '0.65rem', fontWeight: 700, color: rec.expectedValue > 0 ? '#3fb950' : '#f85149' }}>
                       {rec.expectedValue > 0 ? '+' : ''}{(rec.expectedValue * 100).toFixed(1)}% EV
                     </span>
