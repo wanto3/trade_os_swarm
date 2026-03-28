@@ -51,6 +51,7 @@ interface GammaMarket {
   endDateIso?: string
   slug?: string
   competitive?: number
+  negRisk?: boolean
   events?: { slug: string }[]
 }
 
@@ -72,18 +73,16 @@ function slugify(text: string): string {
 }
 
 function makeMarketUrl(market: GammaMarket): string {
-  // Polymarket creates pages at the parent EVENT level (via events[0].slug), not individual market conditions.
-  // The market.slug has condition IDs appended and often 404s.
-  // Question-based slugify also 404s because Polymarket doesn't create pages per question.
-  // events[0].slug = parent event slug = the actual Polymarket page (returns HTTP 200).
-  if (market.events && market.events.length > 0 && market.events[0].slug) {
-    return `https://polymarket.com/event/${market.events[0].slug}`
-  }
-  // Fallback to market.slug (may work for some non-negRisk markets)
+  // Priority: market.slug first (direct market page, returns 200 for regular markets),
+  // then events[0].slug (parent event, works for some), then slugify as last resort.
+  // NegRisk sub-markets are filtered out upstream, so most of these are regular markets.
   if (market.slug) {
     return `https://polymarket.com/event/${market.slug}`
   }
-  // Last resort: question-based slug (will likely 404 but at least gives a link)
+  if (market.events && market.events.length > 0 && market.events[0].slug) {
+    return `https://polymarket.com/event/${market.events[0].slug}`
+  }
+  // Last resort: question-based slug
   const slug = slugify(market.question)
   return `https://polymarket.com/event/${slug}`
 }
@@ -232,6 +231,11 @@ function calculateKellyBet(bankroll: number, estimatedProb: number, marketProb: 
 }
 
 function scoreMarket(market: GammaMarket): TradeRecommendation | null {
+  // Skip negRisk sub-markets — they don't have standalone Polymarket pages
+  // and their prices are structured differently (they're sub-conditions of
+  // parent markets, so clicking the URL lands on the wrong market)
+  if ((market as any).negRisk === true) return null
+
   if (!market.outcomePrices || !market.outcomes) return null
 
   let outcomePrices: number[]
@@ -391,7 +395,7 @@ export async function GET() {
     const topCertain = recommendations.filter(r => r.safetyScore >= 40).slice(0, 20)
 
     const hotMarkets: PolymarketMarket[] = rawMarkets
-      .filter(m => m.liquidityNum > 5000 && m.volumeNum > 50000)
+      .filter(m => !m.negRisk && m.liquidityNum > 5000 && m.volumeNum > 50000)
       .slice(0, 30)
       .map(m => {
         let outcomePrices: number[] = []
