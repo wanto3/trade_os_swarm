@@ -509,8 +509,76 @@ export async function GET() {
       return b.expectedValue - a.expectedValue
     })
 
+    // Second pass: deep research on top 20 candidates (async, runs in background)
+    // This improves conviction scores and adds research summaries
+    const topCandidates = recommendations.slice(0, 20)
+    ;(async () => {
+      for (const rec of topCandidates) {
+        try {
+          const { runDeepResearch, estimateTrueProbability, detectLongTailEdges, assessConvictionScore, analyzeTimeEdge } = await import('@/lib/services/polymarket-research.service')
+
+          const q = rec.market.question.toLowerCase()
+          let category: 'policy' | 'crypto' | 'sports' | 'general' = 'general'
+          if (/\b(fed|rate|tariff|election|presid(ent|ential)|congress|law|pass|convicted|inflation|jobs|nomination)\b/.test(q)) category = 'policy'
+          else if (/\b(btc|bitcoin|eth(ereum)?|sol(ana)?|crypto|dogecoin|xrp|ada|dot|trump|meme|coin)\b/.test(q)) category = 'crypto'
+          else if (/\b(vs|beat|loss|score|game|team|league|championship|nba|nfl|mlb|premier|ufa|tennis|basketball|football|mvp|world cup|fifa|nhl|stanley cup|series|semifinal|quarterfinal|finals|playoffs)\b/.test(q)) category = 'sports'
+
+          const research = await runDeepResearch(rec.market.question, rec.odds, category)
+          const estimatedProb = estimateTrueProbability(rec.odds, category, research)
+          const timeAnalysis = analyzeTimeEdge(rec.market.endDateIso, {
+            volumeNum: rec.market.volumeNum,
+            liquidityNum: rec.market.liquidityNum,
+          } as any)
+          const spread = rec.market.spread || 0.02
+          const { score, breakdown, label } = assessConvictionScore(
+            rec.odds, estimatedProb, research, timeAnalysis,
+            rec.market.liquidityNum, rec.market.volumeNum, spread,
+          )
+
+          const longTail = detectLongTailEdges(
+            rec.odds,
+            rec.outcome === 'Yes' || rec.outcome === '0' ? 0 : 1,
+            rec.outcome,
+            research,
+            estimatedProb,
+            rec.market.question,
+            rec.market.liquidityNum,
+          )
+
+          // Update the recommendation in place
+          rec.research = research
+          rec.estimatedProbability = estimatedProb
+          rec.expectedValue = (estimatedProb - rec.odds) / (1 - rec.odds)
+          rec.convictionScore = score
+          rec.convictionLabel = label
+          rec.convictionBreakdown = breakdown
+          rec.longTail = longTail
+          rec.timeAnalysis = timeAnalysis
+          rec.reasoning = `Research-based: ${(estimatedProb * 100).toFixed(0)}% true prob vs ${(rec.odds * 100).toFixed(0)}% market. ${research.keyInsight}`
+          rec.upside = `Market: ${(rec.odds * 100).toFixed(1)}% → Est: ${(estimatedProb * 100).toFixed(1)}% | EV: ${(rec.expectedValue * 100).toFixed(1)}%`
+          if (longTail?.flag) {
+            rec.reasoning = `[${longTail.flag.toUpperCase().replace('-', ' ')}] ${longTail.reasoning}`
+            if (longTail.alternativeOutcome && longTail.alternativeEV !== undefined) {
+              rec.upside += ` | CONTRARIAN: "${longTail.alternativeOutcome}" EV: ${(longTail.alternativeEV * 100).toFixed(1)}%`
+            }
+          }
+        } catch (error) {
+          console.error('[ResearchService] Background research failed for market:', rec.market.id, error)
+        }
+      }
+      // Re-sort after research updates conviction scores
+      recommendations.sort((a, b) => {
+        const tierOrder: Record<string, number> = { imminent: 0, 'closing-soon': 1, medium: 2, long: 3 }
+        const aTier = a.timeAnalysis?.tier || 'long'
+        const bTier = b.timeAnalysis?.tier || 'long'
+        if (tierOrder[aTier] !== tierOrder[bTier]) return tierOrder[aTier] - tierOrder[bTier]
+        if (Math.abs(b.convictionScore - a.convictionScore) > 3) return b.convictionScore - a.convictionScore
+        return b.expectedValue - a.expectedValue
+      })
+    })()
+
     // Return ALL opportunities across all confidence levels — no artificial cap
-    const allOpportunities = recommendations.filter(r => r.safetyScore >= 20)
+    const allOpportunities = recommendations.filter(r => r.convictionScore >= 30)
 
     const hotMarkets: PolymarketMarket[] = rawMarkets
       .filter(m => !m.negRisk && m.liquidityNum > 5000 && m.volumeNum > 50000)
@@ -544,24 +612,30 @@ export async function GET() {
       opportunities: allOpportunities.map(rec => ({
         ...rec,
         closingDate: rec.market.endDateIso ? new Date(rec.market.endDateIso).getTime() : Date.now() + 365 * 24 * 60 * 60 * 1000,
-        daysToClose: rec.market.endDateIso
-          ? Math.ceil((new Date(rec.market.endDateIso).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
-          : 999
+        daysToClose: rec.timeAnalysis?.daysToClose ?? 999,
       })),
+      closingSoonOpportunities: allOpportunities.filter(r =>
+        r.timeAnalysis?.tier === 'imminent' || r.timeAnalysis?.tier === 'closing-soon'
+      ),
+      longTailOpportunities: allOpportunities.filter(r => r.longTail !== null),
       hotMarkets,
       stats: {
         marketsAnalyzed: rawMarkets.length,
         opportunitiesFound: allOpportunities.length,
-        highestSafety: allOpportunities[0]?.safetyScore || null,
-        avgSafety: allOpportunities.length > 0
-          ? Math.round(allOpportunities.reduce((s, r) => s + r.safetyScore, 0) / allOpportunities.length)
-          : null
+        closingSoonCount: allOpportunities.filter(r =>
+          r.timeAnalysis?.tier === 'imminent' || r.timeAnalysis?.tier === 'closing-soon'
+        ).length,
+        longTailCount: allOpportunities.filter(r => r.longTail !== null).length,
+        highestConviction: allOpportunities[0]?.convictionScore || null,
+        avgConviction: allOpportunities.length > 0
+          ? Math.round(allOpportunities.reduce((s, r) => s + r.convictionScore, 0) / allOpportunities.length)
+          : null,
       }
     })
   } catch (error) {
     console.error('Polymarket API error:', error)
     return NextResponse.json(
-      { success: false, error: 'Failed to fetch Polymarket data', opportunities: [], hotMarkets: [], stats: null },
+      { success: false, error: 'Failed to fetch Polymarket data', opportunities: [], closingSoonOpportunities: [], longTailOpportunities: [], hotMarkets: [], stats: null },
       { status: 500 }
     )
   }
