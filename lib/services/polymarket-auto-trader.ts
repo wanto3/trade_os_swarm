@@ -65,7 +65,7 @@ async function fetchOpportunities(): Promise<TradeRecommendation[]> {
       else if (/\b(btc|bitcoin|eth(ereum)?|sol(ana)?|crypto|dogecoin|xrp|ada|dot|trump|meme|coin)\b/.test(q)) category = 'crypto'
       else if (/\b(vs|beat|loss|score|game|team|league|championship|nba|nfl|mlb|premier|ufa|tennis|basketball|football|mvp|world cup|fifa|nhl|stanley cup|series|semifinal|quarterfinal|finals|playoffs)\b/.test(q)) category = 'sports'
 
-      const categoryBias: Record<string, number> = { crypto: 0.02, sports: 0.01, policy: -0.03, general: 0.0 }
+      const categoryBias: Record<string, number> = { crypto: 0.01, sports: 0.01, policy: -0.02, general: 0.0 }
       const bias = categoryBias[category] || 0
 
       for (let i = 0; i < Math.min(outcomePrices.length, 2); i++) {
