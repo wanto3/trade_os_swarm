@@ -379,7 +379,7 @@ export function PolymarketSection() {
   // Local config form state
   const [localConfig, setLocalConfig] = useState<Partial<AutoTraderConfig>>({})
 
-  const fetchData = useState<() => void>(() => async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true)
     try {
       const res = await fetch('/api/polymarket', { cache: 'no-store' })
@@ -394,13 +394,13 @@ export function PolymarketSection() {
       setData({ success: true, timestamp: 0, opportunities: [], closingSoonOpportunities: [], longTailOpportunities: [], hotMarkets: [], stats: { marketsAnalyzed: 0, opportunitiesFound: 0, closingSoonCount: 0, longTailCount: 0, highestConviction: null, avgConviction: null } })
     }
     setLoading(false)
-  })[0]
+  }, [])
 
   useEffect(() => {
     fetchData()
     loadBalance()
     loadPaperData()
-  }, [])
+  }, [fetchData])
 
   useEffect(() => {
     const id = setInterval(fetchData, 120000)
