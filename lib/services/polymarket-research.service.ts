@@ -702,8 +702,7 @@ export function buildResearchReasoning(
   research: ResearchSummary,
   timeAnalysis: TimeAnalysis,
   estimatedProb: number,
-  marketProb: number,
-  sentiment: 'bullish' | 'bearish' | 'neutral' | 'mixed'
+  marketProb: number
 ): string {
   const probDiff = estimatedProb - marketProb
   const diffWord = probDiff > 0 ? 'higher' : 'lower'
@@ -713,7 +712,7 @@ export function buildResearchReasoning(
 
   let reasoning = `${question.substring(0, 80)}${question.length > 80 ? '...' : ''} `
   reasoning += `Market at ${(marketProb * 100).toFixed(1)}%, research suggests ${(estimatedProb * 100).toFixed(1)}% (${Math.abs(probDiff * 100).toFixed(1)}% ${diffWord}). `
-  reasoning += `Sentiment: ${sentiment}. ${timeAnalysis.closingSoonFactors[0] || ''} `
+  reasoning += `Sentiment: ${research.sentiment}. ${timeAnalysis.closingSoonFactors[0] || ''} `
 
   if (research.topFindings.length > 0) {
     reasoning += `Key finding: "${research.topFindings[0].substring(0, 100)}"`
@@ -891,8 +890,7 @@ export async function scoreMarketPipeline(
       research,
       time,
       estimatedProb,
-      marketProb,
-      research.sentiment
+      marketProb
     )
 
     const upside = buildUpsideString(marketProb, estimatedProb, ev, longTail)

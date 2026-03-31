@@ -254,15 +254,13 @@ function pickReasoning(question: string, outcomeIndex: number, estimatedProb: nu
 
 function estimateTrueProbability(marketPrice: number, category: string): number {
   const categoryBias: Record<string, number> = {
-    crypto: 0.02,
+    crypto: 0.01,
     sports: 0.01,
-    policy: -0.03,
+    policy: -0.02,
     general: 0.0,
   }
   const bias = categoryBias[category] || 0
-  const randomFuzz = (Math.random() - 0.5) * 0.06
-  const estimated = marketPrice + bias + randomFuzz
-  return Math.min(0.94, Math.max(0.06, estimated))
+  return Math.min(0.97, Math.max(0.03, marketPrice + bias))
 }
 
 function calculateKellyBet(bankroll: number, estimatedProb: number, marketProb: number): { kellyFraction: number; halfKelly: number; quarterKelly: number } {
