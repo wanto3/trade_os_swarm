@@ -1,4 +1,4 @@
-import type { TradeRecommendation } from '@/app/api/polymarket/route'
+import type { TradeRecommendation, ConvictionBreakdown, TimeAnalysis, ConvictionLabel } from '@/app/api/polymarket/route'
 import {
   ensureInitialized,
   getConfig,
@@ -7,6 +7,13 @@ import {
   createPosition,
   resolvePosition,
 } from './polymarket-portfolio.service'
+
+function getConvictionLabel(score: number): ConvictionLabel {
+  if (score >= 90) return 'no-brainer'
+  if (score >= 75) return 'high'
+  if (score >= 55) return 'consider'
+  return 'risky'
+}
 
 const POLL_INTERVAL_MS = 15 * 60 * 1000 // 15 minutes
 
@@ -101,6 +108,43 @@ async function fetchOpportunities(): Promise<TradeRecommendation[]> {
           ? Math.ceil((new Date(market.endDateIso).getTime() - now) / (1000 * 60 * 60 * 24))
           : 999
 
+        const convictionScore = safetyScore
+        const convictionLabel = getConvictionLabel(convictionScore)
+
+        // Time analysis
+        let tier: 'imminent' | 'closing-soon' | 'medium' | 'long' = 'medium'
+        if (daysToClose <= 1) tier = 'imminent'
+        else if (daysToClose <= 7) tier = 'closing-soon'
+        else if (daysToClose <= 30) tier = 'medium'
+        else tier = 'long'
+        const closingSoonFactors: string[] = tier === 'imminent'
+          ? ['Resolution within 24 hours']
+          : tier === 'closing-soon'
+            ? ['Resolution within 7 days']
+            : tier === 'medium'
+              ? ['Resolution within 30 days']
+              : ['Long-duration market']
+        const resolutionUncertainty: 'low' | 'medium' | 'high' =
+          tier === 'imminent' ? 'low' : tier === 'closing-soon' || tier === 'medium' ? 'medium' : 'high'
+
+        const convictionBreakdown: ConvictionBreakdown = {
+          score: convictionScore,
+          label: convictionLabel,
+          factors: {
+            marketQuality: Math.round(liq >= 100000 ? 100 : liq >= 50000 ? 85 : liq >= 25000 ? 70 : liq >= 10000 ? 55 : 40),
+            timeEdge: tier === 'imminent' ? 95 : tier === 'closing-soon' ? 75 : tier === 'medium' ? 55 : 35,
+            researchAlignment: 50,
+            evRationality: evPct >= 3 && evPct <= 25 ? 100 : evPct > 25 && evPct <= 40 ? 70 : 40,
+          },
+        }
+
+        const timeAnalysis: TimeAnalysis = {
+          tier,
+          daysToClose,
+          closingSoonFactors,
+          resolutionUncertainty,
+        }
+
         const rec: TradeRecommendation = {
           market: {
             id: market.id,
@@ -134,6 +178,12 @@ async function fetchOpportunities(): Promise<TradeRecommendation[]> {
           halfKellyBet: 0,
           closingDate: market.endDateIso ? new Date(market.endDateIso).getTime() : now + 365 * 24 * 60 * 60 * 1000,
           daysToClose,
+          convictionScore,
+          convictionLabel,
+          convictionBreakdown,
+          research: null,
+          longTail: null,
+          timeAnalysis,
         }
 
         recommendations.push(rec)

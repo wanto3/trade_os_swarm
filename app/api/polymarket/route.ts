@@ -3,6 +3,8 @@ import { NextResponse } from 'next/server'
 // Force dynamic rendering — never cache Polymarket data
 export const dynamic = 'force-dynamic'
 
+import { estimateTrueProbability as serviceEstimateTrueProbability } from '@/lib/services/polymarket-research.service'
+
 export interface PolymarketMarket {
   id: string
   question: string
@@ -252,6 +254,7 @@ function pickReasoning(question: string, outcomeIndex: number, estimatedProb: nu
   return options[idx % options.length]
 }
 
+// Delegated to polymarket-research.service.ts
 function estimateTrueProbability(marketPrice: number, category: string): number {
   const categoryBias: Record<string, number> = {
     crypto: 0.01,
@@ -276,6 +279,13 @@ function calculateKellyBet(bankroll: number, estimatedProb: number, marketProb: 
     halfKelly: bankroll * cappedKelly / 2,
     quarterKelly: bankroll * cappedKelly / 4
   }
+}
+
+function getConvictionLabel(score: number): ConvictionLabel {
+  if (score >= 90) return 'no-brainer'
+  if (score >= 75) return 'high'
+  if (score >= 55) return 'consider'
+  return 'risky'
 }
 
 function scoreMarket(market: GammaMarket): TradeRecommendation | null {
@@ -324,6 +334,63 @@ function scoreMarket(market: GammaMarket): TradeRecommendation | null {
     const safetyScore = calculateSafetyScore(market, estimatedProb, marketProb)
     if (safetyScore < 20) continue
 
+    // ── Conviction fields (Task 3: basic wiring; Task 4 adds async deep research) ──
+    const convictionScore = safetyScore
+    const convictionLabel = getConvictionLabel(convictionScore)
+
+    // Build conviction breakdown with the four factors
+    const spread = market.spread ? parseFloat(market.spread) : 0.02
+    const effectiveSpread = marketProb > 0 ? spread / marketProb : 0.02
+    const liqScore = market.liquidityNum >= 100000 ? 100 : market.liquidityNum >= 50000 ? 85 : market.liquidityNum >= 25000 ? 70 : market.liquidityNum >= 10000 ? 55 : market.liquidityNum >= 5000 ? 40 : 25
+    const volScore = market.volumeNum >= 1000000 ? 100 : market.volumeNum >= 500000 ? 85 : market.volumeNum >= 100000 ? 70 : market.volumeNum >= 50000 ? 55 : 40
+    const sprScore = effectiveSpread <= 0.03 ? 100 : effectiveSpread <= 0.05 ? 85 : effectiveSpread <= 0.10 ? 70 : 40
+    const marketQuality = liqScore * 0.4 + volScore * 0.3 + sprScore * 0.3
+
+    // Time analysis
+    const daysToClose = market.endDateIso
+      ? Math.max(0, Math.ceil((new Date(market.endDateIso).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
+      : 999
+    let tier: TimeTier
+    if (daysToClose <= 1) tier = 'imminent'
+    else if (daysToClose <= 7) tier = 'closing-soon'
+    else if (daysToClose <= 30) tier = 'medium'
+    else tier = 'long'
+    const closingSoonFactors: string[] = []
+    if (tier === 'imminent') {
+      closingSoonFactors.push('Resolution within 24 hours — maximum time pressure')
+      closingSoonFactors.push('Minimal room for new information to shift probability')
+    } else if (tier === 'closing-soon') {
+      closingSoonFactors.push('Resolution within 7 days — high time urgency')
+    } else if (tier === 'medium') {
+      closingSoonFactors.push('Resolution within 30 days — moderate uncertainty window')
+    } else {
+      closingSoonFactors.push('Long-duration market — significant uncertainty remains')
+    }
+    const resolutionUncertainty: 'low' | 'medium' | 'high' =
+      tier === 'imminent' ? 'low' : tier === 'closing-soon' || tier === 'medium' ? 'medium' : 'high'
+    const timeEdge = tier === 'imminent' ? 95 : tier === 'closing-soon' ? 75 : tier === 'medium' ? 55 : 35
+
+    const researchAlignment = 50 // neutral baseline — research is null for now (Task 4 adds async research)
+    const evRationalityScore = evPct >= 3 && evPct <= 25 ? 100 : evPct > 25 && evPct <= 40 ? 70 : evPct > 40 && evPct <= 50 ? 40 : evPct >= 1 && evPct < 3 ? 50 : 20
+
+    const convictionBreakdown: ConvictionBreakdown = {
+      score: convictionScore,
+      label: convictionLabel,
+      factors: {
+        marketQuality: Math.round(marketQuality),
+        timeEdge: Math.round(timeEdge),
+        researchAlignment: Math.round(researchAlignment),
+        evRationality: Math.round(evRationalityScore),
+      },
+    }
+
+    const timeAnalysis: TimeAnalysis = {
+      tier,
+      daysToClose,
+      closingSoonFactors,
+      resolutionUncertainty,
+    }
+
     const { kellyFraction } = calculateKellyBet(1000, estimatedProb, marketProb)
 
     const confidence: 'high' | 'medium' | 'low' =
@@ -370,17 +437,21 @@ function scoreMarket(market: GammaMarket): TradeRecommendation | null {
       kellyFraction,
       halfKellyBet: 0,
       closingDate: market.endDateIso ? new Date(market.endDateIso).getTime() : Date.now() + 365 * 24 * 60 * 60 * 1000,
-      daysToClose: market.endDateIso
-        ? Math.ceil((new Date(market.endDateIso).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
-        : 999
+      daysToClose,
+      convictionScore,
+      convictionLabel,
+      convictionBreakdown,
+      research: null,    // Task 4 adds async deep research
+      longTail: null,     // Task 4 adds async long-tail detection
+      timeAnalysis,
     })
   }
 
   if (recommendations.length === 0) return null
-  // Sort by EV first (primary), then safety score as tiebreaker
+  // Sort by conviction score first, then EV
   recommendations.sort((a, b) => {
-    if (Math.abs(b.expectedValue - a.expectedValue) > 0.01) return b.expectedValue - a.expectedValue
-    return b.safetyScore - a.safetyScore
+    if (Math.abs(b.convictionScore - a.convictionScore) > 3) return b.convictionScore - a.convictionScore
+    return b.expectedValue - a.expectedValue
   })
   return recommendations[0]
 }
