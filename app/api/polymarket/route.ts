@@ -513,10 +513,9 @@ export async function GET() {
     // This improves conviction scores and adds research summaries
     const topCandidates = recommendations.slice(0, 20)
     ;(async () => {
+      const { runDeepResearch, estimateTrueProbability, detectLongTailEdges, assessConvictionScore, analyzeTimeEdge } = await import('@/lib/services/polymarket-research.service')
       for (const rec of topCandidates) {
         try {
-          const { runDeepResearch, estimateTrueProbability, detectLongTailEdges, assessConvictionScore, analyzeTimeEdge } = await import('@/lib/services/polymarket-research.service')
-
           const q = rec.market.question.toLowerCase()
           let category: 'policy' | 'crypto' | 'sports' | 'general' = 'general'
           if (/\b(fed|rate|tariff|election|presid(ent|ential)|congress|law|pass|convicted|inflation|jobs|nomination)\b/.test(q)) category = 'policy'
