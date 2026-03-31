@@ -288,7 +288,7 @@ export function PolymarketSection() {
   const [lastUpdated, setLastUpdated] = useState<number | null>(null)
   const [sortKey, setSortKey] = useState<SortKey>('fastestProfit')
   const [secondarySort, setSecondarySort] = useState<SortKey | null>(null)
-  const [filterKey, setFilterKey] = useState<FilterKey>('all')
+  const [filterKey, setFilterKey] = useState<FilterKey>('7days')
   const [kellyMode, setKellyMode] = useState<KellyMode>('quarter')
   const [bankroll, setBankroll] = useState<number>(500)
   const [bankrollInput, setBankrollInput] = useState<string>('500')
@@ -799,20 +799,20 @@ export function PolymarketSection() {
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexWrap: 'wrap' }}>
               <span style={{ fontSize: '0.6rem', color: '#6e7681', marginRight: '0.25rem' }}>Filter:</span>
               {([
-                { key: 'all' as FilterKey, label: `All (${filtered.length})` },
+                { key: '7days' as FilterKey, label: `≤7d` },
+                { key: 'today' as FilterKey, label: `≤24h` },
                 { key: 'high' as FilterKey, label: `HIGH` },
                 { key: 'medium' as FilterKey, label: `MED` },
-                { key: 'today' as FilterKey, label: `≤24h` },
-                { key: '7days' as FilterKey, label: `≤7d` },
+                { key: 'all' as FilterKey, label: `All (${filtered.length})` },
               ]).map(tab => (
                 <button
                   key={tab.key}
                   onClick={() => setFilterKey(tab.key)}
                   style={{
                     padding: '3px 8px', fontSize: '0.58rem', fontWeight: 600,
-                    background: filterKey === tab.key ? 'rgba(63, 185, 80, 0.15)' : 'transparent',
-                    color: filterKey === tab.key ? '#3fb950' : '#6e7681',
-                    border: `1px solid ${filterKey === tab.key ? 'rgba(63, 185, 80, 0.3)' : '#30363d'}`,
+                    background: filterKey === tab.key ? (tab.key === '7days' ? 'rgba(240,136,62,0.2)' : filterKey === 'today' ? 'rgba(240,136,62,0.15)' : 'rgba(63, 185, 80, 0.15)') : 'transparent',
+                    color: filterKey === tab.key ? (tab.key === '7days' || tab.key === 'today' ? '#f0883e' : '#3fb950') : '#6e7681',
+                    border: `1px solid ${filterKey === tab.key ? (tab.key === '7days' || tab.key === 'today' ? 'rgba(240,136,62,0.3)' : 'rgba(63, 185, 80, 0.3)') : '#30363d'}`,
                     borderRadius: '16px', cursor: 'pointer',
                   }}
                 >
