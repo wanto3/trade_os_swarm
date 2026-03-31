@@ -45,38 +45,22 @@ interface TradeRecommendation {
   halfKellyBet: number
   closingDate: number
   daysToClose: number
-  convictionScore: number
-  convictionLabel: 'no-brainer' | 'high' | 'consider' | 'risky'
-  convictionBreakdown?: {
-    score: number
-    label: string
-    factors: {
-      marketQuality: number
-      timeEdge: number
-      researchAlignment: number
-      evRationality: number
-    }
-  }
+  // Conviction scoring (Phase 2)
+  convictionScore?: number
+  convictionLabel?: 'no-brainer' | 'high' | 'consider' | 'risky'
   research?: {
-    queryUsed: string
-    topFindings: string[]
     sentiment: 'bullish' | 'bearish' | 'neutral' | 'mixed'
     keyInsight: string
+    topFindings: string[]
     confidenceLevel: 'high' | 'medium' | 'low'
   } | null
   longTail?: {
-    flag: 'near-certain' | 'near-impossible' | 'contrarian' | 'opportunity-alert' | null
+    flag: 'near-certain' | 'near-impossible' | 'contrarian' | null
     reasoning: string
-    researchEvidence: string
-    alternativeOutcome?: string
-    estimatedAlternativeProb?: number
-    alternativeEV?: number
   } | null
   timeAnalysis?: {
     tier: 'imminent' | 'closing-soon' | 'medium' | 'long'
     daysToClose: number
-    closingSoonFactors: string[]
-    resolutionUncertainty: 'low' | 'medium' | 'high'
   }
 }
 
@@ -90,10 +74,12 @@ interface ApiResponse {
   stats: {
     marketsAnalyzed: number
     opportunitiesFound: number
-    closingSoonCount: number
-    longTailCount: number
-    highestConviction: number | null
-    avgConviction: number | null
+    closingSoonCount?: number
+    longTailCount?: number
+    highestConviction?: number | null
+    avgConviction?: number | null
+    highestSafety: number | null
+    avgSafety: number | null
   }
 }
 
@@ -156,61 +142,6 @@ interface Portfolio {
   wonTrades: number
   lostTrades: number
   positions: PolymarketPosition[]
-}
-
-// ── Conviction Badge Components ────────────────────────────────────────────────
-
-function ConvictionBadge({ score, label, daysToClose }: { score: number; label: string; daysToClose: number }) {
-  const colors: Record<string, string> = {
-    'no-brainer': 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/40',
-    'high': 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40',
-    'consider': 'bg-blue-500/20 text-blue-400 border border-blue-500/40',
-    'risky': 'bg-gray-500/20 text-gray-400 border border-gray-500/40',
-  }
-  const color = colors[label] || colors['risky']
-  const closingSoon = daysToClose <= 7
-
-  return (
-    <div className={`flex items-center gap-2 px-2 py-1 rounded text-xs ${color}`}>
-      <span className="font-bold">{score}</span>
-      <span>{label.toUpperCase()}</span>
-      {closingSoon && (
-        <span className="text-orange-300 font-medium ml-1">
-          ⚡ {daysToClose}d
-        </span>
-      )}
-    </div>
-  )
-}
-
-function LongTailBadge({ flag }: { flag: string | null }) {
-  if (!flag) return null
-  const styles: Record<string, string> = {
-    'near-certain': 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/40',
-    'near-impossible': 'bg-red-500/20 text-red-300 border border-red-500/40',
-    'contrarian': 'bg-purple-500/20 text-purple-300 border border-purple-500/40',
-    'opportunity-alert': 'bg-orange-500/20 text-orange-300 border border-orange-500/40',
-  }
-  const style = styles[flag as string] || ''
-  return (
-    <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase ${style}`}>
-      {flag.replace('-', ' ')}
-    </span>
-  )
-}
-
-function SentimentPill({ sentiment }: { sentiment: string }) {
-  const colors: Record<string, string> = {
-    bullish: 'bg-green-500/20 text-green-400',
-    bearish: 'bg-red-500/20 text-red-400',
-    neutral: 'bg-gray-500/20 text-gray-400',
-    mixed: 'bg-yellow-500/20 text-yellow-400',
-  }
-  return (
-    <span className={`px-2 py-0.5 rounded text-xs font-medium ${colors[sentiment] || colors.neutral}`}>
-      {sentiment}
-    </span>
-  )
 }
 
 // ── Sort Types ────────────────────────────────────────────────────────────────
@@ -364,8 +295,6 @@ export function PolymarketSection() {
 
   // Paper trades / analytics
   const [activeTab, setActiveTab] = useState<TabKey>('opportunities')
-  // Polymarket conviction filter tabs
-  const [polyTab, setPolyTab] = useState<'all' | 'closing' | 'longtail'>('all')
   const [paperPositions, setPaperPositions] = useState<PolymarketPosition[]>([])
   const [paperPortfolio, setPaperPortfolio] = useState<Portfolio | null>(null)
   const [analytics, setAnalytics] = useState<Analytics | null>(null)
@@ -388,10 +317,10 @@ export function PolymarketSection() {
         setData(json)
         setLastUpdated(json.timestamp > 0 ? json.timestamp : null)
       } else {
-        setData({ success: true, timestamp: 0, opportunities: [], closingSoonOpportunities: [], longTailOpportunities: [], hotMarkets: [], stats: { marketsAnalyzed: 0, opportunitiesFound: 0, closingSoonCount: 0, longTailCount: 0, highestConviction: null, avgConviction: null } })
+        setData({ success: true, timestamp: 0, opportunities: [], closingSoonOpportunities: [], longTailOpportunities: [], hotMarkets: [], stats: { marketsAnalyzed: 0, opportunitiesFound: 0, highestSafety: null, avgSafety: null } })
       }
     } catch {
-      setData({ success: true, timestamp: 0, opportunities: [], closingSoonOpportunities: [], longTailOpportunities: [], hotMarkets: [], stats: { marketsAnalyzed: 0, opportunitiesFound: 0, closingSoonCount: 0, longTailCount: 0, highestConviction: null, avgConviction: null } })
+      setData({ success: true, timestamp: 0, opportunities: [], closingSoonOpportunities: [], longTailOpportunities: [], hotMarkets: [], stats: { marketsAnalyzed: 0, opportunitiesFound: 0, highestSafety: null, avgSafety: null } })
     }
     setLoading(false)
   }, [])
@@ -575,11 +504,6 @@ export function PolymarketSection() {
   const totalKellyBet = filtered.reduce((sum, r) => sum + getKellyBet(r), 0)
   const avgSafety = filtered.length > 0 ? Math.round(filtered.reduce((s, r) => s + r.safetyScore, 0) / filtered.length) : 0
   const avgEV = filtered.length > 0 ? filtered.reduce((s, r) => s + r.expectedValue, 0) / filtered.length : 0
-  const displayOpportunities = polyTab === 'closing'
-    ? (data?.closingSoonOpportunities ?? [])
-    : polyTab === 'longtail'
-      ? (data?.longTailOpportunities ?? [])
-      : filtered
   const potentialProfit = filtered.reduce((sum, r) => {
     const bet = getKellyBet(r)
     const expected = bet * r.estimatedProbability * ((1 / r.odds) - 1) - bet * (1 - r.estimatedProbability)
@@ -828,58 +752,23 @@ export function PolymarketSection() {
       {/* ── Opportunities Tab ── */}
       {activeTab === 'opportunities' && (
         <>
-          {/* Stats grid */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-            <div className="bg-slate-800/50 rounded-lg p-3 border border-slate-700/50">
-              <div className="text-xs text-slate-400">Markets Analyzed</div>
-              <div className="text-xl font-bold text-white">{data?.stats?.marketsAnalyzed ?? 0}</div>
-            </div>
-            <div className="bg-slate-800/50 rounded-lg p-3 border border-slate-700/50">
-              <div className="text-xs text-slate-400">Opportunities</div>
-              <div className="text-xl font-bold text-blue-400">{data?.stats?.opportunitiesFound ?? 0}</div>
-            </div>
-            <div className="bg-slate-800/50 rounded-lg p-3 border border-slate-700/50">
-              <div className="text-xs text-slate-400">Closing Soon</div>
-              <div className="text-xl font-bold text-orange-400">{data?.stats?.closingSoonCount ?? 0}</div>
-            </div>
-            <div className="bg-slate-800/50 rounded-lg p-3 border border-slate-700/50">
-              <div className="text-xs text-slate-400">Long-Tail</div>
-              <div className="text-xl font-bold text-purple-400">{data?.stats?.longTailCount ?? 0}</div>
-            </div>
-          </div>
-
-          {/* Tab selector */}
-          <div className="flex gap-2 mb-4">
-            <button
-              onClick={() => setPolyTab('all')}
-              className={`px-4 py-2 rounded text-sm font-medium transition ${
-                polyTab === 'all'
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-              }`}
-            >
-              All ({data?.opportunities?.length || 0})
-            </button>
-            <button
-              onClick={() => setPolyTab('closing')}
-              className={`px-4 py-2 rounded text-sm font-medium transition flex items-center gap-2 ${
-                polyTab === 'closing'
-                  ? 'bg-orange-600 text-white'
-                  : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-              }`}
-            >
-              ⚡ Closing Soon ({data?.closingSoonOpportunities?.length || 0})
-            </button>
-            <button
-              onClick={() => setPolyTab('longtail')}
-              className={`px-4 py-2 rounded text-sm font-medium transition flex items-center gap-2 ${
-                polyTab === 'longtail'
-                  ? 'bg-purple-600 text-white'
-                  : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-              }`}
-            >
-              🎯 Long-Tail ({data?.longTailOpportunities?.length || 0})
-            </button>
+          {/* Summary Row */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.75rem', marginBottom: '1rem' }}>
+            {[
+              { label: 'Total Kelly Bet', value: `$${totalKellyBet.toFixed(2)}`, sub: `across ${filtered.length} trades`, color: '#58a6ff', icon: <Target style={{ width: 14, height: 14 }} /> },
+              { label: 'Expected Profit', value: potentialProfit > 0 ? `+$${potentialProfit.toFixed(2)}` : '$0.00', sub: 'if all resolve correctly', color: '#3fb950', icon: <TrendingUp style={{ width: 14, height: 14 }} /> },
+              { label: 'Avg Conviction', value: `${avgSafety}/100`, sub: 'across all trades', color: avgSafety >= 70 ? '#3fb950' : avgSafety >= 55 ? '#f0883e' : '#8b949e', icon: <BarChart3 style={{ width: 14, height: 14 }} /> },
+              { label: 'Avg EV per Trade', value: `${(avgEV * 100).toFixed(1)}%`, sub: kellyLabel, color: '#8b5cf6', icon: <Zap style={{ width: 14, height: 14 }} /> },
+            ].map((stat, i) => (
+              <div key={i} style={{ backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '12px', padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <div style={{ color: stat.color }}>{stat.icon}</div>
+                <div>
+                  <div style={{ fontSize: '0.9rem', fontWeight: 700, color: stat.color }}>{stat.value}</div>
+                  <div style={{ fontSize: '0.6rem', color: '#6e7681' }}>{stat.label}</div>
+                  <div style={{ fontSize: '0.55rem', color: '#484f58' }}>{stat.sub}</div>
+                </div>
+              </div>
+            ))}
           </div>
 
           {/* Sort + Filter Bar */}
@@ -933,7 +822,9 @@ export function PolymarketSection() {
             </div>
 
             <span style={{ fontSize: '0.6rem', color: '#6e7681' }}>
-              {loading && !data ? '↻' : `${displayOpportunities.length} of ${opportunities.length}`}
+              {loading && !data ? '↻' : `${filtered.length} of ${opportunities.length}`}
+              {data?.closingSoonOpportunities?.length ? ` · ⚡${data.closingSoonOpportunities.length}` : ''}
+              {data?.longTailOpportunities?.length ? ` · ★${data.longTailOpportunities.length}` : ''}
             </span>
           </div>
 
@@ -944,8 +835,8 @@ export function PolymarketSection() {
                 <RefreshCw style={{ width: 16, height: 16, marginRight: '0.5rem', animation: 'spin 1s linear infinite' }} />
                 Fetching live Polymarket opportunities...
               </div>
-            ) : displayOpportunities.length > 0 ? (
-              displayOpportunities.map((rec) => {
+            ) : filtered.length > 0 ? (
+              filtered.map((rec) => {
                 const kellyBet = getKellyBet(rec)
                 const potentialWin = kellyBet * ((1 / rec.odds) - 1)
                 const ev = kellyBet * rec.expectedValue
@@ -974,22 +865,6 @@ export function PolymarketSection() {
                       <ExternalLink style={{ width: 14, height: 14, color: '#6e7681', flexShrink: 0, marginTop: '2px' }} />
                     </div>
 
-                    {/* Conviction + Long-tail header */}
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
-                        <ConvictionBadge
-                          score={rec.convictionScore || rec.safetyScore}
-                          label={rec.convictionLabel || (rec.safetyScore >= 70 ? 'high' : rec.safetyScore >= 55 ? 'consider' : 'risky')}
-                          daysToClose={rec.daysToClose}
-                        />
-                        {rec.longTail?.flag && <LongTailBadge flag={rec.longTail.flag} />}
-                        {rec.research?.sentiment && <SentimentPill sentiment={rec.research.sentiment} />}
-                      </div>
-                      {rec.timeAnalysis?.tier === 'imminent' && (
-                        <span style={{ fontSize: '0.65rem', color: '#f97316', fontWeight: 700 }}>⚡ RESOLVING SOON</span>
-                      )}
-                    </div>
-
                     {/* Outcome + badges */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                       <span style={{ fontSize: '0.6rem', fontWeight: 700, color: '#8b949e', backgroundColor: 'rgba(139, 92, 246, 0.1)', padding: '2px 8px', borderRadius: '4px' }}>
@@ -1014,6 +889,42 @@ export function PolymarketSection() {
                         {rec.daysToClose <= 1 ? 'TODAY' : rec.daysToClose === 999 ? 'TBD' : `${rec.daysToClose}d`}
                       </span>
                       {rec.riskLevel === 'low' ? <Shield style={{ width: 12, height: 12, color: '#3fb950' }} /> : <AlertTriangle style={{ width: 12, height: 12, color: rec.riskLevel === 'medium' ? '#f0883e' : '#f85149' }} />}
+                      {rec.convictionScore !== undefined && (
+                        <span style={{
+                          fontSize: '0.58rem',
+                          fontWeight: 700,
+                          color: rec.convictionScore >= 90 ? '#f0c000' : rec.convictionScore >= 75 ? '#3fb950' : rec.convictionScore >= 55 ? '#58a6ff' : '#8b949e',
+                          backgroundColor: rec.convictionScore >= 90 ? 'rgba(240,192,0,0.1)' : rec.convictionScore >= 75 ? 'rgba(63,185,80,0.1)' : rec.convictionScore >= 55 ? 'rgba(88,166,255,0.1)' : 'rgba(139,148,158,0.1)',
+                          padding: '2px 8px',
+                          borderRadius: '4px',
+                        }}>
+                          CV {rec.convictionScore}
+                        </span>
+                      )}
+                      {rec.longTail?.flag && (
+                        <span style={{
+                          fontSize: '0.58rem',
+                          fontWeight: 700,
+                          color: rec.longTail.flag === 'near-certain' ? '#f0c000' : rec.longTail.flag === 'near-impossible' ? '#f85149' : '#a371f7',
+                          backgroundColor: 'rgba(163,113,247,0.1)',
+                          padding: '2px 8px',
+                          borderRadius: '4px',
+                        }}>
+                          {rec.longTail.flag === 'near-certain' ? '★ NEAR-CERTAIN' : rec.longTail.flag === 'near-impossible' ? '✗ NEAR-IMP' : '⚡ CONTRARIAN'}
+                        </span>
+                      )}
+                      {rec.research?.sentiment && rec.research.sentiment !== 'neutral' && (
+                        <span style={{
+                          fontSize: '0.58rem',
+                          fontWeight: 600,
+                          color: rec.research.sentiment === 'bullish' ? '#3fb950' : rec.research.sentiment === 'bearish' ? '#f85149' : '#8b949e',
+                          backgroundColor: 'rgba(139,148,158,0.1)',
+                          padding: '2px 8px',
+                          borderRadius: '4px',
+                        }}>
+                          {rec.research.sentiment === 'bullish' ? '📈' : '📉'} {rec.research.sentiment}
+                        </span>
+                      )}
                     </div>
 
                     {/* Metrics */}
@@ -1046,37 +957,6 @@ export function PolymarketSection() {
                     <p style={{ fontSize: '0.65rem', color: '#8b949e', margin: 0, lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                       {rec.reasoning}
                     </p>
-
-                    {/* Research Details */}
-                    {rec.research && rec.research.topFindings.length > 0 && (
-                      <details className="mt-2 p-2 bg-slate-800/50 rounded border border-slate-700/50">
-                        <summary className="text-xs text-slate-400 cursor-pointer hover:text-slate-300">Research Details</summary>
-                        <div className="mt-2 space-y-1">
-                          {rec.research.keyInsight && (
-                            <p className="text-xs text-slate-300">{rec.research.keyInsight}</p>
-                          )}
-                          {rec.research.topFindings.slice(0, 3).map((finding, fi) => (
-                            <p key={fi} className="text-xs text-slate-400">• {finding.substring(0, 120)}{finding.length > 120 ? '...' : ''}</p>
-                          ))}
-                          {rec.research.confidenceLevel && (
-                            <p className="text-xs text-slate-500">Research confidence: {rec.research.confidenceLevel}</p>
-                          )}
-                        </div>
-                      </details>
-                    )}
-
-                    {/* Long-Tail Analysis */}
-                    {rec.longTail && (
-                      <details className="mt-2 p-2 bg-purple-900/20 rounded border border-purple-700/30">
-                        <summary className="text-xs text-purple-400 cursor-pointer hover:text-purple-300">Long-Tail Analysis</summary>
-                        <p className="mt-1 text-xs text-purple-200">{rec.longTail.reasoning}</p>
-                        {rec.longTail.alternativeOutcome && rec.longTail.alternativeEV !== undefined && (
-                          <p className="mt-1 text-xs text-purple-300">
-                            💡 Consider: &quot;{rec.longTail.alternativeOutcome}&quot; @ ~{((1 - (rec.longTail.estimatedAlternativeProb || 0)) * 100).toFixed(1)}% | EV: {(rec.longTail.alternativeEV * 100).toFixed(1)}%
-                          </p>
-                        )}
-                      </details>
-                    )}
 
                     {/* Auto-place button */}
                     {rec.confidence === 'high' && !isAlreadyPlaced && (
@@ -1125,6 +1005,34 @@ export function PolymarketSection() {
                         Spread: {rec.market.spread > 0 ? `${(rec.market.spread * 100).toFixed(1)}%` : 'N/A'}
                       </span>
                     </div>
+
+                    {/* Research Details (collapsible) */}
+                    {rec.research && rec.research.keyInsight && (
+                      <details style={{ marginTop: '0.5rem', padding: '0.5rem', backgroundColor: '#0d1117', borderRadius: '6px', border: '1px solid #21262d' }}>
+                        <summary style={{ fontSize: '0.6rem', color: '#6e7681', cursor: 'pointer', userSelect: 'none' }}>
+                          🔍 Research Details
+                        </summary>
+                        <div style={{ marginTop: '0.5rem' }}>
+                          <p style={{ fontSize: '0.6rem', color: '#8b949e', margin: 0, lineHeight: 1.4 }}>
+                            {rec.research.keyInsight}
+                          </p>
+                          {rec.research.topFindings && rec.research.topFindings.length > 0 && (
+                            <div style={{ marginTop: '0.4rem' }}>
+                              {rec.research.topFindings.slice(0, 2).map((f, i) => (
+                                <p key={i} style={{ fontSize: '0.55rem', color: '#6e7681', margin: '2px 0', lineHeight: 1.3 }}>
+                                  • {f.substring(0, 120)}{f.length > 120 ? '...' : ''}
+                                </p>
+                              ))}
+                            </div>
+                          )}
+                          {rec.longTail && (
+                            <p style={{ fontSize: '0.6rem', color: '#a371f7', margin: '0.4rem 0 0', fontWeight: 600 }}>
+                              ★ Long-Tail: {rec.longTail.reasoning.substring(0, 150)}{rec.longTail.reasoning.length > 150 ? '...' : ''}
+                            </p>
+                          )}
+                        </div>
+                      </details>
+                    )}
                   </div>
                 )
               })
