@@ -3,8 +3,6 @@ import { NextResponse } from 'next/server'
 // Force dynamic rendering — never cache Polymarket data
 export const dynamic = 'force-dynamic'
 
-import { estimateTrueProbability as serviceEstimateTrueProbability } from '@/lib/services/polymarket-research.service'
-
 export interface PolymarketMarket {
   id: string
   question: string
@@ -507,7 +505,7 @@ export async function GET() {
     }
 
     recommendations.sort((a, b) => {
-      if (Math.abs(b.safetyScore - a.safetyScore) > 3) return b.safetyScore - a.safetyScore
+      if (Math.abs(b.convictionScore - a.convictionScore) > 3) return b.convictionScore - a.convictionScore
       return b.expectedValue - a.expectedValue
     })
 

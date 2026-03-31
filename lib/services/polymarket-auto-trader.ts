@@ -67,13 +67,12 @@ async function fetchOpportunities(): Promise<TradeRecommendation[]> {
 
       const categoryBias: Record<string, number> = { crypto: 0.02, sports: 0.01, policy: -0.03, general: 0.0 }
       const bias = categoryBias[category] || 0
-      const randomFuzz = (Math.random() - 0.5) * 0.06
 
       for (let i = 0; i < Math.min(outcomePrices.length, 2); i++) {
         const marketProb = outcomePrices[i]
         if (marketProb < 0.01 || marketProb > 0.99) continue
 
-        const estimatedProb = Math.min(0.94, Math.max(0.06, marketProb + bias + randomFuzz))
+        const estimatedProb = Math.min(0.97, Math.max(0.03, marketProb + bias))
         const ev = (estimatedProb - marketProb) / (1 - marketProb)
         const evPct = ev * 100
         if (evPct < 3 || evPct > 50) continue
