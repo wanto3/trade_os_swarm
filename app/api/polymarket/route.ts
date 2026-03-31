@@ -38,6 +38,53 @@ export interface TradeRecommendation {
   halfKellyBet: number
   closingDate: number
   daysToClose: number
+  convictionScore: number
+  convictionLabel: ConvictionLabel
+  convictionBreakdown: ConvictionBreakdown
+  research: ResearchSummary | null
+  longTail: LongTailAnalysis | null
+  timeAnalysis: TimeAnalysis
+}
+
+// ── New: Conviction & Research Types ────────────────────────────────────────
+
+export type ConvictionLabel = 'no-brainer' | 'high' | 'consider' | 'risky'
+export type LongTailFlag = 'near-certain' | 'near-impossible' | 'contrarian' | 'opportunity-alert' | null
+export type TimeTier = 'imminent' | 'closing-soon' | 'medium' | 'long'
+
+export interface ResearchSummary {
+  queryUsed: string
+  topFindings: string[]
+  sentiment: 'bullish' | 'bearish' | 'neutral' | 'mixed'
+  keyInsight: string
+  confidenceLevel: 'high' | 'medium' | 'low'
+}
+
+export interface LongTailAnalysis {
+  flag: LongTailFlag
+  reasoning: string
+  researchEvidence: string
+  alternativeOutcome?: string
+  estimatedAlternativeProb?: number
+  alternativeEV?: number
+}
+
+export interface TimeAnalysis {
+  tier: TimeTier
+  daysToClose: number
+  closingSoonFactors: string[]
+  resolutionUncertainty: 'low' | 'medium' | 'high'
+}
+
+export interface ConvictionBreakdown {
+  score: number
+  label: ConvictionLabel
+  factors: {
+    marketQuality: number
+    timeEdge: number
+    researchAlignment: number
+    evRationality: number
+  }
 }
 
 interface GammaMarket {
