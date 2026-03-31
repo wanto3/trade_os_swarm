@@ -154,7 +154,7 @@ async function fetchOpportunities(): Promise<TradeRecommendation[]> {
             liquidityNum: market.liquidityNum || 0,
             volume24hr: market.volume24hr || 0,
             bestBid: market.bestBid ? Number(market.bestBid) : null,
-            bestAsk: market.bestAsk ? Number(market.bestBid) : null,
+            bestAsk: market.bestAsk ? Number(market.bestAsk) : null,
             spread: market.spread ? Number(market.spread) : 0,
             endDateIso: market.endDateIso || null,
             slug: market.slug || '',
