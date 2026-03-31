@@ -53,6 +53,12 @@ async function fetchOpportunities(): Promise<TradeRecommendation[]> {
 
       if (market.endDateIso && new Date(market.endDateIso).getTime() < now) continue
 
+      const daysToClose = market.endDateIso
+        ? Math.max(0, Math.ceil((new Date(market.endDateIso).getTime() - now) / (1000 * 60 * 60 * 24)))
+        : 999
+      const isImminent = daysToClose <= 1
+      const isClosingSoon = daysToClose <= 7
+
       const url = market.events?.[0]?.slug
         ? `https://polymarket.com/event/${market.events[0].slug}`
         : market.slug
@@ -65,17 +71,23 @@ async function fetchOpportunities(): Promise<TradeRecommendation[]> {
       else if (/\b(btc|bitcoin|eth(ereum)?|sol(ana)?|crypto|dogecoin|xrp|ada|dot|trump|meme|coin)\b/.test(q)) category = 'crypto'
       else if (/\b(vs|beat|loss|score|game|team|league|championship|nba|nfl|mlb|premier|ufa|tennis|basketball|football|mvp|world cup|fifa|nhl|stanley cup|series|semifinal|quarterfinal|finals|playoffs)\b/.test(q)) category = 'sports'
 
-      const categoryBias: Record<string, number> = { crypto: 0.01, sports: 0.01, policy: -0.02, general: 0.0 }
-      const bias = categoryBias[category] || 0
-
       for (let i = 0; i < Math.min(outcomePrices.length, 2); i++) {
         const marketProb = outcomePrices[i]
-        if (marketProb < 0.01 || marketProb > 0.99) continue
+        if (marketProb < 0.001 || marketProb > 0.999) continue
 
-        const estimatedProb = Math.min(0.97, Math.max(0.03, marketProb + bias))
+        // More aggressive bias for imminent/closing-soon markets
+        const categoryBias: Record<string, number> = {
+          crypto: isImminent ? 0.03 : isClosingSoon ? 0.02 : 0.01,
+          sports: isImminent ? 0.03 : isClosingSoon ? 0.02 : 0.01,
+          policy: isImminent ? -0.05 : isClosingSoon ? -0.03 : -0.02,
+          general: isImminent ? 0.02 : isClosingSoon ? 0.01 : 0.0,
+        }
+        const marketBias = categoryBias[category] || 0
+        const estimatedProb = Math.min(0.999, Math.max(0.001, marketProb + marketBias))
         const ev = (estimatedProb - marketProb) / (1 - marketProb)
         const evPct = ev * 100
-        if (evPct < 3 || evPct > 50) continue
+        const evThreshold = isImminent ? 0.5 : isClosingSoon ? 1 : 3
+        if (evPct < evThreshold || evPct > 50) continue
 
         // Safety score (simplified)
         let safetyScore = 0
@@ -103,9 +115,6 @@ async function fetchOpportunities(): Promise<TradeRecommendation[]> {
         if (safetyScore < 70) continue // HIGH conviction only
 
         const confidence: 'high' | 'medium' | 'low' = safetyScore >= 70 ? 'high' : safetyScore >= 55 ? 'medium' : 'low'
-        const daysToClose = market.endDateIso
-          ? Math.ceil((new Date(market.endDateIso).getTime() - now) / (1000 * 60 * 60 * 24))
-          : 999
 
         const convictionScore = safetyScore
         const convictionLabel = getConvictionLabel(convictionScore)

@@ -140,8 +140,8 @@ function makeMarketUrl(market: GammaMarket): string {
 function calculateSafetyScore(market: GammaMarket, estimatedProb: number, marketProb: number): number {
   let score = 0
 
-  // Filter out extreme-priced markets — they're poor trading opportunities regardless of safety score
-  if (marketProb < 0.005 || marketProb > 0.995) return 0
+  // Allow near-certain/near-impossible markets for short-term — they have valid trading edges
+  if (marketProb < 0.0005 || marketProb > 0.9995) return 0
 
   const liq = market.liquidityNum
   if (liq >= 100000) score += 30
@@ -313,21 +313,42 @@ function scoreMarket(market: GammaMarket): TradeRecommendation | null {
 
   if (market.liquidityNum < 500) return null
 
-  // Reject extremely priced outcomes — they're poor trading opportunities
-  const minPrice = 0.01
-  const maxPrice = 0.99
+  // Widen price range to capture near-certain (0.999+) and near-impossible (0.001+) outcomes
+  // These are valid trading opportunities — especially for short-term markets
+  const minPrice = 0.001
+  const maxPrice = 0.999
 
   const category = classifyMarket(market.question)
   const recommendations: TradeRecommendation[] = []
 
+  // For imminent/closing-soon markets, use a more aggressive bias to surface short-term edges
+  const daysToClose = market.endDateIso
+    ? Math.max(0, Math.ceil((new Date(market.endDateIso).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
+    : 999
+  const isImminent = daysToClose <= 1
+  const isClosingSoon = daysToClose <= 7
+
   for (let i = 0; i < Math.min(outcomePrices.length, 2); i++) {
     const marketProb = outcomePrices[i]
-    const estimatedProb = estimateTrueProbability(marketProb, category)
+    if (marketProb < minPrice || marketProb > maxPrice) continue
+
+    // Aggressive bias for short-term markets — less time for price to correct means
+    // near-certain outcomes are MORE likely to hold, and near-impossible outcomes
+    // are MORE likely to remain impossible
+    const categoryBias: Record<string, number> = {
+      crypto: isImminent ? 0.03 : isClosingSoon ? 0.02 : 0.01,
+      sports: isImminent ? 0.03 : isClosingSoon ? 0.02 : 0.01,
+      policy: isImminent ? -0.05 : isClosingSoon ? -0.03 : -0.02,
+      general: isImminent ? 0.02 : isClosingSoon ? 0.01 : 0.0,
+    }
+    const bias = categoryBias[category] || 0
+    const estimatedProb = Math.min(0.999, Math.max(0.001, marketProb + bias))
     const ev = (estimatedProb - marketProb) / (1 - marketProb)
     const evPct = ev * 100
 
-    if (marketProb < minPrice || marketProb > maxPrice) continue
-    if (evPct < 3 || evPct > 50) continue
+    // Lower EV threshold for imminent/closing-soon — these have less uncertainty
+    const evThreshold = isImminent ? 0.5 : isClosingSoon ? 1 : 3
+    if (evPct < evThreshold || evPct > 50) continue
 
     const safetyScore = calculateSafetyScore(market, estimatedProb, marketProb)
     if (safetyScore < 20) continue
