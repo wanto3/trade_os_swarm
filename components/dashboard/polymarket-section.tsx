@@ -59,7 +59,7 @@ interface TradeRecommendation {
     reasoning: string
   } | null
   timeAnalysis?: {
-    tier: 'imminent' | 'closing-soon' | 'medium' | 'long'
+    tier: 'pending' | 'imminent' | 'closing-soon' | 'medium' | 'long'
     daysToClose: number
   }
 }
@@ -68,6 +68,7 @@ interface ApiResponse {
   success: boolean
   timestamp: number
   opportunities: TradeRecommendation[]
+  hotNowOpportunities: TradeRecommendation[]
   closingSoonOpportunities: TradeRecommendation[]
   longTailOpportunities: TradeRecommendation[]
   hotMarkets: Market[]
@@ -147,7 +148,7 @@ interface Portfolio {
 // ── Sort Types ────────────────────────────────────────────────────────────────
 
 type SortKey = 'fastestProfit' | 'safety' | 'ev' | 'closing' | 'confidence'
-type FilterKey = 'all' | 'high' | 'medium' | 'low' | 'today' | '3days' | '7days' | '30days' | 'anyEdge'
+type FilterKey = 'all' | 'high' | 'medium' | 'low' | '24h' | 'today' | '3days' | '7days' | '14days' | '30days' | 'anyEdge'
 type KellyMode = 'quarter' | 'half' | 'full'
 type TabKey = 'opportunities' | 'paper-trades' | 'performance' | 'settings'
 
@@ -288,7 +289,7 @@ export function PolymarketSection() {
   const [lastUpdated, setLastUpdated] = useState<number | null>(null)
   const [sortKey, setSortKey] = useState<SortKey>('fastestProfit')
   const [secondarySort, setSecondarySort] = useState<SortKey | null>(null)
-  const [filterKey, setFilterKey] = useState<FilterKey>('7days')
+  const [filterKey, setFilterKey] = useState<FilterKey>('14days')
   const [kellyMode, setKellyMode] = useState<KellyMode>('quarter')
   const [bankroll, setBankroll] = useState<number>(500)
   const [bankrollInput, setBankrollInput] = useState<string>('500')
@@ -304,6 +305,13 @@ export function PolymarketSection() {
   const [paperLoading, setPaperLoading] = useState(false)
   const [placingTrade, setPlacingTrade] = useState<string | null>(null)
   const [placingError, setPlacingError] = useState<string | null>(null)
+  const [liveTradingEnabled, setLiveTradingEnabled] = useState(false)
+  const [liveTradingStatus, setLiveTradingStatus] = useState<{
+    enabled: boolean
+    address: string | null
+    balance: { usdc: number; eth: number }
+    openOrdersCount: number
+  } | null>(null)
 
   // Local config form state
   const [localConfig, setLocalConfig] = useState<Partial<AutoTraderConfig>>({})
@@ -317,10 +325,10 @@ export function PolymarketSection() {
         setData(json)
         setLastUpdated(json.timestamp > 0 ? json.timestamp : null)
       } else {
-        setData({ success: true, timestamp: 0, opportunities: [], closingSoonOpportunities: [], longTailOpportunities: [], hotMarkets: [], stats: { marketsAnalyzed: 0, opportunitiesFound: 0, highestSafety: null, avgSafety: null } })
+        setData({ success: true, timestamp: 0, opportunities: [], hotNowOpportunities: [], closingSoonOpportunities: [], longTailOpportunities: [], hotMarkets: [], stats: { marketsAnalyzed: 0, opportunitiesFound: 0, highestSafety: null, avgSafety: null } })
       }
     } catch {
-      setData({ success: true, timestamp: 0, opportunities: [], closingSoonOpportunities: [], longTailOpportunities: [], hotMarkets: [], stats: { marketsAnalyzed: 0, opportunitiesFound: 0, highestSafety: null, avgSafety: null } })
+      setData({ success: true, timestamp: 0, opportunities: [], hotNowOpportunities: [], closingSoonOpportunities: [], longTailOpportunities: [], hotMarkets: [], stats: { marketsAnalyzed: 0, opportunitiesFound: 0, highestSafety: null, avgSafety: null } })
     }
     setLoading(false)
   }, [])
@@ -329,7 +337,17 @@ export function PolymarketSection() {
     fetchData()
     loadBalance()
     loadPaperData()
+    loadLiveTradingStatus()
   }, [fetchData])
+
+  const loadLiveTradingStatus = async () => {
+    try {
+      const res = await fetch('/api/polymarket/trade')
+      const json = await res.json()
+      setLiveTradingStatus(json)
+      setLiveTradingEnabled(json.enabled || false)
+    } catch { /* ignore */ }
+  }
 
   useEffect(() => {
     const id = setInterval(fetchData, 120000)
@@ -398,16 +416,41 @@ export function PolymarketSection() {
     setPlacingTrade(rec.market.id)
     setPlacingError(null)
     try {
-      const res = await fetch('/api/polymarket/place', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(rec),
-      })
-      const json = await res.json()
-      if (json.success) {
-        loadPaperData()
+      // Use real trading if live mode is enabled
+      if (liveTradingEnabled && (rec as any).tokenId) {
+        const tokenId = (rec as any).tokenId
+        const res = await fetch('/api/polymarket/trade', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tokenId,
+            side: rec.outcome.toLowerCase() === 'yes' ? 'BUY' : 'BUY',
+            price: rec.odds,
+            amount: rec.recommendedBet,
+            marketId: rec.market.id,
+            outcome: rec.outcome,
+          }),
+        })
+        const json = await res.json()
+        if (json.success) {
+          setPlacingError(null)
+          loadLiveTradingStatus()
+        } else {
+          setPlacingError(json.error || 'Failed to place live trade')
+        }
       } else {
-        setPlacingError(json.error || 'Failed to place trade')
+        // Paper trade (default)
+        const res = await fetch('/api/polymarket/place', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(rec),
+        })
+        const json = await res.json()
+        if (json.success) {
+          loadPaperData()
+        } else {
+          setPlacingError(json.error || 'Failed to place trade')
+        }
       }
     } catch {
       setPlacingError('Network error')
@@ -432,13 +475,17 @@ export function PolymarketSection() {
     { key: 'fastestProfit', label: '💰 Fastest Profit', color: '#e03e92' },
   ]
 
+  // Always compute daysToClose live from closingDate to avoid stale cached values
+  const liveDays = (rec: TradeRecommendation) =>
+    rec.closingDate ? Math.max(0, Math.ceil((rec.closingDate - Date.now()) / (1000 * 60 * 60 * 24))) : 999
+
   const applyMultiSort = (items: TradeRecommendation[]): TradeRecommendation[] => {
     const sorters: Array<{ fn: (a: TradeRecommendation, b: TradeRecommendation) => number }> = []
 
     const primarySorter = (a: TradeRecommendation, b: TradeRecommendation) => {
       if (sortKey === 'fastestProfit') {
-        const scoreA = a.safetyScore / Math.max(a.daysToClose, 1)
-        const scoreB = b.safetyScore / Math.max(b.daysToClose, 1)
+        const scoreA = a.safetyScore / Math.max(liveDays(a), 1)
+        const scoreB = b.safetyScore / Math.max(liveDays(b), 1)
         return scoreB - scoreA
       }
       if (sortKey === 'safety') return b.safetyScore - a.safetyScore
@@ -447,7 +494,7 @@ export function PolymarketSection() {
         return confOrder[a.confidence] - confOrder[b.confidence]
       }
       if (sortKey === 'ev') return b.expectedValue - a.expectedValue
-      if (sortKey === 'closing') return a.daysToClose - b.daysToClose
+      if (sortKey === 'closing') return liveDays(a) - liveDays(b)
       return 0
     }
     sorters.push({ fn: primarySorter })
@@ -461,10 +508,10 @@ export function PolymarketSection() {
             return confOrder[a.confidence] - confOrder[b.confidence]
           }
           if (secondarySort === 'ev') return b.expectedValue - a.expectedValue
-          if (secondarySort === 'closing') return a.daysToClose - b.daysToClose
+          if (secondarySort === 'closing') return liveDays(a) - liveDays(b)
           if (secondarySort === 'fastestProfit') {
-            const scoreA = a.safetyScore / Math.max(a.daysToClose, 1)
-            const scoreB = b.safetyScore / Math.max(b.daysToClose, 1)
+            const scoreA = a.safetyScore / Math.max(liveDays(a), 1)
+            const scoreB = b.safetyScore / Math.max(liveDays(b), 1)
             return scoreB - scoreA
           }
           return 0
@@ -488,11 +535,15 @@ export function PolymarketSection() {
     if (filterKey === 'high') return rec.confidence === 'high'
     if (filterKey === 'medium') return rec.confidence === 'medium'
     if (filterKey === 'low') return rec.confidence === 'low'
-    if (filterKey === 'today') return rec.daysToClose <= 1
-    if (filterKey === '3days') return rec.daysToClose <= 3
-    if (filterKey === '7days') return rec.daysToClose <= 7
-    if (filterKey === '30days') return rec.daysToClose <= 30
     if (filterKey === 'anyEdge') return rec.expectedValue > 0.03 && rec.safetyScore >= 40
+    // Only show markets with a real end date in time-based filters
+    if (!rec.market.endDateIso) return filterKey === 'all'
+    if (filterKey === '24h') return liveDays(rec) <= 1
+    if (filterKey === 'today') return liveDays(rec) <= 3
+    if (filterKey === '3days') return liveDays(rec) <= 3
+    if (filterKey === '7days') return liveDays(rec) <= 7
+    if (filterKey === '14days') return liveDays(rec) <= 14
+    if (filterKey === '30days') return liveDays(rec) <= 30
     return true
   })
 
@@ -550,14 +601,29 @@ export function PolymarketSection() {
           <div>
             <h2 style={{ fontSize: '0.8rem', fontWeight: 700, margin: 0, color: '#fff', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               Prediction Market Opportunities
-              {autoConfig?.enabled && (
+              {liveTradingEnabled && liveTradingStatus?.enabled && (
+                <span style={{ fontSize: '0.55rem', backgroundColor: 'rgba(248,81,73,0.15)', color: '#f85149', padding: '1px 6px', borderRadius: '8px', fontWeight: 700 }}>
+                  LIVE
+                </span>
+              )}
+              {autoConfig?.enabled && !liveTradingEnabled && (
                 <span style={{ fontSize: '0.55rem', backgroundColor: 'rgba(63, 185, 80, 0.15)', color: '#3fb950', padding: '1px 6px', borderRadius: '8px', fontWeight: 600 }}>
                   AUTO
                 </span>
               )}
             </h2>
             <p style={{ fontSize: '0.65rem', color: '#6e7681', margin: 0 }}>
-              {opportunities.length} opportunities • {openPositions.length} paper trades open
+              {opportunities.length} opportunities
+              {liveTradingEnabled && liveTradingStatus?.enabled ? (
+                <>
+                  <span style={{ color: '#f85149', fontWeight: 600 }}> • LIVE</span>
+                  {liveTradingStatus.balance.usdc > 0 && (
+                    <span> • ${liveTradingStatus.balance.usdc.toFixed(2)} USDC</span>
+                  )}
+                </>
+              ) : (
+                <> • {openPositions.length} paper trades</>
+              )}
             </p>
           </div>
         </div>
@@ -593,8 +659,22 @@ export function PolymarketSection() {
           </div>
 
           {/* Refresh */}
-          <button onClick={() => { fetchData(); loadPaperData() }}
-            style={{ background: 'none', border: '1px solid #30363d', borderRadius: '8px', cursor: 'pointer', color: '#8b949e', display: 'flex', alignItems: 'center', padding: '6px 10px', transition: 'all 0.2s' }}>
+          <button
+            onClick={() => { fetchData(); loadPaperData() }}
+            disabled={loading}
+            title="Refresh opportunities"
+            style={{
+              background: loading ? 'rgba(63,185,80,0.08)' : 'none',
+              border: `1px solid ${loading ? 'rgba(63,185,80,0.3)' : '#30363d'}`,
+              borderRadius: '8px',
+              cursor: loading ? 'not-allowed' : 'pointer',
+              color: loading ? '#3fb950' : '#8b949e',
+              display: 'flex',
+              alignItems: 'center',
+              padding: '6px 10px',
+              transition: 'all 0.2s',
+            }}
+          >
             <RefreshCw style={{ width: 14, height: 14, animation: loading ? 'spin 1s linear infinite' : 'none' }} />
           </button>
         </div>
@@ -696,6 +776,72 @@ export function PolymarketSection() {
             </div>
           </div>
 
+          {/* Live Trading Section */}
+          <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #21262d' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: liveTradingEnabled && liveTradingStatus?.enabled ? '#f85149' : '#484f58' }} />
+                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#e6edf3' }}>Live Trading</span>
+              </div>
+              <button
+                onClick={loadLiveTradingStatus}
+                title="Refresh status"
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6e7681', display: 'flex', alignItems: 'center' }}
+              >
+                <RefreshCw size={11} />
+              </button>
+            </div>
+
+            {liveTradingStatus?.enabled ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                {/* Wallet info */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'rgba(248,81,73,0.08)', border: '1px solid rgba(248,81,73,0.2)', borderRadius: '8px', padding: '0.6rem 0.75rem' }}>
+                  <div>
+                    <div style={{ fontSize: '0.65rem', color: '#f85149', fontWeight: 700 }}>LIVE TRADING ACTIVE</div>
+                    <div style={{ fontSize: '0.55rem', color: '#6e7681', marginTop: '2px', fontFamily: 'monospace' }}>
+                      {liveTradingStatus.address ? `${liveTradingStatus.address.slice(0, 6)}...${liveTradingStatus.address.slice(-4)}` : 'No wallet'}
+                    </div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#3fb950' }}>
+                      ${liveTradingStatus.balance.usdc.toFixed(2)} USDC
+                    </div>
+                    <div style={{ fontSize: '0.55rem', color: '#484f58' }}>
+                      {liveTradingStatus.balance.eth.toFixed(4)} ETH
+                    </div>
+                  </div>
+                </div>
+                {/* Open orders */}
+                {liveTradingStatus.openOrdersCount > 0 && (
+                  <div style={{ fontSize: '0.6rem', color: '#f0883e', padding: '0.3rem 0.75rem' }}>
+                    {liveTradingStatus.openOrdersCount} open order{liveTradingStatus.openOrdersCount !== 1 ? 's' : ''} on Polymarket
+                  </div>
+                )}
+                {/* Warning */}
+                <div style={{ fontSize: '0.58rem', color: '#6e7681', padding: '0.3rem 0.75rem', lineHeight: 1.4 }}>
+                  Real orders are placed on Polymarket CLOB. Make sure your wallet has sufficient USDC on Polygon.
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <div style={{ fontSize: '0.65rem', color: '#6e7681', lineHeight: 1.5 }}>
+                  Live trading is not configured. Add to <code style={{ backgroundColor: '#21262d', padding: '1px 4px', borderRadius: '3px', color: '#8b949e' }}>.env.local</code>:
+                </div>
+                <pre style={{ fontSize: '0.55rem', color: '#8b949e', backgroundColor: '#0d1117', borderRadius: '6px', padding: '0.6rem', margin: 0, overflow: 'auto', lineHeight: 1.6 }}>
+{`POLYMARKET_TRADING_KEY=0x...
+POLYMARKET_CLOB_API_KEY=...
+POLYMARKET_CLOB_API_SECRET=...`}
+                </pre>
+                <button
+                  onClick={loadLiveTradingStatus}
+                  style={{ fontSize: '0.6rem', color: '#58a6ff', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', padding: '2px 0' }}
+                >
+                  After adding env vars → click to refresh
+                </button>
+              </div>
+            )}
+          </div>
+
           {/* Status row */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem', marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid #21262d' }}>
             <span style={{ fontSize: '0.65rem', color: autoConfig?.enabled ? '#3fb950' : '#6e7681' }}>
@@ -772,7 +918,16 @@ export function PolymarketSection() {
           </div>
 
           {/* Sort + Filter Bar */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.75rem',
+            marginBottom: '0.75rem',
+            flexWrap: 'wrap',
+            opacity: loading ? 0.5 : 1,
+            pointerEvents: loading ? 'none' : 'auto',
+            transition: 'opacity 0.2s',
+          }}>
             <MultiKeySortBar
               sortKeys={[ALL_SORT_KEYS.find(k => k.key === sortKey)!].filter(Boolean)}
               onAdd={(key) => setSecondarySort(key)}
@@ -799,8 +954,10 @@ export function PolymarketSection() {
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexWrap: 'wrap' }}>
               <span style={{ fontSize: '0.6rem', color: '#6e7681', marginRight: '0.25rem' }}>Filter:</span>
               {([
+                { key: '24h' as FilterKey, label: `24h` },
+                { key: 'today' as FilterKey, label: `≤3d` },
                 { key: '7days' as FilterKey, label: `≤7d` },
-                { key: 'today' as FilterKey, label: `≤24h` },
+                { key: '14days' as FilterKey, label: `≤14d` },
                 { key: 'high' as FilterKey, label: `HIGH` },
                 { key: 'medium' as FilterKey, label: `MED` },
                 { key: 'all' as FilterKey, label: `All (${filtered.length})` },
@@ -810,9 +967,9 @@ export function PolymarketSection() {
                   onClick={() => setFilterKey(tab.key)}
                   style={{
                     padding: '3px 8px', fontSize: '0.58rem', fontWeight: 600,
-                    background: filterKey === tab.key ? (tab.key === '7days' ? 'rgba(240,136,62,0.2)' : filterKey === 'today' ? 'rgba(240,136,62,0.15)' : 'rgba(63, 185, 80, 0.15)') : 'transparent',
-                    color: filterKey === tab.key ? (tab.key === '7days' || tab.key === 'today' ? '#f0883e' : '#3fb950') : '#6e7681',
-                    border: `1px solid ${filterKey === tab.key ? (tab.key === '7days' || tab.key === 'today' ? 'rgba(240,136,62,0.3)' : 'rgba(63, 185, 80, 0.3)') : '#30363d'}`,
+                    background: filterKey === tab.key ? (tab.key === '24h' ? 'rgba(248,81,73,0.2)' : tab.key === '14days' || tab.key === '7days' ? 'rgba(240,136,62,0.2)' : tab.key === 'today' ? 'rgba(240,136,62,0.15)' : 'rgba(63, 185, 80, 0.15)') : 'transparent',
+                    color: filterKey === tab.key ? (tab.key === '24h' ? '#f85149' : tab.key === '14days' || tab.key === '7days' || tab.key === 'today' ? '#f0883e' : '#3fb950') : '#6e7681',
+                    border: `1px solid ${filterKey === tab.key ? (tab.key === '24h' ? 'rgba(248,81,73,0.35)' : tab.key === '14days' || tab.key === '7days' || tab.key === 'today' ? 'rgba(240,136,62,0.3)' : 'rgba(63, 185, 80, 0.3)') : '#30363d'}`,
                     borderRadius: '16px', cursor: 'pointer',
                   }}
                 >
@@ -821,15 +978,18 @@ export function PolymarketSection() {
               ))}
             </div>
 
-            <span style={{ fontSize: '0.6rem', color: '#6e7681' }}>
-              {loading && !data ? '↻' : `${filtered.length} of ${opportunities.length}`}
-              {data?.closingSoonOpportunities?.length ? ` · ⚡${data.closingSoonOpportunities.length}` : ''}
-              {data?.longTailOpportunities?.length ? ` · ★${data.longTailOpportunities.length}` : ''}
+            <span style={{ fontSize: '0.6rem', color: loading ? '#3fb950' : '#6e7681' }}>
+              {loading ? '↻ Refreshing...' : `${filtered.length} opportunities`}
             </span>
           </div>
 
           {/* Trade Cards */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '0.75rem' }}>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+            gap: '0.75rem',
+            position: 'relative',
+          }}>
             {loading && !data ? (
               <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', justifyContent: 'center', height: '120px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '12px', color: '#6e7681', fontSize: '0.85rem' }}>
                 <RefreshCw style={{ width: 16, height: 16, marginRight: '0.5rem', animation: 'spin 1s linear infinite' }} />
@@ -841,204 +1001,194 @@ export function PolymarketSection() {
                 const potentialWin = kellyBet * ((1 / rec.odds) - 1)
                 const ev = kellyBet * rec.expectedValue
                 const isAlreadyPlaced = openPositions.some(p => p.marketId === rec.market.id)
+                const liveDaysToClose = liveDays(rec)
+                const confColor = rec.confidence === 'high' ? '#3fb950' : rec.confidence === 'medium' ? '#f0883e' : '#8b949e'
+                const confBg = rec.confidence === 'high' ? 'rgba(63,185,80,0.12)' : rec.confidence === 'medium' ? 'rgba(240,136,62,0.12)' : 'rgba(139,148,158,0.1)'
+                const outcomeColor = rec.outcome.toLowerCase() === 'yes' ? '#3fb950' : '#f85149'
 
                 return (
-                  <div
+                  <a
                     key={`${rec.market.id}-${sortKey}`}
+                    href={rec.market.url}
+                    target='_blank'
+                    rel='noopener noreferrer'
                     style={{
-                      backgroundColor: '#161b22',
-                      border: `1px solid ${rec.safetyScore >= 70 ? 'rgba(63, 185, 80, 0.25)' : 'rgba(240, 136, 62, 0.2)'}`,
-                      borderRadius: '14px',
-                      padding: '1rem',
                       display: 'flex',
-                      flexDirection: 'column',
-                      gap: '0.6rem',
+                      backgroundColor: '#161b22',
+                      border: `1px solid ${confColor}22`,
+                      borderRadius: '10px',
+                      overflow: 'hidden',
+                      textDecoration: 'none',
+                      transition: 'border-color 0.2s, box-shadow 0.2s',
+                      cursor: 'pointer',
+                    }}
+                    onMouseEnter={e => {
+                      (e.currentTarget as HTMLElement).style.borderColor = confColor + '55'
+                      ;(e.currentTarget as HTMLElement).style.boxShadow = `0 0 12px ${confColor}15`
+                    }}
+                    onMouseLeave={e => {
+                      (e.currentTarget as HTMLElement).style.borderColor = confColor + '22'
+                      ;(e.currentTarget as HTMLElement).style.boxShadow = 'none'
                     }}
                   >
-                    {/* Top row */}
-                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.5rem' }}>
-                      <h3 style={{ fontSize: '0.8rem', fontWeight: 600, color: '#e6edf3', margin: 0, lineHeight: 1.4, flex: 1 }}>
-                        <a href={rec.market.url} target='_blank' rel='noopener noreferrer' style={{ color: '#e6edf3', textDecoration: 'none' }}>
-                          {rec.market.question}
-                        </a>
-                      </h3>
-                      <ExternalLink style={{ width: 14, height: 14, color: '#6e7681', flexShrink: 0, marginTop: '2px' }} />
-                    </div>
+                    {/* Left confidence bar */}
+                    <div style={{
+                      width: '5px',
+                      backgroundColor: confColor,
+                      flexShrink: 0,
+                    }} />
 
-                    {/* Outcome + badges */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: '0.6rem', fontWeight: 700, color: '#8b949e', backgroundColor: 'rgba(139, 92, 246, 0.1)', padding: '2px 8px', borderRadius: '4px' }}>
-                        {rec.outcome}
-                      </span>
-                      <span style={{
-                        fontSize: '0.58rem', fontWeight: 700,
-                        color: rec.confidence === 'high' ? '#3fb950' : rec.confidence === 'medium' ? '#f0883e' : '#8b949e',
-                        backgroundColor: rec.confidence === 'high' ? 'rgba(63, 185, 80, 0.1)' : rec.confidence === 'medium' ? 'rgba(240, 136, 62, 0.1)' : 'rgba(139, 148, 158, 0.1)',
-                        padding: '2px 7px', borderRadius: '4px'
-                      }}>
-                        {rec.confidence.toUpperCase()}
-                      </span>
-                      <span style={{ fontSize: '0.65rem', fontWeight: 700, color: rec.expectedValue > 0 ? '#3fb950' : '#f85149' }}>
-                        {rec.expectedValue > 0 ? '+' : ''}{(rec.expectedValue * 100).toFixed(1)}% EV
-                      </span>
-                      <span style={{ fontSize: '0.6rem', color: '#6e7681' }}>
-                        {(rec.odds * 100).toFixed(0)}% → {(rec.estimatedProbability * 100).toFixed(0)}%
-                      </span>
-                      <div style={{ flex: 1 }} />
-                      <span style={{ fontSize: '0.55rem', fontWeight: 600, color: rec.daysToClose <= 7 ? '#3fb950' : rec.daysToClose <= 30 ? '#f0883e' : '#8b949e', backgroundColor: rec.daysToClose <= 7 ? 'rgba(63, 185, 80, 0.1)' : 'transparent', padding: rec.daysToClose <= 7 ? '2px 6px' : '2px 4px', borderRadius: '4px' }}>
-                        {rec.daysToClose <= 1 ? 'TODAY' : rec.daysToClose === 999 ? 'TBD' : `${rec.daysToClose}d`}
-                      </span>
-                      {rec.riskLevel === 'low' ? <Shield style={{ width: 12, height: 12, color: '#3fb950' }} /> : <AlertTriangle style={{ width: 12, height: 12, color: rec.riskLevel === 'medium' ? '#f0883e' : '#f85149' }} />}
-                      {rec.convictionScore !== undefined && (
+                    {/* Card content */}
+                    <div style={{ flex: 1, padding: '0.7rem 0.8rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                      {/* Top row: confidence badge + question */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <span style={{
-                          fontSize: '0.58rem',
+                          fontSize: '0.55rem',
                           fontWeight: 700,
-                          color: rec.convictionScore >= 90 ? '#f0c000' : rec.convictionScore >= 75 ? '#3fb950' : rec.convictionScore >= 55 ? '#58a6ff' : '#8b949e',
-                          backgroundColor: rec.convictionScore >= 90 ? 'rgba(240,192,0,0.1)' : rec.convictionScore >= 75 ? 'rgba(63,185,80,0.1)' : rec.convictionScore >= 55 ? 'rgba(88,166,255,0.1)' : 'rgba(139,148,158,0.1)',
-                          padding: '2px 8px',
+                          color: confColor,
+                          backgroundColor: confBg,
+                          padding: '2px 7px',
                           borderRadius: '4px',
+                          flexShrink: 0,
+                          letterSpacing: '0.03em',
                         }}>
-                          CV {rec.convictionScore}
+                          {rec.confidence.toUpperCase()}
                         </span>
-                      )}
-                      {rec.longTail?.flag && (
-                        <span style={{
-                          fontSize: '0.58rem',
-                          fontWeight: 700,
-                          color: rec.longTail.flag === 'near-certain' ? '#f0c000' : rec.longTail.flag === 'near-impossible' ? '#f85149' : '#a371f7',
-                          backgroundColor: 'rgba(163,113,247,0.1)',
-                          padding: '2px 8px',
-                          borderRadius: '4px',
-                        }}>
-                          {rec.longTail.flag === 'near-certain' ? '★ NEAR-CERTAIN' : rec.longTail.flag === 'near-impossible' ? '✗ NEAR-IMP' : '⚡ CONTRARIAN'}
-                        </span>
-                      )}
-                      {rec.research?.sentiment && rec.research.sentiment !== 'neutral' && (
-                        <span style={{
-                          fontSize: '0.58rem',
+                        <h3 style={{
+                          fontSize: '0.72rem',
                           fontWeight: 600,
-                          color: rec.research.sentiment === 'bullish' ? '#3fb950' : rec.research.sentiment === 'bearish' ? '#f85149' : '#8b949e',
-                          backgroundColor: 'rgba(139,148,158,0.1)',
-                          padding: '2px 8px',
+                          color: '#e6edf3',
+                          margin: 0,
+                          lineHeight: 1.35,
+                          flex: 1,
+                        }}>
+                          {rec.market.question}
+                        </h3>
+                      </div>
+
+                      {/* Prediction + EV row */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                        <span style={{ fontSize: '0.65rem', fontWeight: 700, color: outcomeColor }}>
+                          {rec.outcome} {(rec.odds * 100).toFixed(1)}%
+                        </span>
+                        <span style={{
+                          fontSize: '0.6rem',
+                          fontWeight: 700,
+                          color: '#a371f7',
+                          backgroundColor: 'rgba(163,113,247,0.12)',
+                          padding: '1px 6px',
                           borderRadius: '4px',
                         }}>
-                          {rec.research.sentiment === 'bullish' ? '📈' : '📉'} {rec.research.sentiment}
+                          +{(rec.expectedValue * 100).toFixed(1)}% EV
                         </span>
-                      )}
-                    </div>
-
-                    {/* Metrics */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem' }}>
-                      <SafetyBar score={rec.safetyScore} />
-                      <KellyBar fraction={rec.kellyFraction} />
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
-                        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#f0883e' }}>${kellyBet.toFixed(2)}</div>
-                        <span style={{ fontSize: '0.55rem', color: '#6e7681' }}>Bet ({kellyMode === 'quarter' ? '¼' : kellyMode === 'half' ? '½' : '1'}K)</span>
-                      </div>
-                    </div>
-
-                    {/* P&L projection */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem', backgroundColor: '#0d1117', borderRadius: '8px', padding: '0.5rem' }}>
-                      <div style={{ textAlign: 'center' }}>
-                        <div style={{ fontSize: '0.7rem', fontWeight: 600, color: '#3fb950' }}>+${potentialWin.toFixed(2)}</div>
-                        <div style={{ fontSize: '0.5rem', color: '#6e7681' }}>If Win</div>
-                      </div>
-                      <div style={{ textAlign: 'center' }}>
-                        <div style={{ fontSize: '0.7rem', fontWeight: 600, color: '#58a6ff' }}>${ev.toFixed(2)}</div>
-                        <div style={{ fontSize: '0.5rem', color: '#6e7681' }}>Expected</div>
-                      </div>
-                      <div style={{ textAlign: 'center' }}>
-                        <div style={{ fontSize: '0.7rem', fontWeight: 600, color: '#f85149' }}>-${kellyBet.toFixed(2)}</div>
-                        <div style={{ fontSize: '0.5rem', color: '#6e7681' }}>If Lose</div>
-                      </div>
-                    </div>
-
-                    {/* Reasoning */}
-                    <p style={{ fontSize: '0.65rem', color: '#8b949e', margin: 0, lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                      {rec.reasoning}
-                    </p>
-
-                    {/* Auto-place button */}
-                    {rec.confidence === 'high' && !isAlreadyPlaced && (
-                      <button
-                        onClick={() => placeTrade(rec)}
-                        disabled={placingTrade === rec.market.id}
-                        style={{
-                          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem',
-                          background: placingTrade === rec.market.id ? '#21262d' : 'rgba(63, 185, 80, 0.1)',
-                          border: `1px solid ${placingTrade === rec.market.id ? '#30363d' : 'rgba(63, 185, 80, 0.3)'}`,
-                          borderRadius: '8px',
-                          padding: '6px 12px',
-                          cursor: placingTrade === rec.market.id ? 'default' : 'pointer',
-                          color: placingTrade === rec.market.id ? '#6e7681' : '#3fb950',
-                          fontSize: '0.65rem',
-                          fontWeight: 700,
-                          transition: 'all 0.2s',
-                        }}
-                      >
-                        {placingTrade === rec.market.id ? (
-                          <RefreshCw size={12} style={{ animation: 'spin 1s linear infinite' }} />
-                        ) : (
-                          <Target size={12} />
+                        {rec.convictionScore !== undefined && (
+                          <span style={{
+                            fontSize: '0.55rem',
+                            fontWeight: 700,
+                            color: rec.convictionScore >= 90 ? '#f0c000' : rec.convictionScore >= 75 ? '#3fb950' : '#58a6ff',
+                            backgroundColor: 'rgba(240,192,0,0.08)',
+                            padding: '1px 6px',
+                            borderRadius: '4px',
+                          }}>
+                            CV {rec.convictionScore}
+                          </span>
                         )}
-                        {placingTrade === rec.market.id ? 'Placing...' : 'Auto-Place Paper Trade'}
-                      </button>
-                    )}
-                    {isAlreadyPlaced && (
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem', color: '#3fb950', fontSize: '0.65rem', fontWeight: 600, backgroundColor: 'rgba(63, 185, 80, 0.05)', border: '1px solid rgba(63, 185, 80, 0.15)', borderRadius: '8px', padding: '6px 12px' }}>
-                        <CheckCircle size={12} /> Paper Trade Placed
+                        <div style={{ flex: 1 }} />
+                        <span style={{ fontSize: '0.55rem', color: '#6e7681' }}>
+                          {(rec.odds * 100).toFixed(0)}% → {(rec.estimatedProbability * 100).toFixed(0)}%
+                        </span>
+                        <span style={{ fontSize: '0.55rem', fontWeight: 600, color: liveDaysToClose <= 3 ? '#3fb950' : '#6e7681' }}>
+                          {liveDaysToClose <= 1 ? 'TODAY' : `${liveDaysToClose}d`}
+                        </span>
                       </div>
-                    )}
-                    {placingError && placingTrade === null && (
-                      <div style={{ fontSize: '0.6rem', color: '#f85149', textAlign: 'center' }}>
-                        <AlertCircle size={12} style={{ display: 'inline', marginRight: '4px' }} />
-                        {placingError}
-                      </div>
-                    )}
 
-                    {/* Footer */}
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: '0.5rem', borderTop: '1px solid #21262d' }}>
-                      <span style={{ fontSize: '0.55rem', color: '#484f58' }}>
-                        {formatVolume(rec.market.volumeNum)} vol • {formatVolume(rec.market.liquidityNum)} liq
-                      </span>
-                      <span style={{ fontSize: '0.55rem', color: '#484f58' }}>
-                        Spread: {rec.market.spread > 0 ? `${(rec.market.spread * 100).toFixed(1)}%` : 'N/A'}
-                      </span>
+                      {/* Bet row */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span style={{ fontSize: '0.6rem', fontWeight: 700, color: '#f0883e' }}>
+                          ${kellyBet.toFixed(2)}
+                        </span>
+                        <span style={{ fontSize: '0.55rem', color: '#6e7681' }}>
+                          Bet (¼K)
+                        </span>
+                        <span style={{ color: '#30363d', fontSize: '0.6rem' }}>|</span>
+                        <span style={{ fontSize: '0.6rem', color: '#3fb950' }}>+$</span>
+                        <span style={{ fontSize: '0.6rem', fontWeight: 600, color: '#3fb950' }}>
+                          {potentialWin.toFixed(2)} If Win
+                        </span>
+                        <span style={{ color: '#30363d', fontSize: '0.6rem' }}>|</span>
+                        <span style={{ fontSize: '0.6rem', fontWeight: 600, color: '#f85149' }}>
+                          -${kellyBet.toFixed(2)} If Lose
+                        </span>
+                        <div style={{ flex: 1 }} />
+                        {/* Auto-place button (stopPropagation so link still works) */}
+                        {rec.confidence === 'high' && !isAlreadyPlaced && (
+                          <button
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); placeTrade(rec) }}
+                            disabled={placingTrade === rec.market.id}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.3rem',
+                              background: placingTrade === rec.market.id ? '#21262d' : 'rgba(63, 185, 80, 0.12)',
+                              border: `1px solid ${placingTrade === rec.market.id ? '#30363d' : 'rgba(63,185,80,0.3)'}`,
+                              borderRadius: '6px',
+                              padding: '4px 10px',
+                              cursor: placingTrade === rec.market.id ? 'default' : 'pointer',
+                              color: placingTrade === rec.market.id ? '#6e7681' : '#3fb950',
+                              fontSize: '0.58rem',
+                              fontWeight: 700,
+                              flexShrink: 0,
+                            }}
+                          >
+                            {placingTrade === rec.market.id ? (
+                              <RefreshCw size={10} style={{ animation: 'spin 1s linear infinite' }} />
+                            ) : (
+                              <Target size={10} />
+                            )}
+                            {placingTrade === rec.market.id ? '...' : 'Auto-Place'}
+                          </button>
+                        )}
+                        {isAlreadyPlaced && (
+                          <span style={{ fontSize: '0.55rem', color: '#3fb950', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                            <CheckCircle size={10} /> Placed
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Footer */}
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: '0.35rem', borderTop: '1px solid #21262d' }}>
+                        <span style={{ fontSize: '0.52rem', color: '#484f58' }}>
+                          ${((rec.market.volume24hr || rec.market.volumeNum) / 1e6).toFixed(1)}M vol
+                          {rec.market.liquidityNum > 0 && ` • $${(rec.market.liquidityNum / 1e6).toFixed(1)}M liq`}
+                        </span>
+                        <span style={{ fontSize: '0.52rem', color: '#484f58' }}>
+                          Spread: {rec.market.spread > 0 ? `${(rec.market.spread * 100).toFixed(1)}%` : 'N/A'}
+                        </span>
+                        <ExternalLink style={{ width: 9, height: 9, color: '#484f58' }} />
+                      </div>
                     </div>
-
-                    {/* Research Details (collapsible) */}
-                    {rec.research && rec.research.keyInsight && (
-                      <details style={{ marginTop: '0.5rem', padding: '0.5rem', backgroundColor: '#0d1117', borderRadius: '6px', border: '1px solid #21262d' }}>
-                        <summary style={{ fontSize: '0.6rem', color: '#6e7681', cursor: 'pointer', userSelect: 'none' }}>
-                          🔍 Research Details
-                        </summary>
-                        <div style={{ marginTop: '0.5rem' }}>
-                          <p style={{ fontSize: '0.6rem', color: '#8b949e', margin: 0, lineHeight: 1.4 }}>
-                            {rec.research.keyInsight}
-                          </p>
-                          {rec.research.topFindings && rec.research.topFindings.length > 0 && (
-                            <div style={{ marginTop: '0.4rem' }}>
-                              {rec.research.topFindings.slice(0, 2).map((f, i) => (
-                                <p key={i} style={{ fontSize: '0.55rem', color: '#6e7681', margin: '2px 0', lineHeight: 1.3 }}>
-                                  • {f.substring(0, 120)}{f.length > 120 ? '...' : ''}
-                                </p>
-                              ))}
-                            </div>
-                          )}
-                          {rec.longTail && (
-                            <p style={{ fontSize: '0.6rem', color: '#a371f7', margin: '0.4rem 0 0', fontWeight: 600 }}>
-                              ★ Long-Tail: {rec.longTail.reasoning.substring(0, 150)}{rec.longTail.reasoning.length > 150 ? '...' : ''}
-                            </p>
-                          )}
-                        </div>
-                      </details>
-                    )}
-                  </div>
+                  </a>
                 )
               })
             ) : (
               <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', justifyContent: 'center', height: '120px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '12px', color: '#6e7681', fontSize: '0.85rem', textAlign: 'center' }}>
                 No opportunities match your filters right now.
+              </div>
+            )}
+            {/* Pulsing refresh indicator when background-refreshing */}
+            {loading && data && (
+              <div style={{
+                gridColumn: '1 / -1',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '6px',
+                gap: '6px',
+                fontSize: '0.6rem',
+                color: '#3fb950',
+              }}>
+                <RefreshCw size={12} style={{ animation: 'spin 1s linear infinite' }} />
+                Updating...
               </div>
             )}
           </div>

@@ -19,77 +19,153 @@ interface IndicatorCardProps {
 }
 
 const SIGNAL_STYLES = {
-  BUY: 'bg-green-500/20 text-green-400 border border-green-500/30',
-  SELL: 'bg-red-500/20 text-red-400 border border-red-500/30',
-  HOLD: 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30',
+  BUY: { bg: 'rgba(63,185,80,0.1)', color: '#3fb950', border: 'rgba(63,185,80,0.25)' },
+  SELL: { bg: 'rgba(248,81,73,0.1)', color: '#f85149', border: 'rgba(248,81,73,0.25)' },
+  HOLD: { bg: 'rgba(240,192,0,0.1)', color: '#f0c000', border: 'rgba(240,192,0,0.25)' },
 }
 
 export default function IndicatorCard({
   title, icon, value, subValue, signal, signalReason, tooltip, lastUpdated,
-  onRefresh, isLoading, children, accentColor = '#00d4ff'
+  onRefresh, isLoading, children, accentColor = '#58a6ff'
 }: IndicatorCardProps) {
   const [showTooltip, setShowTooltip] = useState(false)
+  const signalStyle = signal ? SIGNAL_STYLES[signal] : null
 
   return (
-    <div className="relative">
-      <div className="relative z-10 rounded-xl border transition-all duration-200"
-           style={{ background: 'rgba(0,0,0,0.4)', borderColor: 'rgba(255,255,255,0.06)' }}>
-        {/* Header */}
-        <div className="flex items-center justify-between p-3 border-b" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
-          <div className="flex items-center gap-2">
-            <span style={{ color: accentColor }}>{icon}</span>
-            <span className="text-xs font-medium text-white/60">{title}</span>
-          </div>
-          <div className="flex items-center gap-2">
-            {signal && (
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${SIGNAL_STYLES[signal]}`}>
-                {signal}
-              </span>
-            )}
+    <div style={{
+      backgroundColor: '#161b22',
+      border: `1px solid ${signalStyle ? signalStyle.border : 'rgba(42,42,74,0.8)'}`,
+      borderRadius: '12px',
+      overflow: 'hidden',
+      transition: 'border-color 0.2s, box-shadow 0.2s',
+      boxShadow: signalStyle ? `0 0 12px ${signalStyle.color}12` : 'none',
+    }}>
+      {/* Header */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '0.6rem 0.75rem',
+        borderBottom: '1px solid rgba(42,42,74,0.6)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span style={{ color: accentColor }}>{icon}</span>
+          <span style={{ fontSize: '0.65rem', fontWeight: 600, color: '#8b949e', letterSpacing: '0.02em' }}>{title}</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {signal && (
+            <span style={{
+              fontSize: '0.55rem',
+              fontWeight: 700,
+              padding: '2px 7px',
+              borderRadius: '4px',
+              backgroundColor: signalStyle!.bg,
+              color: signalStyle!.color,
+              border: `1px solid ${signalStyle!.border}`,
+              letterSpacing: '0.05em',
+            }}>
+              {signal}
+            </span>
+          )}
+          <button
+            onClick={onRefresh}
+            disabled={isLoading}
+            title="Refresh"
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: isLoading ? 'not-allowed' : 'pointer',
+              color: isLoading ? accentColor : '#484f58',
+              padding: '2px',
+              display: 'flex',
+              alignItems: 'center',
+              transition: 'color 0.2s',
+            }}
+          >
+            <RefreshCw size={11} style={{ animation: isLoading ? 'spin 1s linear infinite' : 'none' }} />
+          </button>
+          <div style={{ position: 'relative' }}>
             <button
-              onClick={onRefresh}
-              disabled={isLoading}
-              className="p-1 rounded hover:bg-white/10 transition-colors disabled:opacity-50"
-              title="Refresh"
+              onMouseEnter={() => setShowTooltip(true)}
+              onMouseLeave={() => setShowTooltip(false)}
+              title="What is this?"
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                color: '#484f58',
+                padding: '2px',
+                display: 'flex',
+                alignItems: 'center',
+                transition: 'color 0.2s',
+              }}
             >
-              <RefreshCw size={12} className={`text-white/40 ${isLoading ? 'animate-spin' : ''}`} />
+              <HelpCircle size={11} />
             </button>
-            <div className="relative">
-              <button
-                onMouseEnter={() => setShowTooltip(true)}
-                onMouseLeave={() => setShowTooltip(false)}
-                className="p-1 rounded hover:bg-white/10 transition-colors"
-              >
-                <HelpCircle size={12} className="text-white/40" />
-              </button>
-              {showTooltip && (
-                <div className="absolute right-0 top-6 z-50 w-56 p-3 rounded-lg text-xs text-white/90 shadow-xl"
-                     style={{ background: 'rgba(10,10,20,0.95)', border: '1px solid rgba(255,255,255,0.1)' }}>
-                  {tooltip}
-                  {signalReason && (
-                    <div className="mt-2 pt-2 border-t" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
-                      <span className="text-white/40">Reason: </span>
-                      <span className="text-white/70">{signalReason}</span>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
+            {showTooltip && (
+              <div style={{
+                position: 'absolute',
+                right: 0,
+                top: '100%',
+                marginTop: '6px',
+                zIndex: 50,
+                width: '240px',
+                padding: '0.6rem 0.75rem',
+                borderRadius: '8px',
+                fontSize: '0.6rem',
+                lineHeight: 1.5,
+                color: '#8b949e',
+                backgroundColor: 'rgba(10, 10, 18, 0.97)',
+                border: '1px solid rgba(42,42,74,0.8)',
+                boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+              }}>
+                {tooltip}
+                {signalReason && (
+                  <div style={{
+                    marginTop: '0.5rem',
+                    paddingTop: '0.5rem',
+                    borderTop: '1px solid rgba(42,42,74,0.6)',
+                  }}>
+                    <span style={{ color: '#484f58' }}>Reason: </span>
+                    <span style={{ color: '#6e7681' }}>{signalReason}</span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
-        {/* Content */}
-        <div className="p-4">
-          <div className="text-2xl font-bold text-white">{value}</div>
-          {subValue && <div className="text-xs text-white/40 mt-1">{subValue}</div>}
-          {children}
+      </div>
+
+      {/* Content */}
+      <div style={{ padding: '0.75rem' }}>
+        <div style={{
+          fontSize: '1.4rem',
+          fontWeight: 700,
+          color: '#e6edf3',
+          lineHeight: 1,
+          marginBottom: '4px',
+        }}>
+          {value}
         </div>
-        {/* Footer */}
-        {lastUpdated && (
-          <div className="px-4 pb-2 text-[10px] text-white/30">
-            Updated: {lastUpdated}
+        {subValue && (
+          <div style={{ fontSize: '0.6rem', color: '#6e7681', lineHeight: 1.4 }}>
+            {subValue}
           </div>
         )}
+        {children}
       </div>
+
+      {/* Footer */}
+      {lastUpdated && (
+        <div style={{
+          padding: '0.4rem 0.75rem',
+          borderTop: '1px solid rgba(42,42,74,0.4)',
+          fontSize: '0.5rem',
+          color: '#484f58',
+        }}>
+          Updated {lastUpdated}
+        </div>
+      )}
     </div>
   )
 }

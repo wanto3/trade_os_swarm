@@ -36,7 +36,7 @@ export default function RSIIndicator() {
       lastUpdated={data?.timestamp ? new Date(data.timestamp).toLocaleTimeString() : undefined}
       onRefresh={fetchData}
       isLoading={loading}
-      accentColor={signal === 'BUY' ? '#22c55e' : signal === 'SELL' ? '#ef4444' : '#eab308'}
+      accentColor={signal === 'BUY' ? '#3fb950' : signal === 'SELL' ? '#f85149' : '#f0c000'}
     />
   )
 }

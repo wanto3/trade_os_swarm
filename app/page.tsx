@@ -22,6 +22,7 @@ import { PositionManager } from '@/components/dashboard/position-manager'
 import { KellyCalculator } from '@/components/dashboard/kelly-optimizer'
 import { MultiTimeframe, SupportResistanceLevels } from '@/components/dashboard/multi-timeframe'
 import RSIIndicator from '@/components/dashboard/rsi-indicator'
+import InfluencerInsights from '@/components/dashboard/influencer-insights'
 import MACDIndicator from '@/components/dashboard/macd-indicator'
 import BollingerIndicator from '@/components/dashboard/bollinger-indicator'
 import MovingAveragesIndicator from '@/components/dashboard/moving-averages-indicator'
@@ -83,7 +84,7 @@ export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState<TabId>('overview')
   const [selectedSymbol, setSelectedSymbol] = useState<string>('BTC')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const [time, setTime] = useState(Date.now())
+  const [time, setTime] = useState(0)
 
   const selectedPrice = prices.find(p => p.symbol === selectedSymbol) || prices[0]
 
@@ -119,6 +120,7 @@ export default function DashboardPage() {
   }, [])
 
   useEffect(() => {
+    setTime(Date.now())
     fetchPrices()
     const id = setInterval(fetchPrices, 60000)
     const timeId = setInterval(() => setTime(Date.now()), 1000)
@@ -994,6 +996,9 @@ export default function DashboardPage() {
                 </div>
                 <MultiTimeframe symbol={selectedSymbol} />
               </GlassPanel>
+
+              {/* Influencer insights */}
+              <InfluencerInsights />
             </div>
           )}
 

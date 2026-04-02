@@ -50,7 +50,7 @@ export interface TradeRecommendation {
 
 export type ConvictionLabel = 'no-brainer' | 'high' | 'consider' | 'risky'
 export type LongTailFlag = 'near-certain' | 'near-impossible' | 'contrarian' | 'opportunity-alert' | null
-export type TimeTier = 'imminent' | 'closing-soon' | 'medium' | 'long'
+export type TimeTier = 'pending' | 'imminent' | 'closing-soon' | 'medium' | 'long'
 
 export interface ResearchSummary {
   queryUsed: string
@@ -123,12 +123,12 @@ function slugify(text: string): string {
 }
 
 function makeMarketUrl(market: GammaMarket): string {
-  // Strategy: events[0].slug (parent event page) works for non-negRisk markets
-  // (BTC markets, individual team markets). market.slug works for standalone markets.
-  // NegRisk sub-markets are filtered out upstream.
-  if (market.events && market.events.length > 0 && market.events[0].slug) {
-    return `https://polymarket.com/event/${market.events[0].slug}`
+  // Use /event/{parent_slug}/{market_slug} when market has a parent event
+  // This works for both negRisk sub-markets and regular sub-markets (e.g. Iran ceasefire, FIFA winner)
+  if (market.events && market.events.length > 0 && market.events[0].slug && market.slug) {
+    return `https://polymarket.com/event/${market.events[0].slug}/${market.slug}`
   }
+  // Standalone markets: use market.slug directly
   if (market.slug) {
     return `https://polymarket.com/event/${market.slug}`
   }
@@ -137,11 +137,22 @@ function makeMarketUrl(market: GammaMarket): string {
   return `https://polymarket.com/event/${slug}`
 }
 
-function calculateSafetyScore(market: GammaMarket, estimatedProb: number, marketProb: number): number {
+function calculateSafetyScore(market: GammaMarket, estimatedProb: number, marketProb: number, isShortTerm: boolean = false): number {
   let score = 0
 
-  // Allow near-certain/near-impossible markets for short-term — they have valid trading edges
-  if (marketProb < 0.0005 || marketProb > 0.9995) return 0
+  // Near-certain/near-impossible: give base score for short-term markets
+  // These still have trading value — near-certain outcomes are MORE likely to hold with less time
+  if (marketProb < 0.0005 || marketProb > 0.9995) {
+    if (isShortTerm) {
+      // Short-term near-certain: score on liquidity and volume only
+      const liq = market.liquidityNum
+      score = liq >= 100000 ? 50 : liq >= 50000 ? 40 : liq >= 25000 ? 30 : liq >= 10000 ? 20 : 10
+      const vol = market.volumeNum
+      score += vol >= 500000 ? 10 : vol >= 100000 ? 7 : vol >= 50000 ? 4 : 0
+      return Math.min(100, score)
+    }
+    return 0
+  }
 
   const liq = market.liquidityNum
   if (liq >= 100000) score += 30
@@ -287,10 +298,10 @@ function getConvictionLabel(score: number): ConvictionLabel {
 }
 
 function scoreMarket(market: GammaMarket): TradeRecommendation | null {
-  // Skip negRisk sub-markets — they don't have standalone Polymarket pages
-  // and their prices are structured differently (they're sub-conditions of
-  // parent markets, so clicking the URL lands on the wrong market)
-  if ((market as any).negRisk === true) return null
+  // Note: negRisk sub-markets are NOT filtered out — they have their own individual pages
+  // on Polymarket (e.g., /event/will-connecticut-win-the-2026-ncaa-tournament). Many
+  // short-term markets (NCAA, Masters, elections) are negRisk, so blocking them would
+  // miss most urgent opportunities.
 
   if (!market.outcomePrices || !market.outcomes) return null
 
@@ -304,6 +315,14 @@ function scoreMarket(market: GammaMarket): TradeRecommendation | null {
     return null
   }
 
+  // Determine time tier early so it can be used for liquidity and price checks
+  const hasNoDate = !market.endDateIso
+  const daysToClose = hasNoDate
+    ? 0
+    : Math.max(0, Math.ceil((new Date(market.endDateIso!).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
+  const isImminent = daysToClose <= 1 || hasNoDate
+  const isClosingSoon = daysToClose <= 7 || hasNoDate
+
   let outcomes: string[]
   try {
     outcomes = JSON.parse(market.outcomes)
@@ -311,7 +330,9 @@ function scoreMarket(market: GammaMarket): TradeRecommendation | null {
     outcomes = ['Yes', 'No']
   }
 
-  if (market.liquidityNum < 500) return null
+  // Lower liquidity threshold for short-term markets — they don't need as much depth
+  const liquidityMin = isImminent ? 100 : isClosingSoon ? 200 : 500
+  if (market.liquidityNum < liquidityMin) return null
 
   // Widen price range to capture near-certain (0.999+) and near-impossible (0.001+) outcomes
   // These are valid trading opportunities — especially for short-term markets
@@ -320,13 +341,6 @@ function scoreMarket(market: GammaMarket): TradeRecommendation | null {
 
   const category = classifyMarket(market.question)
   const recommendations: TradeRecommendation[] = []
-
-  // For imminent/closing-soon markets, use a more aggressive bias to surface short-term edges
-  const daysToClose = market.endDateIso
-    ? Math.max(0, Math.ceil((new Date(market.endDateIso).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
-    : 999
-  const isImminent = daysToClose <= 1
-  const isClosingSoon = daysToClose <= 7
 
   for (let i = 0; i < Math.min(outcomePrices.length, 2); i++) {
     const marketProb = outcomePrices[i]
@@ -347,11 +361,13 @@ function scoreMarket(market: GammaMarket): TradeRecommendation | null {
     const evPct = ev * 100
 
     // Lower EV threshold for imminent/closing-soon — these have less uncertainty
-    const evThreshold = isImminent ? 0.5 : isClosingSoon ? 1 : 3
+    const evThreshold = isImminent ? 0.2 : isClosingSoon ? 0.3 : 3
     if (evPct < evThreshold || evPct > 50) continue
 
-    const safetyScore = calculateSafetyScore(market, estimatedProb, marketProb)
-    if (safetyScore < 20) continue
+    const safetyScore = calculateSafetyScore(market, estimatedProb, marketProb, isImminent || isClosingSoon)
+    // Significantly lower safety threshold for short-term markets to surface more opportunities
+    const safetyMin = isImminent ? 10 : isClosingSoon ? 12 : 20
+    if (safetyScore < safetyMin) continue
 
     // ── Conviction fields (Task 3: basic wiring; Task 4 adds async deep research) ──
     const convictionScore = safetyScore
@@ -366,16 +382,22 @@ function scoreMarket(market: GammaMarket): TradeRecommendation | null {
     const marketQuality = liqScore * 0.4 + volScore * 0.3 + sprScore * 0.3
 
     // Time analysis
-    const daysToClose = market.endDateIso
-      ? Math.max(0, Math.ceil((new Date(market.endDateIso).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
-      : 999
     let tier: TimeTier
-    if (daysToClose <= 1) tier = 'imminent'
-    else if (daysToClose <= 7) tier = 'closing-soon'
-    else if (daysToClose <= 30) tier = 'medium'
-    else tier = 'long'
+    if (hasNoDate) {
+      tier = 'pending'
+    } else if (daysToClose <= 1) {
+      tier = 'imminent'
+    } else if (daysToClose <= 7) {
+      tier = 'closing-soon'
+    } else if (daysToClose <= 30) {
+      tier = 'medium'
+    } else {
+      tier = 'long'
+    }
     const closingSoonFactors: string[] = []
-    if (tier === 'imminent') {
+    if (hasNoDate) {
+      closingSoonFactors.push('No set end date — resolution timing uncertain')
+    } else if (tier === 'imminent') {
       closingSoonFactors.push('Resolution within 24 hours — maximum time pressure')
       closingSoonFactors.push('Minimal room for new information to shift probability')
     } else if (tier === 'closing-soon') {
@@ -386,8 +408,8 @@ function scoreMarket(market: GammaMarket): TradeRecommendation | null {
       closingSoonFactors.push('Long-duration market — significant uncertainty remains')
     }
     const resolutionUncertainty: 'low' | 'medium' | 'high' =
-      tier === 'imminent' ? 'low' : tier === 'closing-soon' || tier === 'medium' ? 'medium' : 'high'
-    const timeEdge = tier === 'imminent' ? 95 : tier === 'closing-soon' ? 75 : tier === 'medium' ? 55 : 35
+      hasNoDate || tier === 'imminent' ? 'low' : tier === 'closing-soon' || tier === 'medium' ? 'medium' : 'high'
+    const timeEdge = hasNoDate ? 95 : tier === 'imminent' ? 95 : tier === 'closing-soon' ? 75 : tier === 'medium' ? 55 : 35
 
     const researchAlignment = 50 // neutral baseline — research is null for now (Task 4 adds async research)
     const evRationalityScore = evPct >= 3 && evPct <= 25 ? 100 : evPct > 25 && evPct <= 40 ? 70 : evPct > 40 && evPct <= 50 ? 40 : evPct >= 1 && evPct < 3 ? 50 : 20
@@ -478,38 +500,53 @@ function scoreMarket(market: GammaMarket): TradeRecommendation | null {
 export async function GET() {
   try {
     // No caching — always fetch fresh data so opportunities reflect current market prices
-    const response = await fetch(
-      'https://gamma-api.polymarket.com/markets?closed=false&accepting_orders=true&order=volumeNum&ascending=false&limit=500',
-      {
-        headers: { 'Accept': 'application/json' },
-        cache: 'no-store',
-      }
-    )
+    // Fetch by volume AND by volume24hr to capture hot trading opportunities
+    const [volumeRes, volume24Res] = await Promise.all([
+      fetch('https://gamma-api.polymarket.com/markets?closed=false&accepting_orders=true&order=volumeNum&ascending=false&limit=500', { headers: { 'Accept': 'application/json' }, cache: 'no-store' }),
+      fetch('https://gamma-api.polymarket.com/markets?closed=false&accepting_orders=true&order=volume24hr&ascending=false&limit=500', { headers: { 'Accept': 'application/json' }, cache: 'no-store' }),
+    ])
 
-    if (!response.ok) {
-      throw new Error(`Gamma API error: ${response.status}`)
+    if (!volumeRes.ok) {
+      throw new Error(`Gamma API error: ${volumeRes.status}`)
     }
 
-    // Also fetch markets closing soon (within 30 days) sorted by end date
+    // Merge markets from both queries, deduplicated by id
+    const rawMarkets: GammaMarket[] = await volumeRes.json()
+    const existingIds = new Set(rawMarkets.map(m => m.id))
+    if (volume24Res.ok) {
+      const volume24Markets: GammaMarket[] = await volume24Res.json()
+      for (const m of volume24Markets) {
+        if (!existingIds.has(m.id)) {
+          rawMarkets.push(m)
+          existingIds.add(m.id)
+        }
+      }
+    }
+
+    // Also fetch markets closing soon (within 14 days) sorted by end date
     const closingSoonResponse = await fetch(
-      'https://gamma-api.polymarket.com/markets?closed=false&accepting_orders=true&order=endDate&ascending=true&limit=200',
+      'https://gamma-api.polymarket.com/markets?closed=false&accepting_orders=true&order=endDate&ascending=true&limit=500',
       {
         headers: { 'Accept': 'application/json' },
         cache: 'no-store',
       }
     )
 
-    const rawMarkets: GammaMarket[] = await response.json()
     const now = Date.now()
 
     // Merge closing-soon markets (deduplicated by id)
+    // Pre-filter: only include markets closing within 14 days to avoid diluting short-term pool
     if (closingSoonResponse.ok) {
       const closingSoonMarkets: GammaMarket[] = await closingSoonResponse.json()
       const existingIds = new Set(rawMarkets.map(m => m.id))
       for (const m of closingSoonMarkets) {
-        if (!existingIds.has(m.id)) {
-          rawMarkets.push(m)
-          existingIds.add(m.id)
+        // Only add if not already in our list AND closes within 14 days
+        if (!existingIds.has(m.id) && m.endDateIso) {
+          const daysToClose = Math.ceil((new Date(m.endDateIso).getTime() - now) / (1000 * 60 * 60 * 24))
+          if (daysToClose <= 14) {
+            rawMarkets.push(m)
+            existingIds.add(m.id)
+          }
         }
       }
     }
@@ -588,7 +625,7 @@ export async function GET() {
       }
       // Re-sort after research updates conviction scores
       recommendations.sort((a, b) => {
-        const tierOrder: Record<string, number> = { imminent: 0, 'closing-soon': 1, medium: 2, long: 3 }
+        const tierOrder: Record<string, number> = { pending: 0, imminent: 0, 'closing-soon': 1, medium: 2, long: 3 }
         const aTier = a.timeAnalysis?.tier || 'long'
         const bTier = b.timeAnalysis?.tier || 'long'
         if (tierOrder[aTier] !== tierOrder[bTier]) return tierOrder[aTier] - tierOrder[bTier]
@@ -598,7 +635,24 @@ export async function GET() {
     })()
 
     // Return ALL opportunities across all confidence levels — no artificial cap
-    const allOpportunities = recommendations.filter(r => r.convictionScore >= 30)
+    // Lower threshold for short-term markets (imminent/closing-soon) to surface more opportunities
+    const allOpportunities = recommendations.filter(r => {
+      // No-date markets (uncertain resolution) are shown as short-term opportunities
+      if (!r.market.endDateIso) return r.convictionScore >= 15
+      if (r.timeAnalysis?.tier === 'imminent') return r.convictionScore >= 10
+      if (r.timeAnalysis?.tier === 'closing-soon') return r.convictionScore >= 15
+      return r.convictionScore >= 30
+    })
+
+    // Hot Right Now: ALL markets closing within 3 days, sorted by volume24hr
+    // These are the most active trading opportunities RIGHT NOW — show everything regardless of conviction
+    const hotNowOpportunities = recommendations
+      .filter(r => {
+        if (!r.market.endDateIso) return false
+        const days = r.daysToClose
+        return days <= 3
+      })
+      .sort((a, b) => (b.market.volume24hr || 0) - (a.market.volume24hr || 0))
 
     const hotMarkets: PolymarketMarket[] = rawMarkets
       .filter(m => !m.negRisk && m.liquidityNum > 5000 && m.volumeNum > 50000)
@@ -634,16 +688,30 @@ export async function GET() {
         closingDate: rec.market.endDateIso ? new Date(rec.market.endDateIso).getTime() : Date.now() + 365 * 24 * 60 * 60 * 1000,
         daysToClose: rec.timeAnalysis?.daysToClose ?? 999,
       })),
+      // Hot Right Now: markets closing within 3 days, sorted by volume24hr
+      hotNowOpportunities: hotNowOpportunities.map(rec => ({
+        ...rec,
+        closingDate: rec.market.endDateIso ? new Date(rec.market.endDateIso).getTime() : Date.now() + 365 * 24 * 60 * 60 * 1000,
+        daysToClose: rec.timeAnalysis?.daysToClose ?? 999,
+      })),
+      // Include pending (no-date) and up to 14-day markets in closing-soon grouping
       closingSoonOpportunities: allOpportunities.filter(r =>
-        r.timeAnalysis?.tier === 'imminent' || r.timeAnalysis?.tier === 'closing-soon'
+        !r.market.endDateIso ||
+        r.timeAnalysis?.tier === 'pending' ||
+        r.timeAnalysis?.tier === 'imminent' || r.timeAnalysis?.tier === 'closing-soon' ||
+        (r.timeAnalysis?.daysToClose !== undefined && r.timeAnalysis.daysToClose <= 14)
       ),
       longTailOpportunities: allOpportunities.filter(r => r.longTail !== null),
       hotMarkets,
       stats: {
         marketsAnalyzed: rawMarkets.length,
         opportunitiesFound: allOpportunities.length,
+        // Count pending (no-date) and up to 14-day markets as closing-soon
         closingSoonCount: allOpportunities.filter(r =>
-          r.timeAnalysis?.tier === 'imminent' || r.timeAnalysis?.tier === 'closing-soon'
+          !r.market.endDateIso ||
+          r.timeAnalysis?.tier === 'pending' ||
+          r.timeAnalysis?.tier === 'imminent' || r.timeAnalysis?.tier === 'closing-soon' ||
+          (r.timeAnalysis?.daysToClose !== undefined && r.timeAnalysis.daysToClose <= 14)
         ).length,
         longTailCount: allOpportunities.filter(r => r.longTail !== null).length,
         highestConviction: allOpportunities[0]?.convictionScore || null,
@@ -655,7 +723,7 @@ export async function GET() {
   } catch (error) {
     console.error('Polymarket API error:', error)
     return NextResponse.json(
-      { success: false, error: 'Failed to fetch Polymarket data', opportunities: [], closingSoonOpportunities: [], longTailOpportunities: [], hotMarkets: [], stats: null },
+      { success: false, error: 'Failed to fetch Polymarket data', opportunities: [], hotNowOpportunities: [], closingSoonOpportunities: [], longTailOpportunities: [], hotMarkets: [], stats: null },
       { status: 500 }
     )
   }

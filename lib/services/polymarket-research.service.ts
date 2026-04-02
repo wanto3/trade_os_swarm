@@ -400,25 +400,19 @@ function scoreSpreadTier(spread: number): number {
 function scoreTimeEdge(tier: TimeTier, uncertainty: 'low' | 'medium' | 'high'): number {
   let base: number
   switch (tier) {
-    case 'imminent': base = 95
-      break
-    case 'closing-soon': base = 75
-      break
-    case 'medium': base = 55
-      break
-    case 'long': base = 35
-      break
+    case 'imminent': base = 95; break
+    case 'closing-soon': base = 75; break
+    case 'medium': base = 55; break
+    case 'long': base = 35; break
+    default: base = 50
   }
 
   // Adjust for uncertainty
-  let uncertaintyAdj: number
+  let uncertaintyAdj = 0
   switch (uncertainty) {
-    case 'low': uncertaintyAdj = 0
-      break
-    case 'medium': uncertaintyAdj = -10
-      break
-    case 'high': uncertaintyAdj = -20
-      break
+    case 'low': uncertaintyAdj = 0; break
+    case 'medium': uncertaintyAdj = -10; break
+    case 'high': uncertaintyAdj = -20; break
   }
 
   return Math.max(0, Math.min(100, base + uncertaintyAdj))

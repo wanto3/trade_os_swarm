@@ -9,10 +9,11 @@ interface StatusBarProps {
 }
 
 export function StatusBar({ lastUpdated, dataSource = 'coingecko' }: StatusBarProps) {
-  const [time, setTime] = useState(Date.now())
+  const [time, setTime] = useState(0)
   const [connected, setConnected] = useState(true)
 
   useEffect(() => {
+    setTime(Date.now())
     const id = setInterval(() => setTime(Date.now()), 1000)
     return () => clearInterval(id)
   }, [])

@@ -37,7 +37,7 @@ export default function VolatilityMeter() {
       lastUpdated={data?.timestamp ? new Date(data.timestamp).toLocaleTimeString() : undefined}
       onRefresh={fetchData}
       isLoading={loading}
-      accentColor={level === 'low' ? '#22c55e' : level === 'high' ? '#ef4444' : '#eab308'}
+      accentColor={level === 'low' ? '#3fb950' : level === 'high' ? '#f85149' : '#f0c000'}
     />
   )
 }

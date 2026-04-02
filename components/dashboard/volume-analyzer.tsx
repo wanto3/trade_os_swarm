@@ -36,7 +36,7 @@ export default function VolumeAnalyzer() {
       lastUpdated={data?.timestamp ? new Date(data.timestamp).toLocaleTimeString() : undefined}
       onRefresh={fetchData}
       isLoading={loading}
-      accentColor={level === 'high' ? '#22c55e' : level === 'low' ? '#ef4444' : '#eab308'}
+      accentColor={level === 'high' ? '#3fb950' : level === 'low' ? '#f85149' : '#f0c000'}
     />
   )
 }
