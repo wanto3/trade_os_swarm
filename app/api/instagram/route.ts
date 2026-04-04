@@ -25,6 +25,63 @@ interface InstagramProfile {
   lastUpdated: number
 }
 
+// Embedded fallback data — used when gstack isn't available (e.g., Vercel serverless)
+const EMBEDDED_PROFILE: InstagramProfile = {
+  handle: 'trutrdr',
+  displayName: 'Andrii Trushkovskyi',
+  bio: 'TRU THE TRADER 🏆WE KNOW WHEN TO BUY 💰 Crypto predictions! Next buying opportunity: Dec 17-18. Big peak: April-June 2026. Bottom of the bottom: Nov 2026. Save this!',
+  predictions: [
+    'Next buying opportunity: Dec 17-18',
+    'Big peak: April-June 2026',
+    'Bottom of the bottom: Nov 2026',
+    'March 26th',
+    'April 2nd',
+    'December 20',
+  ],
+  followers: '144K',
+  postsCount: '1,146',
+  posts: [
+    {
+      caption: "They're trying to scare retail investors with news of war and energy crises. Don't let fear dictate your financial decisions. Stay informed, not afraid.",
+      hashtags: ['#MarketNews', '#FearMongering', '#RetailInvesting', '#FinancialLiteracy', '#StayInformed', '#InvestmentTips', '#TradingPsychology', '#MarketAnalysis'],
+      type: 'reel',
+    },
+    {
+      caption: 'Last bought XRP? Who remembers. Pouring more money in, changing the sign. Let\'s see if the reaction is better next time. Mid-summer revisit.',
+      hashtags: ['#XRP', '#CryptoInvesting', '#HODL', '#Altcoins', '#CryptoNews', '#Blockchain', '#DigitalAssets', '#ToTheMoon'],
+      type: 'post',
+    },
+    {
+      caption: 'War as a smokescreen. Blame conflict, not incompetence. Manipulating markets and minds. See through the illusion.',
+      hashtags: ['#EconomicTruth', '#MarketManipulation', '#Geopolitics', '#FinancialLiteracy', '#TruthSeeker', '#WarProfiteering', '#MediaBias', '#ReelsOfTruth'],
+      type: 'reel',
+    },
+    {
+      caption: 'Open positions on the 15-minute timeframe. Choose an asset, open the trade. If in profit, share half the gains. Simple and effective.',
+      hashtags: ['#TradingStrategy', '#DayTrading', '#ForexTrading', '#CryptoTrading', '#InvestmentTips', '#TradingGoals', '#MarketAnalysis', '#ReelsTrading'],
+      type: 'reel',
+    },
+  ],
+  recentReels: [
+    {
+      caption: "They're trying to scare retail investors with news of war and energy crises. Don't let fear dictate your financial decisions. Stay informed, not afraid.",
+      hashtags: ['#MarketNews', '#FearMongering', '#RetailInvesting', '#FinancialLiteracy', '#StayInformed', '#InvestmentTips', '#TradingPsychology', '#MarketAnalysis'],
+      type: 'reel',
+    },
+    {
+      caption: 'War as a smokescreen. Blame conflict, not incompetence. Manipulating markets and minds. See through the illusion.',
+      hashtags: ['#EconomicTruth', '#MarketManipulation', '#Geopolitics', '#FinancialLiteracy', '#TruthSeeker', '#WarProfiteering', '#MediaBias', '#ReelsOfTruth'],
+      type: 'reel',
+    },
+    {
+      caption: 'Open positions on the 15-minute timeframe. Choose an asset, open the trade. If in profit, share half the gains. Simple and effective.',
+      hashtags: ['#TradingStrategy', '#DayTrading', '#ForexTrading', '#CryptoTrading', '#InvestmentTips', '#TradingGoals', '#MarketAnalysis', '#ReelsTrading'],
+      type: 'reel',
+    },
+  ],
+  lastUpdated: Date.now(),
+}
+
 function readCache(): Map<string, InstagramProfile> {
   try {
     if (existsSync(CACHE_FILE)) {
@@ -128,7 +185,7 @@ function extractProfileData(raw: string, handle: string): InstagramProfile {
     [/(?:Phase\s*\d[^.,\n]{0,40}|Phase\s*\d)/gi, 'Phase'],
   ]
 
-  for (const [pat, label] of predPatterns) {
+  for (const [pat] of predPatterns) {
     const matches = bioForPred.match(pat) || []
     for (const m of Array.from(new Set(matches))) {
       const clean = m.trim().slice(0, 60)
@@ -143,18 +200,6 @@ function extractProfileData(raw: string, handle: string): InstagramProfile {
   const dates = text.match(datePattern) || []
   for (const d of Array.from(new Set(dates))) {
     if (!predictions.some(p => p.includes(d))) predictions.push(d)
-  }
-
-  // Extract hard-coded predictions from bio
-  const bioPreds = [
-    'Next buying opportunity: Dec 17-18',
-    'Big peak: April-June 2026',
-    'Bottom of the bottom: Nov 2026',
-  ]
-  for (const p of bioPreds) {
-    if (bio.includes(p.split(':')[0]) && !predictions.includes(p)) {
-      predictions.push(p)
-    }
   }
 
   // Parse post/reel captions from text
@@ -180,21 +225,6 @@ function extractProfileData(raw: string, handle: string): InstagramProfile {
       hashtags: ['#TradingStrategy', '#DayTrading', '#ForexTrading', '#CryptoTrading', '#InvestmentTips', '#TradingGoals', '#MarketAnalysis', '#ReelsTrading'],
       type: 'reel',
     },
-    {
-      caption: 'Remember those dates? March 26th, April 2nd... leading up to the end of June. A timeline of moments unfolding.',
-      hashtags: ['#Timeline', '#KeyDates', '#MonthlyRecap', '#ImportantMoments', '#Calendar', '#SaveTheDate', '#MarkYourCalendar'],
-      type: 'post',
-    },
-    {
-      caption: 'Learn to decode the stories controlling perception. How news shapes what we believe and how markets move. It\'s not always what it seems.',
-      hashtags: ['#MediaLiteracy', '#FinancialLiteracy', '#CriticalThinking', '#InvestigativeJournalism', '#NarrativeControl', '#PublicPerception', '#MarketAnalysis', '#InformationWars'],
-      type: 'reel',
-    },
-    {
-      caption: 'Coincidence or connection? Global interests often seem too intertwined in financial and political events. What if it\'s more than luck?',
-      hashtags: ['#GlobalEvents', '#FinancialMarkets', '#Geopolitics', '#Interconnectedness', '#Conspiracy', '#MarketAnalysis', '#WorldNews'],
-      type: 'post',
-    },
   ]
 
   for (const block of captionBlocks) {
@@ -211,25 +241,52 @@ function extractProfileData(raw: string, handle: string): InstagramProfile {
     bio,
     predictions,
     followers: followers || '144K',
-    postsCount: postsCount || '1,143',
+    postsCount: postsCount || '1,146',
     posts,
     recentReels,
     lastUpdated: Date.now(),
   }
 }
 
-export async function GET() {
-  try {
-    // Check cache first
-    const cache = readCache()
-    const cached = cache.get('trutrdr')
-    if (cached && (Date.now() - cached.lastUpdated) < CACHE_TTL_MS) {
-      return NextResponse.json({ success: true, source: 'cache', profile: cached, cachedAt: new Date(cached.lastUpdated).toISOString() })
-    }
+function serveInstagramCached(): { success: boolean; source: string; profile: InstagramProfile } {
+  // 1. Check filesystem cache (works locally and if deployed)
+  const cache = readCache()
+  const cached = cache.get('trutrdr')
+  if (cached) {
+    return { success: true, source: 'file-cache', profile: cached }
+  }
 
-    // Try to get text from current page first (might already be on Instagram)
+  // 2. Use embedded fallback data (always available on serverless)
+  return { success: true, source: 'embedded', profile: { ...EMBEDDED_PROFILE, lastUpdated: Date.now() } }
+}
+
+export async function GET() {
+  // Step 1: Try filesystem cache or embedded fallback — no gstack needed
+  const cachedResult = serveInstagramCached()
+  if (cachedResult.source === 'file-cache' && cachedResult.profile) {
+    const profile = cachedResult.profile
+    if ((Date.now() - profile.lastUpdated) < CACHE_TTL_MS) {
+      return NextResponse.json({ success: true, source: 'cache', profile, cachedAt: new Date(profile.lastUpdated).toISOString() })
+    }
+  }
+
+  // Step 2: Try to use gstack for live data (only if available — local dev)
+  if (!existsSync(GSTACK_BIN)) {
+    // gstack not available — serve embedded or file cache as fallback
+    if (cachedResult.success && cachedResult.profile) {
+      return NextResponse.json({
+        success: true,
+        source: cachedResult.source === 'file-cache' ? 'stale-cache' : 'embedded',
+        profile: { ...cachedResult.profile, lastUpdated: Date.now() },
+        warning: 'Live scrape unavailable — using cached data',
+      })
+    }
+    return NextResponse.json({ success: false, error: 'Instagram data unavailable and gstack not found' }, { status: 503 })
+  }
+
+  // Step 3: Try gstack scrape
+  try {
     let rawText = await runGstackChain([['text']])
-    // If content looks like wrong page, navigate to Instagram
     if (!rawText.includes('trutrdr') && !rawText.includes('Andrii')) {
       rawText = await runGstackChain([
         ['goto', 'https://www.instagram.com/trutrdr/'],
@@ -239,33 +296,27 @@ export async function GET() {
     }
 
     if (!rawText || rawText.length < 100) {
-      return NextResponse.json({ success: false, error: 'Empty response from browser' }, { status: 500 })
+      throw new Error('Empty response from browser')
     }
 
     const profile = extractProfileData(rawText, 'trutrdr')
 
     // Update cache
+    const cache = readCache()
     cache.set('trutrdr', profile)
     writeCache(cache)
 
-    return NextResponse.json({
-      success: true,
-      source: 'live',
-      profile,
-      fetchedAt: new Date().toISOString(),
-    })
+    return NextResponse.json({ success: true, source: 'live', profile, fetchedAt: new Date().toISOString() })
   } catch (err) {
     console.error('Instagram scrape error:', err)
 
     // Fallback to cache on error
-    const cache = readCache()
-    const cached = cache.get('trutrdr')
-    if (cached) {
+    if (cachedResult.success && cachedResult.profile) {
       return NextResponse.json({
         success: true,
-        source: 'stale-cache',
-        profile: cached,
-        warning: 'Using cached data due to scrape error: ' + String(err),
+        source: cachedResult.source === 'file-cache' ? 'stale-cache' : 'embedded',
+        profile: { ...cachedResult.profile, lastUpdated: Date.now() },
+        warning: 'Live scrape failed — using cached data: ' + String(err),
       })
     }
 
