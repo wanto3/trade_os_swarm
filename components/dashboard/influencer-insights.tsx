@@ -441,21 +441,32 @@ export default function InfluencerInsights() {
     setLoading(true)
     setError(null)
     try {
-      // Fetch YouTube and Instagram in parallel
-      const [ytRes, igRes] = await Promise.all([
+      // Fetch YouTube and Instagram in parallel — each is independent
+      const [ytRes, igRes] = await Promise.allSettled([
         fetch('/api/influencer', { cache: 'no-store' }),
         fetch('/api/instagram', { cache: 'no-store' }),
       ])
-      const ytJson: ApiResponse = await ytRes.json()
-      const igJson: InstagramApiResponse = await igRes.json()
-      if (ytJson.success) {
-        setData(ytJson)
-        setLastFetched(Date.now())
+
+      // YouTube data — required for section to show
+      if (ytRes.status === 'fulfilled' && ytRes.value.ok) {
+        const ytJson: ApiResponse = await ytRes.value.json()
+        if (ytJson.success) {
+          setData(ytJson)
+          setLastFetched(Date.now())
+        } else {
+          setError(ytJson.error || 'Failed to fetch influencer insights')
+        }
       } else {
-        setError(ytJson.error || 'Failed to fetch influencer insights')
+        const reason = ytRes.status === 'rejected' ? String(ytRes.reason) : `HTTP ${ytRes.value.status}`
+        setError(`YouTube API error: ${reason}`)
       }
-      if (igJson.success) {
-        setIgData(igJson)
+
+      // Instagram data — optional, can fall back to cache
+      if (igRes.status === 'fulfilled' && igRes.value.ok) {
+        const igJson: InstagramApiResponse = await igRes.value.json()
+        if (igJson.success) {
+          setIgData(igJson)
+        }
       }
     } catch (e) {
       setError(String(e))
@@ -534,7 +545,7 @@ export default function InfluencerInsights() {
 
       {/* Content */}
       <div style={{ padding: '0.75rem' }}>
-        {loading && !data ? (
+        {loading && !data && !igData?.success ? (
           <div style={{
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             height: '180px', color: '#6e7681', fontSize: '0.72rem', gap: '8px',
@@ -542,21 +553,7 @@ export default function InfluencerInsights() {
             <RefreshCw size={14} style={{ animation: 'spin 1s linear infinite' }} />
             Analyzing latest videos...
           </div>
-        ) : error ? (
-          <div style={{
-            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-            height: '140px', gap: '8px', color: '#6e7681',
-          }}>
-            <div style={{ fontSize: '0.68rem', color: '#f85149' }}>Failed to load</div>
-            <button onClick={fetchData} style={{
-              background: 'rgba(63,185,80,0.1)', border: '1px solid rgba(63,185,80,0.3)',
-              borderRadius: '6px', padding: '5px 12px', cursor: 'pointer',
-              color: '#3fb950', fontSize: '0.58rem', fontWeight: 600,
-            }}>
-              Retry
-            </button>
-          </div>
-        ) : data ? (
+        ) : (data || igData?.success) ? (
           <>
             {/* Instagram Section */}
             {igData?.success && igData.profile && (
@@ -580,6 +577,11 @@ export default function InfluencerInsights() {
                     <span style={{ fontSize: '0.5rem', color: '#484f58' }}>
                       {igData.profile.followers} followers · {igData.profile.postsCount} posts
                     </span>
+                    {igData.source === 'stale-cache' && (
+                      <span style={{ fontSize: '0.42rem', color: '#f0c000', background: 'rgba(240,192,0,0.1)', border: '1px solid rgba(240,192,0,0.2)', borderRadius: '3px', padding: '1px 4px' }}>
+                        cached
+                      </span>
+                    )}
                   </div>
                   <a href={`https://instagram.com/${igData.profile.handle}/`} target='_blank' rel='noopener noreferrer'
                     style={{ textDecoration: 'none', color: '#6e7681', fontSize: '0.5rem', display: 'flex', alignItems: 'center', gap: '3px' }}>
@@ -672,36 +674,60 @@ export default function InfluencerInsights() {
               </div>
             )}
 
-            {/* YouTube Videos */}
-            <div style={{ marginTop: igData?.success ? '0.5rem' : 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '0.5rem' }}>
-                <div style={{
-                  width: 18, height: 18, borderRadius: '5px',
-                  background: 'linear-gradient(135deg, #ff0000 0%, #cc0000 100%)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}>
-                  <Play size={10} fill='#fff' color='#fff' style={{ marginLeft: '1px' }} />
+            {/* YouTube Videos — requires YouTube API to succeed */}
+            {data ? (
+              <div style={{ marginTop: igData?.success ? '0.5rem' : 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '0.5rem' }}>
+                  <div style={{
+                    width: 18, height: 18, borderRadius: '5px',
+                    background: 'linear-gradient(135deg, #ff0000 0%, #cc0000 100%)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    <Play size={10} fill='#fff' color='#fff' style={{ marginLeft: '1px' }} />
+                  </div>
+                  <span style={{ fontSize: '0.58rem', fontWeight: 600, color: '#6e7681' }}>
+                    Latest Videos ({data.videos.length})
+                  </span>
                 </div>
-                <span style={{ fontSize: '0.58rem', fontWeight: 600, color: '#6e7681' }}>
-                  Latest Videos ({data.videos.length})
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(270px, 1fr))',
+                  gap: '0.75rem',
+                }}>
+                  {data.videos.map((video, i) => (
+                    <VideoCard key={video.id} video={video} isLatest={i === 0} />
+                  ))}
+                </div>
+              </div>
+            ) : igData?.success && (
+              <div style={{ marginTop: '0.5rem', padding: '0.5rem', background: 'rgba(42,42,74,0.2)', borderRadius: '6px', border: '1px solid rgba(42,42,74,0.4)' }}>
+                <span style={{ fontSize: '0.58rem', color: '#6e7681' }}>
+                  Instagram data loaded. YouTube videos unavailable — check API keys.
                 </span>
               </div>
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(270px, 1fr))',
-                gap: '0.75rem',
-              }}>
-                {data.videos.map((video, i) => (
-                  <VideoCard key={video.id} video={video} isLatest={i === 0} />
-                ))}
-              </div>
-            </div>
+            )}
           </>
-        ) : null}
+        ) : (
+          <div style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            height: '140px', gap: '8px', color: '#6e7681',
+          }}>
+            <div style={{ fontSize: '0.68rem', color: '#f85149' }}>
+              {error || 'Failed to load influencer insights'}
+            </div>
+            <button onClick={fetchData} style={{
+              background: 'rgba(63,185,80,0.1)', border: '1px solid rgba(63,185,80,0.3)',
+              borderRadius: '6px', padding: '5px 12px', cursor: 'pointer',
+              color: '#3fb950', fontSize: '0.58rem', fontWeight: 600,
+            }}>
+              Retry
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Footer */}
-      {!loading && data && (
+      {!loading && (data || igData?.success) && (
         <div style={{
           padding: '0.35rem 0.75rem',
           borderTop: '1px solid rgba(42,42,74,0.4)',
@@ -710,10 +736,12 @@ export default function InfluencerInsights() {
         }}>
           <span>AI from video descriptions + Instagram bio — verify all claims</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <a href={data.channelUrl} target='_blank' rel='noopener noreferrer'
-              style={{ color: '#6e7681', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '3px' }}>
-              YouTube <ExternalLink size={7} />
-            </a>
+            {data ? (
+              <a href={data.channelUrl} target='_blank' rel='noopener noreferrer'
+                style={{ color: '#6e7681', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                YouTube <ExternalLink size={7} />
+              </a>
+            ) : null}
             {igData?.success && (
               <a href={`https://instagram.com/${igData.profile.handle}/`} target='_blank' rel='noopener noreferrer'
                 style={{ color: '#6e7681', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '3px' }}>

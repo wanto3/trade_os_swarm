@@ -227,14 +227,6 @@ export async function GET() {
       return NextResponse.json({ success: true, source: 'cache', profile: cached, cachedAt: new Date(cached.lastUpdated).toISOString() })
     }
 
-    // Check gstack binary
-    if (!existsSync(GSTACK_BIN)) {
-      return NextResponse.json({
-        success: false,
-        error: 'gstack browser not found. Run the browse skill first.',
-      })
-    }
-
     // Try to get text from current page first (might already be on Instagram)
     let rawText = await runGstackChain([['text']])
     // If content looks like wrong page, navigate to Instagram
