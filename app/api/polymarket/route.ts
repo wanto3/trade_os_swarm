@@ -701,7 +701,14 @@ export async function GET() {
       const evidenceBonus = Math.min(5, (analysis.evidenceCount || 0) * 2)
 
       rec.convictionScore = Math.min(100, baseScore + edgeBonus + evidenceBonus)
-      rec.convictionLabel = rec.convictionScore >= 90 ? 'no-brainer' : rec.convictionScore >= 75 ? 'high' : rec.convictionScore >= 55 ? 'consider' : 'risky'
+      // Only label "high" if LLM confirmed shouldBet=true + confidence=high
+      if (analysis.shouldBet && analysis.confidence === 'high' && rec.convictionScore >= 80) {
+        rec.convictionLabel = 'high'
+      } else if (analysis.shouldBet && analysis.confidence === 'medium' && rec.convictionScore >= 60) {
+        rec.convictionLabel = 'consider'
+      } else {
+        rec.convictionLabel = 'risky'
+      }
       rec.safetyScore = rec.convictionScore
 
       // Update upside string with real data
@@ -736,7 +743,7 @@ export async function GET() {
     // Adjust fake scores down for UNANALYZED markets so they never outrank real LLM ones
     for (const rec of recommendations) {
       if (!llmResults.has(rec.market.question)) {
-        rec.convictionScore = Math.min(rec.convictionScore, 40) // cap unanalyzed at 40
+        rec.convictionScore = Math.min(rec.convictionScore, 30) // cap unanalyzed at 30
         rec.safetyScore = rec.convictionScore
         rec.confidence = 'low' // ensure the UI badge turns grey/low
         if (rec.convictionLabel === 'no-brainer' || rec.convictionLabel === 'high') {
