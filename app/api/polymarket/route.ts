@@ -356,8 +356,10 @@ function scoreMarket(market: GammaMarket): TradeRecommendation | null {
     const ev = (estimatedProb - marketProb) / (1 - marketProb)
     const evPct = ev * 100
 
-    // Conservative: minimum 5% EV for all markets — no time-tier shortcuts
-    const evThreshold = 0.05
+    // Zero EV threshold here — let all markets pass through to the LLM stage.
+    // The LLM provides the real evidence-based estimate; pre-LLM we just have marketProb + 0 bias.
+    // The 5% EV filter is applied AFTER the LLM updates the estimate (in the response filter).
+    const evThreshold = 0
     if (evPct < evThreshold || evPct > 50) continue
 
     const safetyScore = calculateSafetyScore(market, estimatedProb, marketProb, isImminent || isClosingSoon)
@@ -683,7 +685,15 @@ export async function GET() {
 
       // Replace fake estimates with real LLM analysis
       rec.estimatedProbability = analysis.estimatedProbability
-      rec.expectedValue = (analysis.estimatedProbability - rec.odds) / (1 - rec.odds)
+
+      // Direction-aware EV: when LLM recommends betting NO, compute EV for the NO side
+      if (analysis.direction === 'no') {
+        const noOdds = 1 - rec.odds
+        const noEstimate = 1 - analysis.estimatedProbability
+        rec.expectedValue = (noEstimate - noOdds) / (1 - noOdds)
+      } else {
+        rec.expectedValue = (analysis.estimatedProbability - rec.odds) / (1 - rec.odds)
+      }
       rec.reasoning = analysis.reasoning
       rec.timeAnalysis = timeAnalysis
       rec.confidence = analysis.confidence
@@ -766,10 +776,10 @@ export async function GET() {
     })
 
     // Return ALL researched opportunities — no artificial conviction cap
-    // Research is now synchronous (waits for completion), so every returned opportunity
-    // has a full research-backed conviction score. EV > 0 is the only filter.
+    // Show any opportunity with positive EV after LLM analysis.
+    // Low-edge trades (EV < 5%) will still appear but with "risky" conviction label.
+    // The LLM's confidence and shouldBet flags are the real quality gate.
     const allOpportunities = recommendations.filter(r => {
-      // Only filter out negative EV (market is priced fairly or worse than our estimate)
       if (r.expectedValue <= 0) return false
       return true
     })
