@@ -136,7 +136,7 @@ function extractSportsEntities(question: string): ExtractedSportsEntities {
   // Infer sport from keywords
   if (/\b(nba|basketball|mvp|playoffs|finals)\b/i.test(question)) sport = 'basketball'
   else if (/\b(nfl|football|super bowl|playoffs)\b/i.test(question)) sport = 'football'
-  else if (/\b(nhl|hockey|staley cup)\b/i.test(question)) sport = 'hockey'
+  else if (/\b(nhl|hockey|Stanley cup)\b/i.test(question)) sport = 'hockey'
   else if (/\b(fifa|world cup|soccer|football|match)\b/i.test(question)) sport = 'soccer'
   else if (/\b(mlb|baseball|world series)\b/i.test(question)) sport = 'baseball'
   else if (/\b(golf|masters|pga)\b/i.test(question)) sport = 'golf'
@@ -335,7 +335,7 @@ async function searchGoogleNews(query: string): Promise<WebFinding[]> {
           findings.push({
             text: combined.substring(0, 400),
             source: 'news',
-            url: links[i] || undefined,
+            url: i < links.length ? links[i] : undefined,
           })
         }
       }
