@@ -29,13 +29,26 @@ export function PricePanel() {
   const fetchPrices = async () => {
     try {
       setError(null)
-      const response = await fetch('/api/prices')
-      const result: ApiPriceResponse = await response.json()
+      // Fetch BTC from TA service
+      const btcRes = await fetch('/api/prices?symbol=BTCUSDT&interval=1h')
+      const btcJson = await btcRes.json()
+      const btcPrice = btcJson.price ? { symbol: 'BTC', price: btcJson.price, change24h: btcJson.change24h, volume24h: 0, marketCap: 0, timestamp: btcJson.timestamp } : null
 
-      if (result.success && result.data) {
-        setPrices(result.data)
+      // Fetch ETH, SOL, ADA, DOT from CoinGecko
+      const cgRes = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum,solana,cardano,dogecoin&vs_currencies=usd&include_24hr_change=true')
+      const cgJson = await cgRes.json()
+
+      const fetched: ApiPrice[] = []
+      if (btcPrice) fetched.push(btcPrice as ApiPrice)
+      if (cgJson.ethereum) fetched.push({ symbol: 'ETH', price: cgJson.ethereum.usd, change24h: cgJson.ethereum.usd_24h_change ?? 0, volume24h: 0, marketCap: 0, timestamp: Date.now() })
+      if (cgJson.solana) fetched.push({ symbol: 'SOL', price: cgJson.solana.usd, change24h: cgJson.solana.usd_24h_change ?? 0, volume24h: 0, marketCap: 0, timestamp: Date.now() })
+      if (cgJson.cardano) fetched.push({ symbol: 'ADA', price: cgJson.cardano.usd, change24h: cgJson.cardano.usd_24h_change ?? 0, volume24h: 0, marketCap: 0, timestamp: Date.now() })
+      if (cgJson.dogecoin) fetched.push({ symbol: 'DOGE', price: cgJson.dogecoin.usd, change24h: cgJson.dogecoin.usd_24h_change ?? 0, volume24h: 0, marketCap: 0, timestamp: Date.now() })
+
+      if (fetched.length > 0) {
+        setPrices(fetched)
       } else {
-        setError(result.error || 'Failed to fetch prices')
+        setError('Failed to fetch prices')
       }
     } catch (err) {
       setError('Network error')

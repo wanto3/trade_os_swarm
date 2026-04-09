@@ -1,26 +1,26 @@
 export interface CryptoPrice {
-  id: string
   symbol: string
-  name: string
   price: number
   change24h: number
-  marketCap: number
   volume24h: number
-  sparkline?: number[]
-  lastUpdate: string
+  marketCap: number
+  timestamp: number
+}
+
+export interface TechnicalIndicator {
+  name: string
+  value: number
+  signal: 'bullish' | 'bearish' | 'neutral'
+  confidence: number
 }
 
 export interface TradingSignal {
-  id: string
   symbol: string
-  signal: "bullish" | "bearish" | "neutral"
-  confidence: number // 0-100
-  timeframe: string // e.g., "1H", "4H", "1D"
+  action: 'BUY' | 'SELL' | 'HOLD'
+  confidence: number
   reasons: string[]
-  entryPrice?: number
-  targets?: number[]
-  stopLoss?: number
-  timestamp: string
+  indicators: TechnicalIndicator[]
+  timestamp: number
 }
 
 export interface Position {

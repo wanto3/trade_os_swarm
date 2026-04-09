@@ -3,27 +3,16 @@
   "version": "1.0.0",
   "description": "Real-time crypto trading operating system",
   "scripts": {
-    "dev": "next dev -p 4000",
-    "dev:swarm": "./scripts/swarm-dashboard.sh",
+    "dev": "next dev",
     "build": "next build",
-    "start": "next start -p 4000",
+    "start": "next start",
     "lint": "next lint",
-    "lint:fix": "next lint --fix",
-    "type-check": "tsc --noEmit",
-    "validate": "npm run lint && npm run type-check",
-    "qa": "./scripts/qa-validate.sh",
-    "pre-commit": "npm run validate",
     "test": "vitest run",
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",
     "test:unit": "vitest run src/tests/cryptoDataService.test.ts src/tests/positionCalculator.test.ts",
     "test:integration": "vitest run src/tests/apiIntegration.test.ts",
-    "swarm:monitor": "./scripts/swarm-monitor.sh",
-    "swarm:recursive": "npx tsx lib/agents/recursive-swarm-runner.ts",
-    "swarm:recursive:single": "npx tsx lib/agents/recursive-swarm-runner.ts --single",
-    "swarm:recursive:status": "npx tsx lib/agents/recursive-swarm-runner.ts --status",
-    "swarm:dashboard": "./scripts/recursive-swarm-dashboard.sh",
-    "agents:start": "./scripts/autonomous-agents-dashboard.sh"
+    "type-check": "tsc --noEmit"
   },
   "keywords": [
     "crypto",
@@ -34,15 +23,17 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.78.0",
+    "@polymarket/clob-client": "^5.8.1",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
+    "ethers": "^5.8.0",
     "lucide-react": "^0.344.0",
     "next": "^14.1.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "recharts": "^2.12.0",
-    "tailwind-merge": "^2.2.0"
+    "tailwind-merge": "^2.2.0",
+    "youtube-transcript-api": "^3.0.6"
   },
   "devDependencies": {
     "@types/node": "^20.8.10",

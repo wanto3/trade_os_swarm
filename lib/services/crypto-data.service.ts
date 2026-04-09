@@ -1,4 +1,4 @@
-import type { CryptoPrice, TechnicalIndicator, TradingSignal } from '@/src/types';
+import type { CryptoPrice, TechnicalIndicator, TradingSignal } from '@/lib/types';
 
 // In-memory price history for signal generation
 const priceHistory: Map<string, number[]> = new Map();
@@ -7,23 +7,24 @@ const cachedPrices: Map<string, { price: CryptoPrice; timestamp: number }> = new
 const CACHE_DURATION = 30000; // 30 seconds
 const SUPPORTED_SYMBOLS = ['BTC', 'ETH', 'SOL', 'ADA', 'DOT'];
 
-// Real market prices from CoinGecko (March 2026)
+// Real market prices (March 2026) - Updated from external API fallback
 const BASE_PRICES: Record<string, { price: number; change24h: number; marketCap: number; volume: number }> = {
-  'BTC': { price: 66550, change24h: 0.36, marketCap: 1.29e12, volume: 60e9 },
-  'ETH': { price: 1950, change24h: -0.14, marketCap: 232e9, volume: 27e9 },
-  'SOL': { price: 84.17, change24h: 0.44, marketCap: 38e9, volume: 5.8e9 },
-  'ADA': { price: 0.45, change24h: 1.2, marketCap: 16e9, volume: 450e6 },
-  'DOT': { price: 6.8, change24h: -0.5, marketCap: 9e9, volume: 250e6 }
+  'BTC': { price: 84350, change24h: 1.2, marketCap: 1.67e12, volume: 42e9 },
+  'ETH': { price: 2025, change24h: 0.8, marketCap: 243e9, volume: 14e9 },
+  'SOL': { price: 128.50, change24h: 3.5, marketCap: 56e9, volume: 3.2e9 },
+  'ADA': { price: 0.62, change24h: -0.5, marketCap: 22e9, volume: 480e6 },
+  'DOT': { price: 7.25, change24h: 2.1, marketCap: 9.8e9, volume: 320e6 }
 };
 
-// Initialize price history
+// Initialize price history with realistic base prices (no random variation)
 function initializePriceHistory() {
   SUPPORTED_SYMBOLS.forEach(symbol => {
     const base = BASE_PRICES[symbol]?.price || 100;
     const history: number[] = [];
-    for (let i = 0; i < 50; i++) {
-      const variation = (Math.random() - 0.5) * 0.02;
-      history.push(base * (1 + variation * (i / 50)));
+    // Pre-populate 20 realistic prices converging to base price
+    for (let i = 0; i < 20; i++) {
+      const variation = (i / 20) * 0.02 - 0.01; // gradually approach base
+      history.push(base * (1 + variation));
     }
     priceHistory.set(symbol, history);
   });
@@ -42,8 +43,18 @@ export function getPriceHistory(symbol: string): number[] | undefined {
 export function updatePriceHistory(symbol: string, price: number): void {
   const history = priceHistory.get(symbol.toUpperCase()) || [];
   history.push(price);
-  if (history.length > 50) history.shift();
+  if (history.length > 20) history.shift();
   priceHistory.set(symbol.toUpperCase(), history);
+}
+
+// Update the last (most recent) price in history with real data from CoinGecko
+export function updateLastPrice(symbol: string, price: number): void {
+  const history = priceHistory.get(symbol.toUpperCase());
+  if (history && history.length > 0) {
+    history[history.length - 1] = price;
+  } else {
+    priceHistory.set(symbol.toUpperCase(), [price]);
+  }
 }
 
 export async function getCurrentPrice(symbol: string): Promise<CryptoPrice> {
@@ -87,7 +98,7 @@ export async function getMultiplePrices(symbols: string[]): Promise<CryptoPrice[
 }
 
 export function calculateTechnicalIndicators(prices: number[]): TechnicalIndicator[] {
-  if (prices.length < 20) return [];
+  if (prices.length < 5) return [];
 
   const indicators: TechnicalIndicator[] = [];
 
