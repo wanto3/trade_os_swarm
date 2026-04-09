@@ -949,6 +949,17 @@ export async function scoreMarketPipeline(
 
 // ─── Kelly Bet Calculator (duplicated from route.ts for self-containment) ──
 
+// ─── Order Book Imbalance (stub — Polymarket CLOB API) ──────────────────────
+
+export async function fetchOrderBookImbalance(
+  marketId: string
+): Promise<{ imbalance: number; momentum: 'up' | 'down' | 'neutral' } | null> {
+  // TODO: integrate with Polymarket CLOB client for real order book data
+  // For now, return null (no signal) — the pipeline gracefully handles missing data
+  void marketId
+  return null
+}
+
 function calculateKellyBet(bankroll: number, estimatedProb: number, marketProb: number): { kellyFraction: number; halfKelly: number; quarterKelly: number } {
   const decimalOdds = (1 / marketProb) - 1
   if (decimalOdds <= 0 || estimatedProb <= 0) return { kellyFraction: 0, halfKelly: 0, quarterKelly: 0 }

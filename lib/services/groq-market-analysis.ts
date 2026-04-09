@@ -210,6 +210,7 @@ Compare your estimate to market price:
 - 10%+ higher than market → YES is mispriced → consider YES
 - 10%+ lower than market → NO is mispriced → consider NO
 - Evidence weak or mixed → SKIP
+- NEAR-CERTAIN EXCEPTION: If market is >90% or <10%, a 2%+ edge is meaningful (e.g., market 95%, you estimate 97%+ → YES). These bets have high win rates.
 
 Confidence levels:
 - HIGH: Strong specific evidence on one side clearly outweighs the other AND estimate differs from market by 10%+
@@ -299,7 +300,11 @@ export async function analyzeMarketWithLLM(
     }
 
     // Rule 3: Force SKIP if edge is tiny (not worth fees/spread)
-    if (edgeSize < 0.05) {
+    // Near-certain markets (>90% or <10%) have tighter margins but higher win rates,
+    // so allow a lower edge threshold of 2% for these
+    const isNearCertain = market.currentPrice >= 0.90 || market.currentPrice <= 0.10
+    const minEdge = isNearCertain ? 0.02 : 0.05
+    if (edgeSize < minEdge) {
       result.shouldBet = false
       result.direction = 'skip'
     }
@@ -347,7 +352,7 @@ export async function analyzeMarketsBatch(
   evidenceMap: Map<string, CategoryEvidence>
 ): Promise<Map<string, LLMMarketAnalysis>> {
   const results = new Map<string, LLMMarketAnalysis>()
-  const DELAY_MS = 3000  // 3s between LLM calls for Groq rate limit
+  const DELAY_MS = 1500  // 1.5s between LLM calls (Groq handles burst well)
 
   console.log(`[Groq Analysis] Processing ${markets.length} markets with pre-gathered evidence...`)
 
