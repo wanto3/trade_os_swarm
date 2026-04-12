@@ -1,0 +1,10 @@
+{
+  "enabled": false,
+  "kellyMode": "quarter",
+  "confidenceFilter": "high",
+  "maxOpenPositions": 5,
+  "maxBetSizePercent": 10,
+  "startingBankroll": 1000,
+  "lastPoll": null,
+  "lastPlacement": null
+}

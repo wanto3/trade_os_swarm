@@ -618,7 +618,10 @@ export function PolymarketSection() {
 
   // ── Derived data ─────────────────────────────────────────────────────────────
 
-  const opportunities = data?.opportunities ?? []
+  // Use opportunities if available, fall back to hotNowOpportunities for display
+  const opportunities = (data?.opportunities?.length ?? 0) > 0
+    ? data!.opportunities
+    : data?.hotNowOpportunities ?? []
   const filtered = applyMultiSort(opportunities).filter(rec => {
     if (filterKey === 'high') return rec.confidence === 'high'
     if (filterKey === 'medium') return rec.confidence === 'medium'

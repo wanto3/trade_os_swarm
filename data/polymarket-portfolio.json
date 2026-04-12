@@ -1,0 +1,10 @@
+{
+  "bankroll": 1000,
+  "startingBankroll": 1000,
+  "totalPnl": 0,
+  "totalTrades": 0,
+  "wonTrades": 0,
+  "lostTrades": 0,
+  "positions": [],
+  "lastUpdate": 1776019061885
+}

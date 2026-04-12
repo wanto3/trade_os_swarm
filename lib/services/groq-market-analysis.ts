@@ -391,7 +391,7 @@ export async function analyzeMarketsBatch(
   evidenceMap: Map<string, CategoryEvidence>
 ): Promise<Map<string, LLMMarketAnalysis>> {
   const results = new Map<string, LLMMarketAnalysis>()
-  const DELAY_MS = 3000  // 3s between LLM calls for Groq rate limit
+  const DELAY_MS = 1500  // 1.5s between LLM calls for Groq rate limit
 
   console.log(`[Groq Analysis] Processing ${markets.length} markets with pre-gathered evidence...`)
 
