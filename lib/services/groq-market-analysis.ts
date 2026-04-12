@@ -27,6 +27,16 @@ export interface LLMMarketAnalysis {
   edgeSize: number          // |estimate - marketPrice|
   evidenceCount: number
   signalStrength: number    // 0-100 from evidence gathering
+  baseRate: number | null
+  subQuestions: string[]
+  uncertaintyRange: number
+  premortemRisks: string[]
+  reasoningChain: {
+    referenceClass: string
+    decomposition: string
+    premortem: string
+    finalJudgment: string
+  } | null
 }
 
 export interface MarketForAnalysis {
@@ -172,7 +182,7 @@ function buildStructuredPrompt(m: MarketForAnalysis, evidence: CategoryEvidence)
     bearishSection = '(none found)'
   }
 
-  return `You are an expert prediction market analyst. You must THINK through every market systematically before making any recommendation.
+  return `You are a superforecaster-calibrated prediction market analyst. You must reason through 4 structured stages before making any recommendation.
 
 MARKET: "${m.question}"
 CURRENT MARKET PRICE: ${pricePercent}% for YES
@@ -181,11 +191,19 @@ CLOSES IN: ${days !== null ? `${days} day(s)` : 'NO END DATE'}
 VOLUME: $${volumeK}K | LIQUIDITY: $${liquidityK}K
 
 ═══════════════════════════════════════
-STEP 1 — KEY QUESTION DRIVERS
-What specific factors determine whether this market resolves YES? List 2-3 concrete things to look for. Be specific to THIS question, not generic.
+STAGE 1 — REFERENCE CLASS FORECASTING
+Identify the reference class for this event type. What is the historical base rate for similar events? For example, if this is about a policy decision, how often have similar policies been enacted? Start with the base rate before considering specific evidence.
 
 ═══════════════════════════════════════
-STEP 2 — ASSESS EVIDENCE (TWO SIDES REQUIRED)
+STAGE 2 — DECOMPOSITION
+Break this question into 2-4 independent sub-questions. For each sub-question, estimate a mini-probability. Combine them to form a preliminary estimate.
+
+═══════════════════════════════════════
+STAGE 3 — PRE-MORTEM
+Assume your current prediction turns out to be WRONG. What happened? List 2-3 specific scenarios that would cause your prediction to fail. How likely are these failure modes?
+
+═══════════════════════════════════════
+STAGE 4 — EVIDENCE ASSESSMENT & CALIBRATED ESTIMATE
 
 EVIDENCE SUPPORTING YES:
 ${bullishSection}
@@ -195,15 +213,7 @@ ${bearishSection}
 
 OVERALL SIGNAL FROM RESEARCH: ${evidence.overallSignal} (strength: ${evidence.signalStrength}/100)
 
-═══════════════════════════════════════
-STEP 3 — YOUR ESTIMATE
-
-Start from the base rate (market's current price) and adjust only if evidence clearly justifies it.
-
-Your YES probability estimate: __%
-
-═══════════════════════════════════════
-STEP 4 — RECOMMENDATION (BE HONEST)
+Synthesize all stages: base rate from Stage 1, decomposition from Stage 2, failure modes from Stage 3, and the evidence above. Produce a final calibrated estimate.
 
 Compare your estimate to market price:
 - Within 10% of market → the market is probably efficient → SKIP
@@ -228,7 +238,12 @@ Return JSON with these exact fields:
   "confidence": "high" | "medium" | "low",
   "reasoning": "2-3 sentences explaining your reasoning step by step",
   "citedEvidence": ["quote from specific finding that supports your view"],
-  "shouldBet": true | false
+  "shouldBet": true | false,
+  "baseRate": 0.0-1.0,
+  "baseRateReasoning": "1-2 sentences on the reference class and base rate",
+  "subQuestions": ["sub-question 1 (p=X)", "sub-question 2 (p=Y)"],
+  "premortemRisks": ["failure scenario 1", "failure scenario 2"],
+  "uncertaintyRange": 0.0-0.5
 }`
 }
 
@@ -258,6 +273,11 @@ export async function analyzeMarketWithLLM(
         edgeSize: 0,
         evidenceCount: evidence.bullishFindings.length + evidence.bearishFindings.length + evidence.neutralFindings.length,
         signalStrength: evidence.signalStrength,
+        baseRate: null,
+        subQuestions: [],
+        uncertaintyRange: 0.15,
+        premortemRisks: [],
+        reasoningChain: null,
       }
     }
 
@@ -272,6 +292,20 @@ export async function analyzeMarketWithLLM(
       : ''
     const reasoning = (keyDriversText + (parsed.reasoning || '')).substring(0, 500)
 
+    // Parse new structured reasoning fields
+    const baseRate = typeof parsed.baseRate === 'number' && parsed.baseRate >= 0 && parsed.baseRate <= 1
+      ? parsed.baseRate : null
+    const subQuestions = Array.isArray(parsed.subQuestions) ? parsed.subQuestions : []
+    const uncertaintyRange = typeof parsed.uncertaintyRange === 'number' && parsed.uncertaintyRange >= 0 && parsed.uncertaintyRange <= 0.5
+      ? parsed.uncertaintyRange : 0.15
+    const premortemRisks = Array.isArray(parsed.premortemRisks) ? parsed.premortemRisks : []
+    const reasoningChain = (parsed.baseRateReasoning || parsed.reasoning) ? {
+      referenceClass: typeof parsed.baseRateReasoning === 'string' ? parsed.baseRateReasoning : '',
+      decomposition: subQuestions.join('; '),
+      premortem: premortemRisks.join('; '),
+      finalJudgment: typeof parsed.reasoning === 'string' ? parsed.reasoning : '',
+    } : null
+
     const result: LLMMarketAnalysis = {
       estimatedProbability: yourEstimate,
       reasoning,
@@ -282,6 +316,11 @@ export async function analyzeMarketWithLLM(
       edgeSize,
       evidenceCount: evidence.bullishFindings.length + evidence.bearishFindings.length + evidence.neutralFindings.length,
       signalStrength: evidence.signalStrength,
+      baseRate,
+      subQuestions,
+      uncertaintyRange,
+      premortemRisks,
+      reasoningChain,
     }
 
     // ── Safety / Calibration Rules ──────────────────────────────────────────
@@ -325,6 +364,11 @@ export async function analyzeMarketWithLLM(
       edgeSize: 0,
       evidenceCount: evidence.bullishFindings.length + evidence.bearishFindings.length + evidence.neutralFindings.length,
       signalStrength: evidence.signalStrength,
+      baseRate: null,
+      subQuestions: [],
+      uncertaintyRange: 0.15,
+      premortemRisks: [],
+      reasoningChain: null,
     }
   }
 }
