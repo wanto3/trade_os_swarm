@@ -62,6 +62,16 @@ interface TradeRecommendation {
     tier: 'pending' | 'imminent' | 'closing-soon' | 'medium' | 'long'
     daysToClose: number
   }
+  // Deep analysis fields
+  analysisDepth?: 'quick' | 'deep'
+  baseRate?: number | null
+  uncertaintyRange?: number
+  premortemRisks?: string[]
+  crossPlatformOdds?: any[]
+  divergenceSignal?: 'aligned' | 'divergent' | 'no-data'
+  consensusProbability?: number | null
+  evidenceSources?: string[]
+  category?: string
 }
 
 interface ApiResponse {

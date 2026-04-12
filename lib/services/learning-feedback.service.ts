@@ -182,7 +182,7 @@ export function recomputeStats(entries: ResolvedEntry[]): LearningStats {
   }
 
   const convictionTiers: ConvictionTierStats[] = []
-  for (const [tier, group] of tierGroups) {
+  Array.from(tierGroups.entries()).forEach(([tier, group]) => {
     const wr = winRate(group)
     const expected = EXPECTED_WIN_RATES[tier] ?? CATEGORY_BASELINE
     convictionTiers.push({
@@ -191,7 +191,7 @@ export function recomputeStats(entries: ResolvedEntry[]): LearningStats {
       count: group.length,
       adjustment: computeAdjustment(wr, expected, group.length),
     })
-  }
+  })
 
   // Categories
   const catGroups = new Map<string, ResolvedEntry[]>()
@@ -202,7 +202,7 @@ export function recomputeStats(entries: ResolvedEntry[]): LearningStats {
   }
 
   const categories: CategoryStats[] = []
-  for (const [category, group] of catGroups) {
+  Array.from(catGroups.entries()).forEach(([category, group]) => {
     const wr = winRate(group)
     categories.push({
       category,
@@ -210,7 +210,7 @@ export function recomputeStats(entries: ResolvedEntry[]): LearningStats {
       count: group.length,
       adjustment: computeAdjustment(wr, CATEGORY_BASELINE, group.length),
     })
-  }
+  })
 
   // Evidence sources
   const srcGroups = new Map<string, ResolvedEntry[]>()
@@ -223,13 +223,13 @@ export function recomputeStats(entries: ResolvedEntry[]): LearningStats {
   }
 
   const evidenceSources: EvidenceSourceStats[] = []
-  for (const [source, group] of srcGroups) {
+  Array.from(srcGroups.entries()).forEach(([source, group]) => {
     evidenceSources.push({
       source,
       winRate: winRate(group),
       count: group.length,
     })
-  }
+  })
 
   // Calibration
   const calibration: CalibrationBucket[] = CALIBRATION_BUCKETS.map((b) => {

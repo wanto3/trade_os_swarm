@@ -44,9 +44,9 @@ function setCache(key: string, data: CrossPlatformOdds[]): void {
   // Evict expired entries when cache is full
   if (cache.size >= CACHE_MAX_SIZE) {
     const now = Date.now();
-    for (const [k, v] of cache) {
-      if (now > v.expiresAt) cache.delete(k);
-    }
+    const keysToDelete: string[] = [];
+    cache.forEach((v, k) => { if (now > v.expiresAt) keysToDelete.push(k); });
+    keysToDelete.forEach(k => cache.delete(k));
   }
   cache.set(key, { data, expiresAt: Date.now() + CACHE_TTL_MS });
 }
@@ -68,9 +68,7 @@ export function questionSimilarity(a: string, b: string): number {
   const wordsB = new Set(normalizeQuestion(b).split(' ').filter(Boolean));
   if (wordsA.size === 0 || wordsB.size === 0) return 0;
   let overlap = 0;
-  for (const w of wordsA) {
-    if (wordsB.has(w)) overlap++;
-  }
+  Array.from(wordsA).forEach(w => { if (wordsB.has(w)) overlap++; });
   return overlap / Math.max(wordsA.size, wordsB.size);
 }
 

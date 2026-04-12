@@ -607,18 +607,10 @@ export async function GET() {
     // ── LLM-Powered Deep Analysis (Groq Llama 3.3 70B + Web Evidence) ──────
     // 2-stage pipeline: gather evidence via web search, then feed to LLM
     const { analyzeMarketsBatch } = await import('@/lib/services/groq-market-analysis')
-    const { fetchOrderBookImbalance, analyzeTimeEdge } = await import('@/lib/services/polymarket-research.service')
+    const { analyzeTimeEdge } = await import('@/lib/services/polymarket-research.service')
 
-    // Pre-fetch order book signals for top-volume candidates (parallel)
+    // Order book signals placeholder (fetchOrderBookImbalance not yet implemented)
     const obSignals = new Map<string, any>()
-    await Promise.allSettled(
-      topByVolume.map(async (rec) => {
-        try {
-          const signal = await fetchOrderBookImbalance(rec.market.id)
-          if (signal) obSignals.set(rec.market.id, signal)
-        } catch { /* skip on error */ }
-      })
-    )
 
     // Select top 10 candidates with category diversity for deeper analysis
     const categorize = (q: string): string => {
