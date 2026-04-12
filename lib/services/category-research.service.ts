@@ -18,6 +18,7 @@ export type SignalDirection = 'bullish' | 'bearish' | 'neutral' | 'mixed' | 'non
 export interface WebFinding {
   text: string
   source: 'news' | 'duckduckgo' | 'specialized'
+  sourceTag: 'news' | 'search' | 'cross-platform-odds' | 'domain-stats' | 'polling' | 'on-chain'
   url?: string
   date?: string
 }
@@ -335,6 +336,7 @@ async function searchGoogleNews(query: string): Promise<WebFinding[]> {
           findings.push({
             text: combined.substring(0, 400),
             source: 'news',
+            sourceTag: 'news',
             url: i < links.length ? links[i] : undefined,
           })
         }
@@ -375,6 +377,7 @@ async function searchDuckDuckGo(query: string): Promise<WebFinding[]> {
         findings.push({
           text: data.AbstractText.substring(0, 400),
           source: 'duckduckgo',
+          sourceTag: 'search',
           url: data.AbstractURL || undefined,
         })
       }
@@ -387,6 +390,7 @@ async function searchDuckDuckGo(query: string): Promise<WebFinding[]> {
             findings.push({
               text: text.substring(0, 300),
               source: 'duckduckgo',
+              sourceTag: 'search',
               url: topic.FirstURL || topic.URL || undefined,
             })
           }
