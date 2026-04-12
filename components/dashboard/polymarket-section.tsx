@@ -316,6 +316,65 @@ export function PolymarketSection() {
   // Local config form state
   const [localConfig, setLocalConfig] = useState<Partial<AutoTraderConfig>>({})
 
+  // Portfolio tracking
+  const [todayPortfolio, setTodayPortfolio] = useState<any[]>([])
+  const [addingToPortfolio, setAddingToPortfolio] = useState<Set<string>>(new Set())
+
+  const fetchTodayPortfolio = useCallback(async () => {
+    try {
+      const res = await fetch('/api/portfolio/tracker')
+      const data = await res.json()
+      if (data.success) {
+        setTodayPortfolio(data.data.today?.entries || [])
+      }
+    } catch { /* ignore */ }
+  }, [])
+
+  useEffect(() => {
+    fetchTodayPortfolio()
+  }, [fetchTodayPortfolio])
+
+  const addToPortfolio = async (rec: any) => {
+    const key = rec.market.id
+    setAddingToPortfolio(prev => new Set(prev).add(key))
+    try {
+      const res = await fetch('/api/portfolio/tracker', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          marketId: rec.market.id,
+          question: rec.market.question,
+          side: rec.outcome?.toLowerCase() === 'no' ? 'no' : 'yes',
+          entryOdds: rec.odds,
+          convictionScore: rec.convictionScore || 0,
+          convictionLabel: rec.convictionLabel || 'risky',
+          evidenceSources: rec.evidenceSources || ['news', 'search'],
+          analysisDepth: rec.analysisDepth || 'quick',
+          category: rec.category || 'general',
+          estimatedProbability: rec.estimatedProbability || rec.odds,
+          baseRate: rec.baseRate || null,
+          uncertaintyRange: rec.uncertaintyRange || 0.15,
+        })
+      })
+      const data = await res.json()
+      if (data.success) await fetchTodayPortfolio()
+    } catch (err) {
+      console.error('Failed to add to portfolio:', err)
+    } finally {
+      setAddingToPortfolio(prev => { const next = new Set(prev); next.delete(key); return next })
+    }
+  }
+
+  const removeFromPortfolio = async (entryId: string) => {
+    try {
+      await fetch(`/api/portfolio/tracker?id=${entryId}`, { method: 'DELETE' })
+      await fetchTodayPortfolio()
+    } catch { /* ignore */ }
+  }
+
+  const isInPortfolio = (marketId: string) => todayPortfolio.some((e: any) => e.marketId === marketId)
+  const getPortfolioEntry = (marketId: string) => todayPortfolio.find((e: any) => e.marketId === marketId)
+
   const fetchData = useCallback(async () => {
     setLoading(true)
     try {
@@ -983,6 +1042,46 @@ POLYMARKET_CLOB_API_SECRET=...`}
             </span>
           </div>
 
+          {/* Today's Portfolio */}
+          {todayPortfolio.length > 0 && (
+            <div className="mb-4 p-3 rounded-lg" style={{ background: 'rgba(0, 255, 255, 0.05)', border: '1px solid rgba(0, 255, 255, 0.15)' }}>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-semibold" style={{ color: '#00ffff' }}>
+                  Today&apos;s Portfolio ({todayPortfolio.length})
+                </h3>
+                <button
+                  onClick={async () => { await fetch('/api/portfolio/resolve', { method: 'POST' }); await fetchTodayPortfolio() }}
+                  className="text-[10px] px-2 py-1 rounded"
+                  style={{ background: 'rgba(255,255,255,0.1)', color: '#8b949e' }}
+                >
+                  Check Resolutions
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {todayPortfolio.map((entry: any) => (
+                  <div key={entry.id} className="flex items-center gap-2 px-2 py-1 rounded text-xs"
+                    style={{
+                      background: entry.resolved ? (entry.outcome === 'win' ? 'rgba(63,185,80,0.15)' : 'rgba(248,81,73,0.15)') : 'rgba(255,255,255,0.05)',
+                      border: `1px solid ${entry.resolved ? (entry.outcome === 'win' ? 'rgba(63,185,80,0.3)' : 'rgba(248,81,73,0.3)') : 'rgba(255,255,255,0.1)'}`,
+                      color: '#e6edf3'
+                    }}>
+                    <span className="truncate max-w-[200px]">{entry.question}</span>
+                    <span className="uppercase font-bold text-[10px]" style={{ color: entry.side === 'yes' ? '#3fb950' : '#f85149' }}>{entry.side}</span>
+                    <span className="text-[10px] opacity-60">@{(entry.entryOdds * 100).toFixed(0)}%</span>
+                    {entry.resolved && (
+                      <span className="font-bold text-[10px]" style={{ color: entry.outcome === 'win' ? '#3fb950' : '#f85149' }}>
+                        {entry.outcome === 'win' ? 'WIN' : 'LOSS'}
+                      </span>
+                    )}
+                    {!entry.resolved && (
+                      <button onClick={() => removeFromPortfolio(entry.id)} className="text-[10px] opacity-40 hover:opacity-100" style={{ color: '#f85149' }}>x</button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Trade Cards */}
           <div style={{
             display: 'grid',
@@ -1054,6 +1153,12 @@ POLYMARKET_CLOB_API_SECRET=...`}
                         }}>
                           {rec.confidence.toUpperCase()}
                         </span>
+                        {rec.analysisDepth === 'deep' && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold"
+                            style={{ background: 'rgba(168, 85, 247, 0.25)', border: '1px solid rgba(168, 85, 247, 0.5)', color: '#a855f7' }}>
+                            DEEP
+                          </span>
+                        )}
                         <h3 style={{
                           fontSize: '0.72rem',
                           fontWeight: 600,
@@ -1081,6 +1186,16 @@ POLYMARKET_CLOB_API_SECRET=...`}
                         }}>
                           +{(rec.expectedValue * 100).toFixed(1)}% EV
                         </span>
+                        {rec.analysisDepth === 'deep' && rec.baseRate != null && (
+                          <span className="text-[10px] opacity-60" style={{ color: '#a855f7' }}>
+                            Base: {(rec.baseRate * 100).toFixed(0)}% | +/-{((rec.uncertaintyRange || 0.15) * 100).toFixed(0)}%
+                          </span>
+                        )}
+                        {rec.divergenceSignal === 'divergent' && (
+                          <span className="text-[10px] font-medium" style={{ color: '#f0883e' }}>
+                            Cross-platform divergence
+                          </span>
+                        )}
                         {rec.convictionScore !== undefined && (
                           <span style={{
                             fontSize: '0.55rem',
@@ -1152,6 +1267,24 @@ POLYMARKET_CLOB_API_SECRET=...`}
                           <span style={{ fontSize: '0.55rem', color: '#3fb950', display: 'flex', alignItems: 'center', gap: '3px' }}>
                             <CheckCircle size={10} /> Placed
                           </span>
+                        )}
+                        {isInPortfolio(rec.market.id) ? (
+                          <button
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); const entry = getPortfolioEntry(rec.market.id); if (entry) removeFromPortfolio(entry.id) }}
+                            className="px-3 py-1.5 rounded text-xs font-medium transition-all"
+                            style={{ background: 'rgba(63, 185, 80, 0.2)', border: '1px solid rgba(63, 185, 80, 0.5)', color: '#3fb950' }}
+                          >
+                            In Portfolio
+                          </button>
+                        ) : (
+                          <button
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); addToPortfolio(rec) }}
+                            disabled={addingToPortfolio.has(rec.market.id)}
+                            className="px-3 py-1.5 rounded text-xs font-medium transition-all hover:brightness-125"
+                            style={{ background: 'rgba(0, 255, 255, 0.15)', border: '1px solid rgba(0, 255, 255, 0.4)', color: '#00ffff' }}
+                          >
+                            {addingToPortfolio.has(rec.market.id) ? '...' : '+ Portfolio'}
+                          </button>
                         )}
                       </div>
 
