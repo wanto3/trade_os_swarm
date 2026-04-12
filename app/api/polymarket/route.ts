@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { getDeepResult, isDeepRunStale, runDeepAnalysis } from '@/lib/services/deep-analysis.service'
 
 // Force dynamic rendering — never cache Polymarket data
 export const dynamic = 'force-dynamic'
@@ -45,6 +46,13 @@ export interface TradeRecommendation {
   longTail: LongTailAnalysis | null
   timeAnalysis: TimeAnalysis
   orderBookSignal?: { imbalance: number; momentum: 'up' | 'down' | 'neutral' } | null
+  analysisDepth?: 'quick' | 'deep'
+  baseRate?: number | null
+  uncertaintyRange?: number
+  premortemRisks?: string[]
+  crossPlatformOdds?: any[]
+  divergenceSignal?: 'aligned' | 'divergent' | 'no-data'
+  consensusProbability?: number | null
 }
 
 // ── New: Conviction & Research Types ────────────────────────────────────────
@@ -775,6 +783,23 @@ export async function GET() {
       return b.expectedValue - a.expectedValue
     })
 
+    // ── Merge Deep Analysis Results ──────────────────────────────────────────
+    for (const rec of recommendations) {
+      const deepResult = getDeepResult(rec.market.id)
+      if (deepResult) {
+        rec.analysisDepth = 'deep'
+        rec.convictionScore = deepResult.convictionScore
+        rec.baseRate = deepResult.baseRate
+        rec.uncertaintyRange = deepResult.uncertaintyRange
+        rec.premortemRisks = deepResult.premortemRisks
+        rec.crossPlatformOdds = deepResult.crossPlatformOdds
+        rec.divergenceSignal = deepResult.divergenceSignal
+        rec.consensusProbability = deepResult.consensusProbability
+      } else {
+        rec.analysisDepth = 'quick'
+      }
+    }
+
     // Return ALL researched opportunities — no artificial conviction cap
     // Show any opportunity with positive EV after LLM analysis.
     // Low-edge trades (EV < 5%) will still appear but with "risky" conviction label.
@@ -904,6 +929,25 @@ export async function GET() {
     // Cache the response to prevent concurrent pipeline floods
     cachedResponse = { data: responseData, expiry: Date.now() + RESPONSE_CACHE_TTL }
     pipelineRunning = false
+
+    // Fire-and-forget: trigger deep analysis if stale
+    if (isDeepRunStale()) {
+      const marketsForDeep = recommendations
+        .filter((r: any) => r.analysisDepth !== 'deep')
+        .slice(0, 15)
+        .map((r: any) => ({
+          id: r.market.id,
+          question: r.market.question,
+          currentPrice: r.odds,
+          outcomes: r.market.outcomes || [],
+          endDate: r.market.endDateIso || null,
+          volume: r.market.volumeNum || 0,
+          liquidity: r.market.liquidityNum || 0,
+        }))
+      runDeepAnalysis(marketsForDeep).catch(err =>
+        console.error('[Deep Analysis] Background run failed:', err)
+      )
+    }
 
     return Response.json(responseData)
   } catch (error) {
