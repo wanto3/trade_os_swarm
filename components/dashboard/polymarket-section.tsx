@@ -316,6 +316,19 @@ export function PolymarketSection() {
   // Local config form state
   const [localConfig, setLocalConfig] = useState<Partial<AutoTraderConfig>>({})
 
+  // Learning stats
+  const [learningStats, setLearningStats] = useState<any>(null)
+
+  const fetchLearningStats = useCallback(async () => {
+    try {
+      const historyRes = await fetch('/api/portfolio/tracker?view=history&days=30')
+      const historyData = await historyRes.json()
+      if (historyData.success) {
+        setLearningStats(historyData.data)
+      }
+    } catch { /* ignore */ }
+  }, [])
+
   // Portfolio tracking
   const [todayPortfolio, setTodayPortfolio] = useState<any[]>([])
   const [addingToPortfolio, setAddingToPortfolio] = useState<Set<string>>(new Set())
@@ -333,6 +346,12 @@ export function PolymarketSection() {
   useEffect(() => {
     fetchTodayPortfolio()
   }, [fetchTodayPortfolio])
+
+  useEffect(() => {
+    if (activeTab === 'performance') {
+      fetchLearningStats()
+    }
+  }, [activeTab, fetchLearningStats])
 
   const addToPortfolio = async (rec: any) => {
     const key = rec.market.id
@@ -1406,6 +1425,56 @@ POLYMARKET_CLOB_API_SECRET=...`}
       {/* ── Performance Tab ── */}
       {activeTab === 'performance' && (
         <div>
+          {/* Learning Stats Section */}
+          <div className="space-y-4" style={{ marginBottom: '1rem' }}>
+            {/* Global Stats Row */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.75rem' }}>
+              {[
+                { label: 'Total Tracked', value: learningStats?.globalStats?.totalTrades || 0, color: '#00ffff' },
+                { label: 'Resolved', value: learningStats?.globalStats?.totalResolved || 0, color: '#a855f7' },
+                { label: 'Win Rate', value: learningStats?.globalStats?.overallWinRate != null ? `${(learningStats.globalStats.overallWinRate * 100).toFixed(1)}%` : 'N/A', color: '#3fb950' },
+                { label: 'Learning', value: (learningStats?.globalStats?.totalResolved || 0) >= 20 ? 'Active' : `${20 - (learningStats?.globalStats?.totalResolved || 0)} more`, color: '#f0883e' }
+              ].map((stat, i) => (
+                <div key={i} className="p-3 rounded-lg text-center" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                  <div className="text-xs opacity-60 mb-1">{stat.label}</div>
+                  <div className="text-lg font-bold" style={{ color: stat.color }}>{stat.value}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Portfolio History */}
+            {learningStats?.history && learningStats.history.length > 0 && (
+              <div className="p-3 rounded-lg" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                <h3 className="text-sm font-semibold mb-2" style={{ color: '#e6edf3' }}>Daily History</h3>
+                <div className="space-y-1">
+                  {learningStats.history.slice().reverse().map((day: any) => (
+                    <div key={day.date} className="flex items-center justify-between text-xs py-1" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                      <span style={{ color: '#8b949e' }}>{day.date}</span>
+                      <span style={{ color: '#e6edf3' }}>{day.stats.total} picks</span>
+                      <span style={{ color: '#3fb950' }}>{day.stats.wins}W</span>
+                      <span style={{ color: '#f85149' }}>{day.stats.losses}L</span>
+                      <span style={{ color: '#8b949e' }}>{day.stats.pending} pending</span>
+                      <span style={{ color: day.stats.winRate != null && day.stats.winRate >= 0.5 ? '#3fb950' : '#f85149' }}>
+                        {day.stats.winRate != null ? `${(day.stats.winRate * 100).toFixed(0)}%` : '-'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* No data message */}
+            {(!learningStats?.history || learningStats.history.length === 0) && (
+              <div className="p-6 text-center rounded-lg" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                <div className="text-sm mb-2" style={{ color: '#8b949e' }}>No portfolio data yet</div>
+                <div className="text-xs" style={{ color: '#6e7681' }}>
+                  Add markets to your daily portfolio to start tracking accuracy.
+                  The system needs 20+ resolved trades before learning adjustments activate.
+                </div>
+              </div>
+            )}
+          </div>
+
           {paperLoading ? (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '200px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '12px', color: '#6e7681' }}>
               <RefreshCw style={{ width: 16, height: 16, marginRight: '0.5rem', animation: 'spin 1s linear infinite' }} /> Loading...
