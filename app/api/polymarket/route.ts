@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getDeepResult, isDeepRunStale, runDeepAnalysis } from '@/lib/services/deep-analysis.service'
+import { getConvictionAdjustments } from '@/lib/services/learning-feedback.service'
+import { classifyCategory } from '@/lib/services/category-research.service'
 
 // Force dynamic rendering — never cache Polymarket data
 export const dynamic = 'force-dynamic'
@@ -797,6 +799,22 @@ export async function GET() {
         rec.consensusProbability = deepResult.consensusProbability
       } else {
         rec.analysisDepth = 'quick'
+      }
+    }
+
+    // ── Apply Learning Adjustments ───────────────────────────────────────────
+    const learningAdj = getConvictionAdjustments()
+    if (learningAdj.active) {
+      for (const rec of recommendations) {
+        const category = classifyCategory(rec.market.question)
+        const catAdj = learningAdj.byCategoryAdjustment[category] || 0
+        const tierAdj = learningAdj.byTierAdjustment[rec.convictionLabel] || 0
+        rec.convictionScore = Math.min(100, Math.max(0, rec.convictionScore + catAdj + tierAdj))
+
+        if (rec.convictionScore >= 90) rec.convictionLabel = 'no-brainer'
+        else if (rec.convictionScore >= 75) rec.convictionLabel = 'high'
+        else if (rec.convictionScore >= 55) rec.convictionLabel = 'consider'
+        else rec.convictionLabel = 'risky'
       }
     }
 

@@ -1,10 +1,14 @@
 import { NextResponse } from 'next/server'
 import { resolvePortfolioEntries } from '@/lib/services/portfolio-tracker.service'
+import { refreshLearningStats } from '@/lib/services/learning-feedback.service'
 
 // POST — trigger resolution check
 export async function POST() {
   try {
     const result = await resolvePortfolioEntries()
+    if (result.resolved > 0) {
+      await refreshLearningStats()
+    }
     return NextResponse.json({
       success: true,
       data: {
