@@ -48,7 +48,7 @@ export interface TradeRecommendation {
   longTail: LongTailAnalysis | null
   timeAnalysis: TimeAnalysis
   orderBookSignal?: { imbalance: number; momentum: 'up' | 'down' | 'neutral' } | null
-  analysisDepth?: 'quick' | 'deep'
+  analysisDepth?: 'pending' | 'quick' | 'deep'
   baseRate?: number | null
   uncertaintyRange?: number
   premortemRisks?: string[]
@@ -567,31 +567,33 @@ function buildResponseData(
   rawMarkets: GammaMarket[],
   llmAnalyzed: boolean,
 ) {
-  // Hot now = closing soon AND actually worth betting on.
-  // Pre-LLM entries have default CV=70 and EV=0 — showing them as "CONSIDER" recommendations is a lie.
-  // Wait until LLM has actually scored things; UI shows "AI analyzing…" indicator in the meantime.
-  const hotNowOpportunities = !llmAnalyzed ? [] : dedupByTopic(recommendations
+  // Hot now = closing soon. Analyzed entries must clear EV floors; pending entries pass through
+  // so the UI can show them in a separate "awaiting analysis" group.
+  const hotNowOpportunities = dedupByTopic(recommendations
     .filter(r => {
       if (!r.market.endDateIso) return false
       if (r.daysToClose > 3) return false
+      if (r.analysisDepth === 'pending') return true  // let pending through; UI groups them separately
       if (r.expectedValue < MIN_MEANINGFUL_EV) return false
       if (r.odds > 0.90 && r.expectedValue <= 0.01) return false
       return true
     })
     .sort((a, b) => (b.market.volume24hr || 0) - (a.market.volume24hr || 0)))
 
-  const todayOpportunities = !llmAnalyzed ? [] : dedupByTopic(recommendations
+  const todayOpportunities = dedupByTopic(recommendations
     .filter(r => {
       if (!r.market.endDateIso) return false
+      if (r.daysToClose > 0.75) return false
+      if (r.analysisDepth === 'pending') return true
       if (r.expectedValue < MIN_MEANINGFUL_EV) return false
-      return r.daysToClose <= 0.75
+      return true
     })
     .sort((a, b) => {
       if (Math.abs(b.convictionScore - a.convictionScore) > 3) return b.convictionScore - a.convictionScore
       return (b.market.volume24hr || 0) - (a.market.volume24hr || 0)
     }))
 
-  const nearCertainOpportunities = !llmAnalyzed ? [] : dedupByTopic(recommendations
+  const nearCertainOpportunities = dedupByTopic(recommendations
     .filter(r => {
       if (!r.market.endDateIso) return false
       if (r.odds < 0.90) return false
@@ -605,8 +607,10 @@ function buildResponseData(
       return (b.market.volume24hr || 0) - (a.market.volume24hr || 0)
     }))
 
-  const valuePlayOpportunities = !llmAnalyzed ? [] : dedupByTopic(recommendations
+  // Value plays are genuine recommendations only — pending entries (CV 30) can't qualify here
+  const valuePlayOpportunities = dedupByTopic(recommendations
     .filter(r => {
+      if (r.analysisDepth === 'pending') return false
       if (r.odds < 0.50 || r.odds > 0.90) return false
       if (r.convictionScore < 55) return false
       if (r.expectedValue < MIN_MEANINGFUL_EV) return false  // must have meaningful edge, not noise
@@ -738,6 +742,12 @@ export async function GET() {
       return b.expectedValue - a.expectedValue
     })
 
+    // Default every rec to 'pending' — LLM pipeline upgrades analyzed ones to 'quick',
+    // deep analysis upgrades matching ones to 'deep'
+    for (const rec of recommendations) {
+      rec.analysisDepth = 'pending'
+    }
+
     // ── Merge any existing deep analysis results into fast scores ──
     for (const rec of recommendations) {
       const deepResult = getDeepResult(rec.market.id)
@@ -807,7 +817,7 @@ async function runLLMPipeline(recommendations: TradeRecommendation[], rawMarkets
     const usedQuestions = new Set<string>()
     const usedTopics = new Set<string>()
     const categoryCounts = { crypto: 0, sports: 0, policy: 0, general: 0 }
-    const MAX_ANALYSIS = 7
+    const MAX_ANALYSIS = 10
 
     // Topic fingerprint: first 4 meaningful non-numeric words to group similar markets
     // e.g. "Will Elon Musk post 260-279 tweets..." and "...280-299 tweets..." → same topic
@@ -928,6 +938,8 @@ async function runLLMPipeline(recommendations: TradeRecommendation[], rawMarkets
       // Label always follows the score — consistent with deep merge and learning adjustments
       rec.convictionLabel = getConvictionLabel(rec.convictionScore)
       rec.safetyScore = rec.convictionScore
+      // Mark as LLM-analyzed (upgraded to 'deep' later if deep analysis results exist)
+      if (rec.analysisDepth !== 'deep') rec.analysisDepth = 'quick'
 
       // Update upside string with real data
       rec.upside = `Market: ${(rec.odds * 100).toFixed(1)}% → LLM Est: ${(analysis.estimatedProbability * 100).toFixed(1)}% | Edge: ${(analysis.edgeSize * 100).toFixed(1)}%`
@@ -959,8 +971,10 @@ async function runLLMPipeline(recommendations: TradeRecommendation[], rawMarkets
     }
 
     // Adjust fake scores down for UNANALYZED markets so they never outrank real LLM ones
+    // and tag them as 'pending' so the UI can show them in a separate "awaiting analysis" group
     for (const rec of recommendations) {
-      if (!llmResults.has(rec.market.question)) {
+      if (!llmResults.has(rec.market.question) && rec.analysisDepth !== 'deep') {
+        rec.analysisDepth = 'pending'
         rec.convictionScore = Math.min(rec.convictionScore, 30) // cap unanalyzed at 30
         rec.safetyScore = rec.convictionScore
         rec.confidence = 'low' // ensure the UI badge turns grey/low

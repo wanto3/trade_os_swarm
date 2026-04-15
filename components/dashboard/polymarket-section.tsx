@@ -63,7 +63,7 @@ interface TradeRecommendation {
     daysToClose: number
   }
   // Deep analysis fields
-  analysisDepth?: 'quick' | 'deep'
+  analysisDepth?: 'pending' | 'quick' | 'deep'
   baseRate?: number | null
   uncertaintyRange?: number
   premortemRisks?: string[]
@@ -1154,7 +1154,46 @@ POLYMARKET_CLOB_API_SECRET=...`}
                 Fetching live Polymarket opportunities...
               </div>
             ) : filtered.length > 0 ? (
-              filtered.map((rec) => {
+              (() => {
+                // Split into analyzed (AI-graded picks) vs pending (not yet scored by AI)
+                const analyzed = filtered.filter(r => r.analysisDepth === 'quick' || r.analysisDepth === 'deep')
+                const pending = filtered.filter(r => r.analysisDepth === 'pending' || !r.analysisDepth)
+
+                const SectionHeader = ({ title, count, color, hint }: { title: string; count: number; color: string; hint: string }) => (
+                  <div style={{
+                    gridColumn: '1 / -1',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                    padding: '0.25rem 0.1rem 0',
+                    borderBottom: `1px solid ${color}33`,
+                    paddingBottom: '0.35rem',
+                    marginTop: '0.25rem',
+                  }}>
+                    <span style={{
+                      fontSize: '0.55rem',
+                      fontWeight: 700,
+                      letterSpacing: '0.08em',
+                      color,
+                      textTransform: 'uppercase',
+                    }}>{title}</span>
+                    <span style={{
+                      fontSize: '0.6rem',
+                      color: '#8b949e',
+                      padding: '1px 6px',
+                      backgroundColor: `${color}18`,
+                      borderRadius: '3px',
+                    }}>{count}</span>
+                    <span style={{ fontSize: '0.6rem', color: '#6e7681' }}>{hint}</span>
+                  </div>
+                )
+
+                return (
+                  <>
+                    {analyzed.length > 0 && (
+                      <SectionHeader title="AI-Analyzed Picks" count={analyzed.length} color="#3fb950" hint="graded, conviction-scored" />
+                    )}
+                    {analyzed.map((rec) => {
                 const kellyBet = getKellyBet(rec)
                 const potentialWin = kellyBet * ((1 / rec.odds) - 1)
                 const ev = kellyBet * rec.expectedValue
@@ -1383,7 +1422,68 @@ POLYMARKET_CLOB_API_SECRET=...`}
                     </div>
                   </a>
                 )
-              })
+              })}
+                    {pending.length > 0 && (
+                      <SectionHeader title="Pending AI Analysis" count={pending.length} color="#8b949e" hint={data?.llmAnalyzed ? "next refresh cycle" : "AI analyzing now…"} />
+                    )}
+                    {pending.map((rec) => {
+                      const liveDaysToClose = liveDays(rec)
+                      return (
+                        <a
+                          key={`pending-${rec.market.id}-${sortKey}`}
+                          href={rec.market.url}
+                          target='_blank'
+                          rel='noopener noreferrer'
+                          style={{
+                            display: 'flex',
+                            backgroundColor: '#0d1117',
+                            border: '1px dashed #30363d',
+                            borderRadius: '10px',
+                            overflow: 'hidden',
+                            textDecoration: 'none',
+                            opacity: 0.7,
+                            transition: 'opacity 0.2s, border-color 0.2s',
+                          }}
+                          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.opacity = '0.95'; (e.currentTarget as HTMLElement).style.borderColor = '#484f58' }}
+                          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '0.7'; (e.currentTarget as HTMLElement).style.borderColor = '#30363d' }}
+                        >
+                          <div style={{ width: '5px', backgroundColor: '#30363d', flexShrink: 0 }} />
+                          <div style={{ flex: 1, padding: '0.7rem 0.8rem', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                              <span style={{
+                                fontSize: '0.55rem',
+                                fontWeight: 700,
+                                color: '#8b949e',
+                                backgroundColor: 'rgba(139,148,158,0.12)',
+                                padding: '2px 7px',
+                                borderRadius: '4px',
+                                letterSpacing: '0.03em',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                              }}>
+                                <RefreshCw style={{ width: 9, height: 9, animation: 'spin 2s linear infinite' }} />
+                                PENDING
+                              </span>
+                              <h3 style={{ fontSize: '0.72rem', fontWeight: 500, color: '#8b949e', margin: 0, lineHeight: 1.35, flex: 1 }}>
+                                {rec.market.question}
+                              </h3>
+                            </div>
+                            <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.65rem', color: '#6e7681' }}>
+                              <span>{rec.outcome} @ {(rec.odds * 100).toFixed(1)}%</span>
+                              <span>Vol {formatVolume(rec.market.volume24hr || 0)}/24h</span>
+                              {rec.market.endDateIso && <span>{liveDaysToClose <= 1 ? 'closes today' : `${Math.round(liveDaysToClose)}d to close`}</span>}
+                            </div>
+                            <div style={{ fontSize: '0.6rem', color: '#484f58', fontStyle: 'italic' }}>
+                              Awaiting LLM scoring — no position recommended yet
+                            </div>
+                          </div>
+                        </a>
+                      )
+                    })}
+                  </>
+                )
+              })()
             ) : (
               <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', justifyContent: 'center', height: '120px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '12px', color: '#6e7681', fontSize: '0.85rem', textAlign: 'center' }}>
                 No opportunities match your filters right now.
