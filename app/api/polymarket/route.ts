@@ -568,25 +568,22 @@ function buildResponseData(
   llmAnalyzed: boolean,
 ) {
   // Hot now = closing soon AND actually worth betting on.
-  // Before LLM runs (llmAnalyzed=false), EV is 0 for everything — show by volume so users see activity.
-  // After LLM runs, require real positive edge.
-  const hotNowOpportunities = dedupByTopic(recommendations
+  // Pre-LLM entries have default CV=70 and EV=0 — showing them as "CONSIDER" recommendations is a lie.
+  // Wait until LLM has actually scored things; UI shows "AI analyzing…" indicator in the meantime.
+  const hotNowOpportunities = !llmAnalyzed ? [] : dedupByTopic(recommendations
     .filter(r => {
       if (!r.market.endDateIso) return false
       if (r.daysToClose > 3) return false
-      if (llmAnalyzed) {
-        // Post-LLM: require meaningful positive EV, no priced-in junk, no sub-noise low-odds
-        if (r.expectedValue < MIN_MEANINGFUL_EV) return false
-        if (r.odds > 0.90 && r.expectedValue <= 0.01) return false
-      }
+      if (r.expectedValue < MIN_MEANINGFUL_EV) return false
+      if (r.odds > 0.90 && r.expectedValue <= 0.01) return false
       return true
     })
     .sort((a, b) => (b.market.volume24hr || 0) - (a.market.volume24hr || 0)))
 
-  const todayOpportunities = dedupByTopic(recommendations
+  const todayOpportunities = !llmAnalyzed ? [] : dedupByTopic(recommendations
     .filter(r => {
       if (!r.market.endDateIso) return false
-      if (r.odds < 0.30 && r.expectedValue < MIN_MEANINGFUL_EV) return false
+      if (r.expectedValue < MIN_MEANINGFUL_EV) return false
       return r.daysToClose <= 0.75
     })
     .sort((a, b) => {
@@ -594,12 +591,13 @@ function buildResponseData(
       return (b.market.volume24hr || 0) - (a.market.volume24hr || 0)
     }))
 
-  const nearCertainOpportunities = dedupByTopic(recommendations
+  const nearCertainOpportunities = !llmAnalyzed ? [] : dedupByTopic(recommendations
     .filter(r => {
       if (!r.market.endDateIso) return false
       if (r.odds < 0.90) return false
       if ((r.market.volume24hr || 0) <= 10000) return false
       if (r.market.spread >= 0.05) return false
+      if (r.expectedValue < MIN_MEANINGFUL_EV) return false
       return r.daysToClose <= 3
     })
     .sort((a, b) => {
@@ -607,7 +605,7 @@ function buildResponseData(
       return (b.market.volume24hr || 0) - (a.market.volume24hr || 0)
     }))
 
-  const valuePlayOpportunities = dedupByTopic(recommendations
+  const valuePlayOpportunities = !llmAnalyzed ? [] : dedupByTopic(recommendations
     .filter(r => {
       if (r.odds < 0.50 || r.odds > 0.90) return false
       if (r.convictionScore < 55) return false
