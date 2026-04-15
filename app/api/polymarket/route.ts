@@ -526,33 +526,75 @@ function fastSignalScore(rec: TradeRecommendation): number {
   return score
 }
 
+// Topic fingerprint for collapsing range-bucket variants of the same event
+// e.g. "Will Elon Musk post 260-279 tweets..." and "...280-299 tweets..." → same topic
+function topicFingerprint(q: string): string {
+  return q.toLowerCase()
+    .replace(/[^a-z\s]/g, '')  // strip numbers and punctuation so ranges collapse
+    .split(/\s+/)
+    .filter(w => w.length > 2 && !['will', 'the', 'this', 'that', 'from', 'for', 'and', 'with', 'how', 'does', 'has', 'have', 'post', 'between', 'more', 'than', 'less'].includes(w))
+    .slice(0, 4)
+    .join('-')
+}
+
+// Keep only the best recommendation per topic — prevents logically-inconsistent
+// picks on mutually-exclusive range buckets of the same event.
+function dedupByTopic<T extends TradeRecommendation>(recs: T[]): T[] {
+  const bestByTopic = new Map<string, T>()
+  for (const r of recs) {
+    const key = topicFingerprint(r.market.question)
+    const existing = bestByTopic.get(key)
+    if (!existing) { bestByTopic.set(key, r); continue }
+    // Prefer higher conviction, then higher EV, then higher 24h volume
+    const better =
+      r.convictionScore !== existing.convictionScore ? r.convictionScore > existing.convictionScore :
+      r.expectedValue !== existing.expectedValue ? r.expectedValue > existing.expectedValue :
+      (r.market.volume24hr || 0) > (existing.market.volume24hr || 0)
+    if (better) bestByTopic.set(key, r)
+  }
+  // Preserve original order from the input (sorted list comes in pre-ranked)
+  const kept = new Set(bestByTopic.values())
+  return recs.filter(r => kept.has(r))
+}
+
+// Minimum EV we trust — anything below this is within model noise
+// (8B LLM can't reliably distinguish a 0.1% edge on a 7% market)
+const MIN_MEANINGFUL_EV = 0.02
+
 // Build the response payload from scored recommendations
 function buildResponseData(
   recommendations: TradeRecommendation[],
   rawMarkets: GammaMarket[],
   llmAnalyzed: boolean,
 ) {
-  // Filter out priced-in markets with no edge from hot now
-  const hotNowOpportunities = recommendations
+  // Hot now = closing soon AND actually worth betting on.
+  // Before LLM runs (llmAnalyzed=false), EV is 0 for everything — show by volume so users see activity.
+  // After LLM runs, require real positive edge.
+  const hotNowOpportunities = dedupByTopic(recommendations
     .filter(r => {
       if (!r.market.endDateIso) return false
       if (r.daysToClose > 3) return false
-      if (r.odds > 0.90 && r.expectedValue <= 0.01) return false
+      if (llmAnalyzed) {
+        // Post-LLM: require meaningful positive EV, no priced-in junk, no sub-noise low-odds
+        if (r.expectedValue < MIN_MEANINGFUL_EV) return false
+        if (r.odds > 0.90 && r.expectedValue <= 0.01) return false
+      }
       return true
     })
-    .sort((a, b) => (b.market.volume24hr || 0) - (a.market.volume24hr || 0))
+    .sort((a, b) => (b.market.volume24hr || 0) - (a.market.volume24hr || 0)))
 
-  const todayOpportunities = recommendations
+  const todayOpportunities = dedupByTopic(recommendations
     .filter(r => {
       if (!r.market.endDateIso) return false
+      if (r.odds < 0.30 && r.expectedValue < MIN_MEANINGFUL_EV) return false
       return r.daysToClose <= 0.75
     })
     .sort((a, b) => {
       if (Math.abs(b.convictionScore - a.convictionScore) > 3) return b.convictionScore - a.convictionScore
       return (b.market.volume24hr || 0) - (a.market.volume24hr || 0)
-    })
+    }))
 
-  const nearCertainOpportunities = recommendations
+  const nearCertainOpportunities = dedupByTopic(recommendations
     .filter(r => {
       if (!r.market.endDateIso) return false
       if (r.odds < 0.90) return false
@@ -563,13 +605,13 @@ function buildResponseData(
     .sort((a, b) => {
       if (Math.abs(b.convictionScore - a.convictionScore) > 3) return b.convictionScore - a.convictionScore
       return (b.market.volume24hr || 0) - (a.market.volume24hr || 0)
-    })
+    }))
 
-  const valuePlayOpportunities = recommendations
+  const valuePlayOpportunities = dedupByTopic(recommendations
     .filter(r => {
       if (r.odds < 0.50 || r.odds > 0.90) return false
       if (r.convictionScore < 55) return false
-      if (r.expectedValue <= 0) return false  // must have positive edge
+      if (r.expectedValue < MIN_MEANINGFUL_EV) return false  // must have meaningful edge, not noise
       if (r.market.liquidityNum < 5000) return false
       return true
     })
@@ -577,9 +619,17 @@ function buildResponseData(
       const aReturn = (a.expectedValue * a.convictionScore) / 100
       const bReturn = (b.expectedValue * b.convictionScore) / 100
       return bReturn - aReturn
-    })
+    }))
 
-  const allOpportunities = recommendations.filter(r => r.expectedValue > 0)
+  // Main opportunities list: real positive EV, dedup by topic, drop noise-level edges on low-odds
+  const allOpportunities = dedupByTopic(recommendations
+    .filter(r => {
+      if (r.expectedValue <= 0) return false
+      // On low-odds markets, require meaningful EV (noise floor); on 30%+ markets a small edge is real
+      if (r.odds < 0.30 && r.expectedValue < MIN_MEANINGFUL_EV) return false
+      return true
+    })
+    .sort((a, b) => b.convictionScore - a.convictionScore))
 
   const hotMarkets: PolymarketMarket[] = rawMarkets
     .filter(m => !m.negRisk && m.liquidityNum > 5000 && m.volumeNum > 50000)
