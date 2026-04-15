@@ -1,8 +1,24 @@
 {
-  "lastRunTimestamp": 1776019141405,
-  "lastRunDuration": 49401,
+  "lastRunTimestamp": 1776228467359,
+  "lastRunDuration": 447583,
   "marketsAnalyzed": 15,
   "results": {
+    "559677": {
+      "marketId": "559677",
+      "question": "Will Hillary Clinton win the 2028 Democratic presidential nomination?",
+      "convictionScore": 35,
+      "estimatedProbability": 0.9925,
+      "baseRate": null,
+      "uncertaintyRange": 0.15,
+      "premortemRisks": [],
+      "subQuestions": [],
+      "reasoningChain": null,
+      "crossPlatformOdds": [],
+      "divergenceSignal": "no-data",
+      "consensusProbability": null,
+      "evidenceSources": [],
+      "analysisTimestamp": 1776228467359
+    },
     "559679": {
       "marketId": "559679",
       "question": "Will Bernie Sanders win the 2028 Democratic presidential nomination?",
@@ -17,7 +33,23 @@
       "divergenceSignal": "no-data",
       "consensusProbability": null,
       "evidenceSources": [],
-      "analysisTimestamp": 1776019141405
+      "analysisTimestamp": 1776228467359
+    },
+    "559681": {
+      "marketId": "559681",
+      "question": "Will LeBron James win the 2028 Democratic presidential nomination?",
+      "convictionScore": 35,
+      "estimatedProbability": 0.9925,
+      "baseRate": null,
+      "uncertaintyRange": 0.15,
+      "premortemRisks": [],
+      "subQuestions": [],
+      "reasoningChain": null,
+      "crossPlatformOdds": [],
+      "divergenceSignal": "no-data",
+      "consensusProbability": null,
+      "evidenceSources": [],
+      "analysisTimestamp": 1776228467359
     },
     "559684": {
       "marketId": "559684",
@@ -33,7 +65,7 @@
       "divergenceSignal": "no-data",
       "consensusProbability": null,
       "evidenceSources": [],
-      "analysisTimestamp": 1776019141405
+      "analysisTimestamp": 1776228467359
     },
     "559687": {
       "marketId": "559687",
@@ -49,7 +81,7 @@
       "divergenceSignal": "no-data",
       "consensusProbability": null,
       "evidenceSources": [],
-      "analysisTimestamp": 1776019141405
+      "analysisTimestamp": 1776228467359
     },
     "559688": {
       "marketId": "559688",
@@ -65,7 +97,23 @@
       "divergenceSignal": "no-data",
       "consensusProbability": null,
       "evidenceSources": [],
-      "analysisTimestamp": 1776019141405
+      "analysisTimestamp": 1776228467359
+    },
+    "561247": {
+      "marketId": "561247",
+      "question": "Will Tim Walz win the 2028 US Presidential Election?",
+      "convictionScore": 35,
+      "estimatedProbability": 0.9935,
+      "baseRate": null,
+      "uncertaintyRange": 0.15,
+      "premortemRisks": [],
+      "subQuestions": [],
+      "reasoningChain": null,
+      "crossPlatformOdds": [],
+      "divergenceSignal": "no-data",
+      "consensusProbability": null,
+      "evidenceSources": [],
+      "analysisTimestamp": 1776228467359
     },
     "561251": {
       "marketId": "561251",
@@ -81,119 +129,7 @@
       "divergenceSignal": "no-data",
       "consensusProbability": null,
       "evidenceSources": [],
-      "analysisTimestamp": 1776019141405
-    },
-    "568634": {
-      "marketId": "568634",
-      "question": "Will Xander Schauffele win the 2026 Masters tournament?",
-      "convictionScore": 35,
-      "estimatedProbability": 0.997,
-      "baseRate": null,
-      "uncertaintyRange": 0.15,
-      "premortemRisks": [],
-      "subQuestions": [],
-      "reasoningChain": null,
-      "crossPlatformOdds": [],
-      "divergenceSignal": "no-data",
-      "consensusProbability": null,
-      "evidenceSources": [],
-      "analysisTimestamp": 1776019141405
-    },
-    "568635": {
-      "marketId": "568635",
-      "question": "Will Ludvig Aberg win the 2026 Masters tournament?",
-      "convictionScore": 35,
-      "estimatedProbability": 0.999,
-      "baseRate": null,
-      "uncertaintyRange": 0.15,
-      "premortemRisks": [],
-      "subQuestions": [],
-      "reasoningChain": null,
-      "crossPlatformOdds": [],
-      "divergenceSignal": "no-data",
-      "consensusProbability": null,
-      "evidenceSources": [],
-      "analysisTimestamp": 1776019141405
-    },
-    "568647": {
-      "marketId": "568647",
-      "question": "Will Shane Lowry win the 2026 Masters tournament?",
-      "convictionScore": 35,
-      "estimatedProbability": 0.965,
-      "baseRate": null,
-      "uncertaintyRange": 0.15,
-      "premortemRisks": [],
-      "subQuestions": [],
-      "reasoningChain": null,
-      "crossPlatformOdds": [],
-      "divergenceSignal": "no-data",
-      "consensusProbability": null,
-      "evidenceSources": [],
-      "analysisTimestamp": 1776019141405
-    },
-    "568648": {
-      "marketId": "568648",
-      "question": "Will Patrick Reed win the 2026 Masters tournament?",
-      "convictionScore": 35,
-      "estimatedProbability": 0.999,
-      "baseRate": null,
-      "uncertaintyRange": 0.15,
-      "premortemRisks": [],
-      "subQuestions": [],
-      "reasoningChain": null,
-      "crossPlatformOdds": [],
-      "divergenceSignal": "no-data",
-      "consensusProbability": null,
-      "evidenceSources": [],
-      "analysisTimestamp": 1776019141405
-    },
-    "568653": {
-      "marketId": "568653",
-      "question": "Will Jason Day win the 2026 Masters tournament?",
-      "convictionScore": 35,
-      "estimatedProbability": 0.979,
-      "baseRate": null,
-      "uncertaintyRange": 0.15,
-      "premortemRisks": [],
-      "subQuestions": [],
-      "reasoningChain": null,
-      "crossPlatformOdds": [],
-      "divergenceSignal": "no-data",
-      "consensusProbability": null,
-      "evidenceSources": [],
-      "analysisTimestamp": 1776019141405
-    },
-    "568657": {
-      "marketId": "568657",
-      "question": "Will Russell Henley win the 2026 Masters tournament?",
-      "convictionScore": 35,
-      "estimatedProbability": 0.9855,
-      "baseRate": null,
-      "uncertaintyRange": 0.15,
-      "premortemRisks": [],
-      "subQuestions": [],
-      "reasoningChain": null,
-      "crossPlatformOdds": [],
-      "divergenceSignal": "no-data",
-      "consensusProbability": null,
-      "evidenceSources": [],
-      "analysisTimestamp": 1776019141405
-    },
-    "568711": {
-      "marketId": "568711",
-      "question": "Will Hao-Tong Li win the 2026 Masters tournament?",
-      "convictionScore": 35,
-      "estimatedProbability": 0.9925,
-      "baseRate": null,
-      "uncertaintyRange": 0.15,
-      "premortemRisks": [],
-      "subQuestions": [],
-      "reasoningChain": null,
-      "crossPlatformOdds": [],
-      "divergenceSignal": "no-data",
-      "consensusProbability": null,
-      "evidenceSources": [],
-      "analysisTimestamp": 1776019141405
+      "analysisTimestamp": 1776228467359
     },
     "703258": {
       "marketId": "703258",
@@ -209,13 +145,42 @@
       "divergenceSignal": "no-data",
       "consensusProbability": null,
       "evidenceSources": [],
-      "analysisTimestamp": 1776019141405
+      "analysisTimestamp": 1776228467359
     },
-    "1891048": {
-      "marketId": "1891048",
-      "question": "Kings vs. Trail Blazers",
+    "1901442": {
+      "marketId": "1901442",
+      "question": "Will Elon Musk post 300-319 tweets from April 10 to April 17, 2026?",
+      "convictionScore": 70,
+      "estimatedProbability": 0.65,
+      "baseRate": 0.6,
+      "uncertaintyRange": 0.2,
+      "premortemRisks": [
+        "Elon Musk takes an extended break from Twitter",
+        "A major event occurs that significantly reduces his tweet count",
+        "Seasonal trends are not as strong as expected"
+      ],
+      "subQuestions": [
+        "Elon Musk's average daily tweet count (p=0.8)",
+        "The number of upcoming events that might influence his tweet count (p=0.7)",
+        "Seasonal trends in his tweet activity (p=0.9)"
+      ],
+      "reasoningChain": {
+        "referenceClass": "The historical base rate for similar events (e.g., tweet frequency) suggests that Elon Musk's tweet count is likely to be around 60% of the total possible range.",
+        "decomposition": "Elon Musk's average daily tweet count (p=0.8); The number of upcoming events that might influence his tweet count (p=0.7); Seasonal trends in his tweet activity (p=0.9)",
+        "premortem": "Elon Musk takes an extended break from Twitter; A major event occurs that significantly reduces his tweet count; Seasonal trends are not as strong as expected",
+        "finalJudgment": "Based on the historical base rate of similar events, I estimate a 65% chance of Elon Musk posting 300-319 tweets from April 10 to April 17, 2026. This is a moderate estimate considering the lack of specific evidence supporting either side. I also considered the potential failure modes that could lead to a lower tweet count."
+      },
+      "crossPlatformOdds": [],
+      "divergenceSignal": "no-data",
+      "consensusProbability": null,
+      "evidenceSources": [],
+      "analysisTimestamp": 1776228291011
+    },
+    "1918791": {
+      "marketId": "1918791",
+      "question": "Will the US x Iran ceasefire be extended by April 21, 2026?",
       "convictionScore": 35,
-      "estimatedProbability": 0.935,
+      "estimatedProbability": 0.71,
       "baseRate": null,
       "uncertaintyRange": 0.15,
       "premortemRisks": [],
@@ -225,13 +190,13 @@
       "divergenceSignal": "no-data",
       "consensusProbability": null,
       "evidenceSources": [],
-      "analysisTimestamp": 1776019141405
+      "analysisTimestamp": 1776228467359
     },
-    "1891969": {
-      "marketId": "1891969",
-      "question": "Will the price of Bitcoin be above $68,000 on April 13?",
+    "1918792": {
+      "marketId": "1918792",
+      "question": "Trump announces end of military operations against Iran by April 21st?",
       "convictionScore": 35,
-      "estimatedProbability": 0.9605,
+      "estimatedProbability": 0.755,
       "baseRate": null,
       "uncertaintyRange": 0.15,
       "premortemRisks": [],
@@ -241,7 +206,99 @@
       "divergenceSignal": "no-data",
       "consensusProbability": null,
       "evidenceSources": [],
-      "analysisTimestamp": 1776019141405
+      "analysisTimestamp": 1776228467359
+    },
+    "1919417": {
+      "marketId": "1919417",
+      "question": "US x Iran permanent peace deal by April 22, 2026?",
+      "convictionScore": 35,
+      "estimatedProbability": 0.725,
+      "baseRate": null,
+      "uncertaintyRange": 0.15,
+      "premortemRisks": [],
+      "subQuestions": [],
+      "reasoningChain": null,
+      "crossPlatformOdds": [],
+      "divergenceSignal": "no-data",
+      "consensusProbability": null,
+      "evidenceSources": [],
+      "analysisTimestamp": 1776228467359
+    },
+    "1928800": {
+      "marketId": "1928800",
+      "question": "Will the price of Bitcoin be above $76,000 on April 16?",
+      "convictionScore": 35,
+      "estimatedProbability": 0.8215,
+      "baseRate": null,
+      "uncertaintyRange": 0.15,
+      "premortemRisks": [],
+      "subQuestions": [],
+      "reasoningChain": null,
+      "crossPlatformOdds": [],
+      "divergenceSignal": "no-data",
+      "consensusProbability": null,
+      "evidenceSources": [],
+      "analysisTimestamp": 1776228467359
+    },
+    "1974405": {
+      "marketId": "1974405",
+      "question": "Oeiras 3: Henrique Rocha vs Tom Gentzsch",
+      "convictionScore": 74,
+      "estimatedProbability": 0.55,
+      "baseRate": 0.5,
+      "uncertaintyRange": 0.2,
+      "premortemRisks": [
+        "Henrique Rocha suffers an injury before the match",
+        "Tom Gentzsch's recent form is overestimated"
+      ],
+      "subQuestions": [
+        "Henrique Rocha's recent form (p=0.6)",
+        "Tom Gentzsch's head-to-head advantage (p=0.4)"
+      ],
+      "reasoningChain": {
+        "referenceClass": "The historical base rate for tennis matches is around 50%, as most matches are closely contested and unpredictable.",
+        "decomposition": "Henrique Rocha's recent form (p=0.6); Tom Gentzsch's head-to-head advantage (p=0.4)",
+        "premortem": "Henrique Rocha suffers an injury before the match; Tom Gentzsch's recent form is overestimated",
+        "finalJudgment": "Based on the neutral overall signal from research, I'm leaning towards a moderate estimate. The historical base rate for tennis matches is around 50%, and considering the lack of specific evidence, I'm not confident in a strong prediction. However, the market price is slightly lower than my estimate, suggesting a potential mispricing."
+      },
+      "crossPlatformOdds": [],
+      "divergenceSignal": "no-data",
+      "consensusProbability": null,
+      "evidenceSources": [
+        "neutral overall signal from research"
+      ],
+      "analysisTimestamp": 1776228467359
+    },
+    "1979157": {
+      "marketId": "1979157",
+      "question": "Busan: Alex Bolt vs Tung-Lin Wu",
+      "convictionScore": 72,
+      "estimatedProbability": 0.55,
+      "baseRate": 0.5,
+      "uncertaintyRange": 0.1,
+      "premortemRisks": [
+        "Alex Bolt's injury",
+        "Tung-Lin Wu's recent form slump",
+        "A surprise upset"
+      ],
+      "subQuestions": [
+        "Alex Bolt's past performance (p=0.6)",
+        "Tung-Lin Wu's current form (p=0.4)",
+        "Head-to-head matchups (p=0.5)"
+      ],
+      "reasoningChain": {
+        "referenceClass": "The historical base rate for tennis matches is around 50%, as most matches are closely contested and unpredictable.",
+        "decomposition": "Alex Bolt's past performance (p=0.6); Tung-Lin Wu's current form (p=0.4); Head-to-head matchups (p=0.5)",
+        "premortem": "Alex Bolt's injury; Tung-Lin Wu's recent form slump; A surprise upset",
+        "finalJudgment": "Based on Stage 1, the historical base rate for tennis matches is around 50%. In Stage 2, I decomposed the question into three sub-questions: Alex Bolt's past performance (p=0.6), Tung-Lin Wu's current form (p=0.4), and head-to-head matchups (p=0.5). In Stage 3, I identified three failure modes: Alex Bolt's injury, Tung-Lin Wu's recent form slump, and a surprise upset. In Stage 4, I synthesized the evidence and estimated a 55% chance of Alex Bolt winning."
+      },
+      "crossPlatformOdds": [],
+      "divergenceSignal": "no-data",
+      "consensusProbability": null,
+      "evidenceSources": [
+        "No specific evidence was found to support either side."
+      ],
+      "analysisTimestamp": 1776228467359
     }
   }
 }

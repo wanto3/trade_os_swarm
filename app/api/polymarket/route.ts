@@ -505,70 +505,182 @@ function scoreMarket(market: GammaMarket): TradeRecommendation | null {
   return recommendations[0]
 }
 // ── Global response cache to prevent concurrent LLM pipeline floods ──────────
-// The dashboard auto-refreshes frequently, but LLM analysis takes 30-60s.
-// Without this, each refresh spawns a new LLM pipeline, flooding the rate limit.
 let cachedResponse: { data: any; expiry: number } | null = null
-let pipelineRunning = false
+let llmPipelineRunning = false
 const RESPONSE_CACHE_TTL = 90_000  // 90 seconds
+const FAST_CACHE_TTL = 15_000  // 15 seconds — fast results expire quickly so LLM results replace them
+
+// Pre-sort candidates by fast signal score
+function fastSignalScore(rec: TradeRecommendation): number {
+  let score = 0
+  if (rec.odds >= 0.50 && rec.odds <= 0.90) score += 30
+  else if (rec.odds >= 0.90) score += 5
+  else if (rec.odds >= 0.30) score += 15
+  if (rec.market.spread <= 0.03) score += 20
+  else if (rec.market.spread <= 0.05) score += 10
+  if ((rec.market.volume24hr || 0) >= 50000) score += 15
+  else if ((rec.market.volume24hr || 0) >= 10000) score += 8
+  if (rec.daysToClose <= 1) score += 20
+  else if (rec.daysToClose <= 3) score += 12
+  else if (rec.daysToClose <= 7) score += 6
+  return score
+}
+
+// Build the response payload from scored recommendations
+function buildResponseData(
+  recommendations: TradeRecommendation[],
+  rawMarkets: GammaMarket[],
+  llmAnalyzed: boolean,
+) {
+  // Filter out priced-in markets with no edge from hot now
+  const hotNowOpportunities = recommendations
+    .filter(r => {
+      if (!r.market.endDateIso) return false
+      if (r.daysToClose > 3) return false
+      if (r.odds > 0.90 && r.expectedValue <= 0.01) return false
+      return true
+    })
+    .sort((a, b) => (b.market.volume24hr || 0) - (a.market.volume24hr || 0))
+
+  const todayOpportunities = recommendations
+    .filter(r => {
+      if (!r.market.endDateIso) return false
+      return r.daysToClose <= 0.75
+    })
+    .sort((a, b) => {
+      if (Math.abs(b.convictionScore - a.convictionScore) > 3) return b.convictionScore - a.convictionScore
+      return (b.market.volume24hr || 0) - (a.market.volume24hr || 0)
+    })
+
+  const nearCertainOpportunities = recommendations
+    .filter(r => {
+      if (!r.market.endDateIso) return false
+      if (r.odds < 0.90) return false
+      if ((r.market.volume24hr || 0) <= 10000) return false
+      if (r.market.spread >= 0.05) return false
+      return r.daysToClose <= 3
+    })
+    .sort((a, b) => {
+      if (Math.abs(b.convictionScore - a.convictionScore) > 3) return b.convictionScore - a.convictionScore
+      return (b.market.volume24hr || 0) - (a.market.volume24hr || 0)
+    })
+
+  const valuePlayOpportunities = recommendations
+    .filter(r => {
+      if (r.odds < 0.50 || r.odds > 0.90) return false
+      if (r.convictionScore < 55) return false
+      if (r.expectedValue <= 0) return false  // must have positive edge
+      if (r.market.liquidityNum < 5000) return false
+      return true
+    })
+    .sort((a, b) => {
+      const aReturn = (a.expectedValue * a.convictionScore) / 100
+      const bReturn = (b.expectedValue * b.convictionScore) / 100
+      return bReturn - aReturn
+    })
+
+  const allOpportunities = recommendations.filter(r => r.expectedValue > 0)
+
+  const hotMarkets: PolymarketMarket[] = rawMarkets
+    .filter(m => !m.negRisk && m.liquidityNum > 5000 && m.volumeNum > 50000)
+    .slice(0, 30)
+    .map(m => {
+      let outcomePrices: number[] = []
+      try { outcomePrices = JSON.parse(m.outcomePrices || '[]').map(Number) } catch {}
+      let outcomes: string[] = []
+      try { outcomes = JSON.parse(m.outcomes || '[]') } catch {}
+      return {
+        id: m.id, question: m.question, outcomes, outcomePrices,
+        volumeNum: m.volumeNum, liquidityNum: m.liquidityNum, volume24hr: m.volume24hr || 0,
+        bestBid: m.bestBid ? Number(m.bestBid) : null, bestAsk: m.bestAsk ? Number(m.bestAsk) : null,
+        spread: m.spread ? Number(m.spread) : 0, endDateIso: m.endDateIso || null,
+        slug: m.slug || '', competitive: m.competitive || 0, url: makeMarketUrl(m)
+      }
+    })
+
+  const mapRec = (rec: TradeRecommendation) => ({
+    ...rec,
+    closingDate: rec.market.endDateIso ? new Date(rec.market.endDateIso).getTime() : Date.now() + 365 * 24 * 60 * 60 * 1000,
+    daysToClose: rec.timeAnalysis?.daysToClose ?? 999,
+  })
+
+  return {
+    success: true,
+    timestamp: Date.now(),
+    llmAnalyzed,
+    opportunities: allOpportunities.map(mapRec),
+    hotNowOpportunities: hotNowOpportunities.map(mapRec),
+    todayOpportunities: todayOpportunities.map(mapRec),
+    nearCertainOpportunities: nearCertainOpportunities.map(mapRec),
+    valuePlayOpportunities: valuePlayOpportunities.map(r => ({ ...mapRec(r), returnPerDollar: r.odds > 0 ? ((1 / r.odds) - 1) : 0 })),
+    closingSoonOpportunities: allOpportunities.filter(r =>
+      !r.market.endDateIso ||
+      r.timeAnalysis?.tier === 'pending' ||
+      r.timeAnalysis?.tier === 'imminent' || r.timeAnalysis?.tier === 'closing-soon' ||
+      (r.timeAnalysis?.daysToClose !== undefined && r.timeAnalysis.daysToClose <= 14)
+    ),
+    longTailOpportunities: allOpportunities.filter(r => r.longTail !== null),
+    hotMarkets,
+    stats: {
+      marketsAnalyzed: rawMarkets.length,
+      opportunitiesFound: allOpportunities.length,
+      closingSoonCount: allOpportunities.filter(r =>
+        !r.market.endDateIso || r.timeAnalysis?.tier === 'pending' ||
+        r.timeAnalysis?.tier === 'imminent' || r.timeAnalysis?.tier === 'closing-soon' ||
+        (r.timeAnalysis?.daysToClose !== undefined && r.timeAnalysis.daysToClose <= 14)
+      ).length,
+      longTailCount: allOpportunities.filter(r => r.longTail !== null).length,
+      todayCount: todayOpportunities.length,
+      nearCertainCount: nearCertainOpportunities.length,
+      valuePlayCount: valuePlayOpportunities.length,
+      highestConviction: allOpportunities[0]?.convictionScore || null,
+      avgConviction: allOpportunities.length > 0
+        ? Math.round(allOpportunities.reduce((s, r) => s + r.convictionScore, 0) / allOpportunities.length)
+        : null,
+    }
+  }
+}
 
 export async function GET() {
   try {
-    // If we have a fresh cached response, return it immediately
+    // Phase 1: Return cached response instantly if available
     if (cachedResponse && cachedResponse.expiry > Date.now()) {
       return Response.json(cachedResponse.data)
     }
-
-    // If another pipeline is already running, return stale cache or wait
-    if (pipelineRunning && cachedResponse) {
+    if (llmPipelineRunning && cachedResponse) {
       return Response.json(cachedResponse.data)
     }
 
-    pipelineRunning = true
-    // Fetch by volume, volume24hr, AND by endDate (for 24hr coverage)
+    // Phase 2: Fetch markets and return fast-scored results (~3s)
     const [volumeRes, volume24Res, endDateRes] = await Promise.all([
       fetch('https://gamma-api.polymarket.com/markets?closed=false&accepting_orders=true&order=volumeNum&ascending=false&limit=500', { headers: { 'Accept': 'application/json' }, cache: 'no-store' }),
       fetch('https://gamma-api.polymarket.com/markets?closed=false&accepting_orders=true&order=volume24hr&ascending=false&limit=500', { headers: { 'Accept': 'application/json' }, cache: 'no-store' }),
       fetch('https://gamma-api.polymarket.com/markets?closed=false&accepting_orders=true&order=endDate&ascending=true&limit=500', { headers: { 'Accept': 'application/json' }, cache: 'no-store' }),
     ])
 
-    if (!volumeRes.ok) {
-      throw new Error(`Gamma API error: ${volumeRes.status}`)
-    }
+    if (!volumeRes.ok) throw new Error(`Gamma API error: ${volumeRes.status}`)
 
-    // Merge markets from all three queries, deduplicated by id
     const rawMarkets: GammaMarket[] = await volumeRes.json()
     const existingIds = new Set(rawMarkets.map(m => m.id))
 
     if (volume24Res.ok) {
       const volume24Markets: GammaMarket[] = await volume24Res.json()
       for (const m of volume24Markets) {
-        if (!existingIds.has(m.id)) {
-          rawMarkets.push(m)
-          existingIds.add(m.id)
-        }
+        if (!existingIds.has(m.id)) { rawMarkets.push(m); existingIds.add(m.id) }
       }
     }
-
-    // Merge endDate-sorted markets (captures low/zero-volume markets closing soon)
     if (endDateRes.ok) {
       const endDateMarkets: GammaMarket[] = await endDateRes.json()
       for (const m of endDateMarkets) {
-        if (!existingIds.has(m.id)) {
-          rawMarkets.push(m)
-          existingIds.add(m.id)
-        }
+        if (!existingIds.has(m.id)) { rawMarkets.push(m); existingIds.add(m.id) }
       }
     }
 
     const now = Date.now()
-
     const recommendations: TradeRecommendation[] = []
 
     for (const market of rawMarkets) {
-      // Skip markets past their end date — these have resolved
-      if (market.endDateIso && new Date(market.endDateIso).getTime() < now) {
-        continue
-      }
+      if (market.endDateIso && new Date(market.endDateIso).getTime() < now) continue
       const rec = scoreMarket(market)
       if (rec) recommendations.push(rec)
     }
@@ -578,39 +690,59 @@ export async function GET() {
       return b.expectedValue - a.expectedValue
     })
 
-    // Pre-sort candidates by fast signal score so batch processing prioritizes best opportunities
-    // Fast score = near-certain bonus + spread quality + volume momentum (no network calls needed)
-    const fastSignalScore = (rec: TradeRecommendation): number => {
-      let score = 0
-      if (rec.odds >= 0.90) score += 30
-      else if (rec.odds >= 0.75) score += 15
-      if (rec.market.spread <= 0.03) score += 20
-      else if (rec.market.spread <= 0.05) score += 10
-      if ((rec.market.volume24hr || 0) >= 50000) score += 15
-      else if ((rec.market.volume24hr || 0) >= 10000) score += 8
-      if (rec.daysToClose <= 1) score += 20
-      else if (rec.daysToClose <= 3) score += 12
-      else if (rec.daysToClose <= 7) score += 6
-      return score
+    // ── Merge any existing deep analysis results into fast scores ──
+    for (const rec of recommendations) {
+      const deepResult = getDeepResult(rec.market.id)
+      if (deepResult) {
+        rec.analysisDepth = 'deep'
+        rec.convictionScore = deepResult.convictionScore
+        rec.convictionLabel = getConvictionLabel(rec.convictionScore)
+        rec.safetyScore = rec.convictionScore
+        rec.baseRate = deepResult.baseRate
+        rec.uncertaintyRange = deepResult.uncertaintyRange
+        rec.premortemRisks = deepResult.premortemRisks
+        rec.crossPlatformOdds = deepResult.crossPlatformOdds
+        rec.divergenceSignal = deepResult.divergenceSignal
+        rec.consensusProbability = deepResult.consensusProbability
+      }
     }
 
-    // Background research: fire async immediately so response is instant
-    // Pre-sort candidates by fast signals so the best ones get researched first
-    const topCandidates = recommendations
-      .sort((a, b) => fastSignalScore(b) - fastSignalScore(a))
-      .slice(0, 30)
+    // Return fast-scored results immediately — no LLM wait
+    const fastData = buildResponseData(recommendations, rawMarkets, false)
+    // Cache fast results briefly (15s) so they're replaced once LLM finishes
+    if (!cachedResponse || cachedResponse.expiry <= Date.now()) {
+      cachedResponse = { data: fastData, expiry: Date.now() + FAST_CACHE_TTL }
+    }
 
-    const topByVolume = recommendations
-      .sort((a, b) => (b.market.volumeNum - a.market.volumeNum))
-      .slice(0, 10)
+    // Phase 3: Fire LLM analysis in background — updates cache when done
+    if (!llmPipelineRunning) {
+      llmPipelineRunning = true
+      runLLMPipeline(recommendations, rawMarkets).catch(err => {
+        console.error('[LLM Pipeline] Error:', err)
+      }).finally(() => { llmPipelineRunning = false })
+    }
 
-    // ── LLM-Powered Deep Analysis (Groq Llama 3.3 70B + Web Evidence) ──────
-    // 2-stage pipeline: gather evidence via web search, then feed to LLM
+    return Response.json(fastData)
+  } catch (error) {
+    console.error('Polymarket API error:', error)
+    return NextResponse.json(
+      { success: false, error: 'Failed to fetch Polymarket data', opportunities: [], hotNowOpportunities: [], todayOpportunities: [], nearCertainOpportunities: [], valuePlayOpportunities: [], closingSoonOpportunities: [], longTailOpportunities: [], hotMarkets: [], stats: null },
+      { status: 500 }
+    )
+  }
+}
+
+// ── Background LLM Pipeline ──────────────────────────────────────────────────
+// Runs after fast results are returned. Updates the cache with LLM-enhanced results.
+async function runLLMPipeline(recommendations: TradeRecommendation[], rawMarkets: GammaMarket[]) {
     const { analyzeMarketsBatch } = await import('@/lib/services/groq-market-analysis')
     const { analyzeTimeEdge } = await import('@/lib/services/polymarket-research.service')
 
-    // Order book signals placeholder (fetchOrderBookImbalance not yet implemented)
     const obSignals = new Map<string, any>()
+
+    const topCandidates = [...recommendations]
+      .sort((a, b) => fastSignalScore(b) - fastSignalScore(a))
+      .slice(0, 30)
 
     // Select top 10 candidates with category diversity for deeper analysis
     const categorize = (q: string): string => {
@@ -622,17 +754,34 @@ export async function GET() {
     }
 
     // Build diverse candidate set: top fast-signal scores + ensure category coverage
+    // Dedup by topic fingerprint to avoid analyzing 5 variations of the same question
     const selectedForAnalysis: typeof topCandidates = []
     const usedQuestions = new Set<string>()
+    const usedTopics = new Set<string>()
     const categoryCounts = { crypto: 0, sports: 0, policy: 0, general: 0 }
-    const MAX_ANALYSIS = 10
+    const MAX_ANALYSIS = 7
 
-    // First pass: add top candidates by fast signal score
+    // Topic fingerprint: first 4 meaningful non-numeric words to group similar markets
+    // e.g. "Will Elon Musk post 260-279 tweets..." and "...280-299 tweets..." → same topic
+    const topicKey = (q: string): string => {
+      return q.toLowerCase()
+        .replace(/[^a-z\s]/g, '')  // strip numbers and punctuation
+        .split(/\s+/)
+        .filter(w => w.length > 2 && !['will', 'the', 'this', 'that', 'from', 'for', 'and', 'with', 'how', 'does', 'has', 'have', 'post', 'between', 'more', 'than', 'less'].includes(w))
+        .slice(0, 4)
+        .join('-')
+    }
+
+    // First pass: add top candidates by fast signal score, deduplicated by topic
+    // Now favors 50-90% range (where real edge lives) over 90%+ penny picks
     for (const rec of topCandidates) {
       if (selectedForAnalysis.length >= MAX_ANALYSIS) break
       if (usedQuestions.has(rec.market.question)) continue
+      const topic = topicKey(rec.market.question)
+      if (usedTopics.has(topic)) continue
       selectedForAnalysis.push(rec)
       usedQuestions.add(rec.market.question)
+      usedTopics.add(topic)
       const cat = categorize(rec.market.question)
       categoryCounts[cat as keyof typeof categoryCounts] = (categoryCounts[cat as keyof typeof categoryCounts] || 0) + 1
     }
@@ -640,7 +789,7 @@ export async function GET() {
     // Second pass: ensure at least 1 from each underrepresented category
     for (const cat of ['crypto', 'sports', 'policy'] as const) {
       if (categoryCounts[cat] === 0 && selectedForAnalysis.length < MAX_ANALYSIS) {
-        const candidate = recommendations.find(r => 
+        const candidate = recommendations.find(r =>
           categorize(r.market.question) === cat && !usedQuestions.has(r.market.question)
         )
         if (candidate) {
@@ -648,6 +797,20 @@ export async function GET() {
           usedQuestions.add(candidate.market.question)
         }
       }
+    }
+
+    // Third pass: add mid-range "value play" candidates (50-85% odds, high volume)
+    // These have bigger return per dollar — the real edge for the portfolio
+    const valueCandidates = recommendations
+      .filter(r => r.odds >= 0.50 && r.odds <= 0.85 && !usedQuestions.has(r.market.question))
+      .sort((a, b) => (b.market.volume24hr || 0) - (a.market.volume24hr || 0))
+    for (const rec of valueCandidates) {
+      if (selectedForAnalysis.length >= MAX_ANALYSIS) break
+      const topic = topicKey(rec.market.question)
+      if (usedTopics.has(topic)) continue
+      selectedForAnalysis.push(rec)
+      usedQuestions.add(rec.market.question)
+      usedTopics.add(topic)
     }
 
     // Build MarketForAnalysis array for LLM stage
@@ -666,7 +829,8 @@ export async function GET() {
     console.log(`[Pipeline] Gathered evidence for ${evidenceMap.size} markets`)
 
     // Stage 2: Run structured LLM analysis with pre-gathered evidence
-    const llmResults = await analyzeMarketsBatch(marketsForAnalysis, evidenceMap) as Map<string, import('@/lib/services/groq-market-analysis').LLMMarketAnalysis>
+    // Use fast 8B model for quick pass — 70B is reserved for background deep analysis
+    const llmResults = await analyzeMarketsBatch(marketsForAnalysis, evidenceMap, 'llama-3.1-8b-instant') as Map<string, import('@/lib/services/groq-market-analysis').LLMMarketAnalysis>
 
     console.log(`[Pipeline] LLM results: ${llmResults.size} analyzed. Keys: ${Array.from(llmResults.keys()).map(k => k.substring(0, 40)).join(' | ')}`)
     console.log(`[Pipeline] Selected questions: ${selectedForAnalysis.map(r => r.market.question.substring(0, 40)).join(' | ')}`)
@@ -713,28 +877,22 @@ export async function GET() {
       const evidenceBonus = Math.min(5, (analysis.evidenceCount || 0) * 2)
 
       rec.convictionScore = Math.min(100, baseScore + edgeBonus + evidenceBonus)
-      // Only label "high" if LLM confirmed shouldBet=true + confidence=high
-      if (analysis.shouldBet && analysis.confidence === 'high' && rec.convictionScore >= 80) {
-        rec.convictionLabel = 'high'
-      } else if (analysis.shouldBet && analysis.confidence === 'medium' && rec.convictionScore >= 60) {
-        rec.convictionLabel = 'consider'
-      } else {
-        rec.convictionLabel = 'risky'
-      }
+      // Label always follows the score — consistent with deep merge and learning adjustments
+      rec.convictionLabel = getConvictionLabel(rec.convictionScore)
       rec.safetyScore = rec.convictionScore
 
       // Update upside string with real data
       rec.upside = `Market: ${(rec.odds * 100).toFixed(1)}% → LLM Est: ${(analysis.estimatedProbability * 100).toFixed(1)}% | Edge: ${(analysis.edgeSize * 100).toFixed(1)}%`
 
       // Add LLM confidence badge and evidence count to reasoning
-      const confidenceBadge = analysis.confidence === 'high' ? '🟢 HIGH CONFIDENCE' : analysis.confidence === 'medium' ? '🟡 MEDIUM' : '🔴 LOW'
       const evidenceTag = analysis.evidenceCount > 0 ? ` [${analysis.evidenceCount} sources]` : ''
-      rec.reasoning = `[${confidenceBadge}${evidenceTag}] ${analysis.reasoning}`
 
-      // If LLM says don't bet, mark it clearly
+      // Tag reasoning with bet status
       if (!analysis.shouldBet) {
-        rec.convictionLabel = 'risky'
         rec.reasoning = `[⚠️ WATCH ONLY${evidenceTag}] ${analysis.reasoning}`
+      } else {
+        const confBadge = analysis.confidence === 'high' ? 'HIGH' : analysis.confidence === 'medium' ? 'MED' : 'LOW'
+        rec.reasoning = `[${confBadge}${evidenceTag}] ${analysis.reasoning}`
       }
 
       // Store evidence in research field
@@ -783,14 +941,14 @@ export async function GET() {
       if (deepResult) {
         rec.analysisDepth = 'deep'
         rec.convictionScore = deepResult.convictionScore
+        rec.convictionLabel = getConvictionLabel(rec.convictionScore)
+        rec.safetyScore = rec.convictionScore
         rec.baseRate = deepResult.baseRate
         rec.uncertaintyRange = deepResult.uncertaintyRange
         rec.premortemRisks = deepResult.premortemRisks
         rec.crossPlatformOdds = deepResult.crossPlatformOdds
         rec.divergenceSignal = deepResult.divergenceSignal
         rec.consensusProbability = deepResult.consensusProbability
-      } else {
-        rec.analysisDepth = 'quick'
       }
     }
 
@@ -802,150 +960,21 @@ export async function GET() {
         const catAdj = learningAdj.byCategoryAdjustment[category] || 0
         const tierAdj = learningAdj.byTierAdjustment[rec.convictionLabel] || 0
         rec.convictionScore = Math.min(100, Math.max(0, rec.convictionScore + catAdj + tierAdj))
-
-        if (rec.convictionScore >= 90) rec.convictionLabel = 'no-brainer'
-        else if (rec.convictionScore >= 75) rec.convictionLabel = 'high'
-        else if (rec.convictionScore >= 55) rec.convictionLabel = 'consider'
-        else rec.convictionLabel = 'risky'
+        rec.convictionLabel = getConvictionLabel(rec.convictionScore)
       }
     }
 
-    // Return ALL researched opportunities — no artificial conviction cap
-    // Show any opportunity with positive EV after LLM analysis.
-    // Low-edge trades (EV < 5%) will still appear but with "risky" conviction label.
-    // The LLM's confidence and shouldBet flags are the real quality gate.
-    const allOpportunities = recommendations.filter(r => {
-      if (r.expectedValue <= 0) return false
-      return true
-    })
-
-    // Hot Right Now: ALL markets closing within 3 days, sorted by volume24hr
-    // These are the most active trading opportunities RIGHT NOW — show everything regardless of conviction
-    const hotNowOpportunities = recommendations
-      .filter(r => {
-        if (!r.market.endDateIso) return false
-        const days = r.daysToClose
-        return days <= 3
-      })
-      .sort((a, b) => (b.market.volume24hr || 0) - (a.market.volume24hr || 0))
-
-    // Top 24hr Picks: markets closing within ~18 hours (same-day resolution), sorted by conviction
-    const todayOpportunities = recommendations
-      .filter(r => {
-        if (!r.market.endDateIso) return false
-        return r.daysToClose <= 0.75 // ~18 hours
-      })
-      .sort((a, b) => {
-        if (Math.abs(b.convictionScore - a.convictionScore) > 3) return b.convictionScore - a.convictionScore
-        return (b.market.volume24hr || 0) - (a.market.volume24hr || 0)
-      })
-
-    // Near-Certain Opportunities: high-price markets with good liquidity, closing within 3 days
-    // These are the highest-accuracy positions — price >= 90%, volume24hr > $10K, spread < 5%
-    const nearCertainOpportunities = recommendations
-      .filter(r => {
-        if (!r.market.endDateIso) return false
-        if (r.odds < 0.90) return false
-        if ((r.market.volume24hr || 0) <= 10000) return false
-        if (r.market.spread >= 0.05) return false
-        return r.daysToClose <= 3
-      })
-      .sort((a, b) => {
-        if (Math.abs(b.convictionScore - a.convictionScore) > 3) return b.convictionScore - a.convictionScore
-        return (b.market.volume24hr || 0) - (a.market.volume24hr || 0)
-      })
-
-    const hotMarkets: PolymarketMarket[] = rawMarkets
-      .filter(m => !m.negRisk && m.liquidityNum > 5000 && m.volumeNum > 50000)
-      .slice(0, 30)
-      .map(m => {
-        let outcomePrices: number[] = []
-        try { outcomePrices = JSON.parse(m.outcomePrices || '[]').map(Number) } catch {}
-        let outcomes: string[] = []
-        try { outcomes = JSON.parse(m.outcomes || '[]') } catch {}
-        return {
-          id: m.id,
-          question: m.question,
-          outcomes,
-          outcomePrices,
-          volumeNum: m.volumeNum,
-          liquidityNum: m.liquidityNum,
-          volume24hr: m.volume24hr || 0,
-          bestBid: m.bestBid ? Number(m.bestBid) : null,
-          bestAsk: m.bestAsk ? Number(m.bestAsk) : null,
-          spread: m.spread ? Number(m.spread) : 0,
-          endDateIso: m.endDateIso || null,
-          slug: m.slug || '',
-          competitive: m.competitive || 0,
-          url: makeMarketUrl(m)
-        }
-      })
-
-    const responseData = {
-      success: true,
-      timestamp: Date.now(),
-      opportunities: allOpportunities.map(rec => ({
-        ...rec,
-        closingDate: rec.market.endDateIso ? new Date(rec.market.endDateIso).getTime() : Date.now() + 365 * 24 * 60 * 60 * 1000,
-        daysToClose: rec.timeAnalysis?.daysToClose ?? 999,
-      })),
-      // Hot Right Now: markets closing within 3 days, sorted by volume24hr
-      hotNowOpportunities: hotNowOpportunities.map(rec => ({
-        ...rec,
-        closingDate: rec.market.endDateIso ? new Date(rec.market.endDateIso).getTime() : Date.now() + 365 * 24 * 60 * 60 * 1000,
-        daysToClose: rec.timeAnalysis?.daysToClose ?? 999,
-      })),
-      // Top 24hr Picks: same-day resolution markets (closing within ~18 hours)
-      todayOpportunities: todayOpportunities.map(rec => ({
-        ...rec,
-        closingDate: rec.market.endDateIso ? new Date(rec.market.endDateIso).getTime() : Date.now() + 365 * 24 * 60 * 60 * 1000,
-        daysToClose: rec.timeAnalysis?.daysToClose ?? 999,
-      })),
-      // Near-Certain Opportunities: price >= 90%, volume24hr > $10K, closing within 3 days
-      nearCertainOpportunities: nearCertainOpportunities.map(rec => ({
-        ...rec,
-        closingDate: rec.market.endDateIso ? new Date(rec.market.endDateIso).getTime() : Date.now() + 365 * 24 * 60 * 60 * 1000,
-        daysToClose: rec.timeAnalysis?.daysToClose ?? 999,
-      })),
-      // Include pending (no-date) and up to 14-day markets in closing-soon grouping
-      closingSoonOpportunities: allOpportunities.filter(r =>
-        !r.market.endDateIso ||
-        r.timeAnalysis?.tier === 'pending' ||
-        r.timeAnalysis?.tier === 'imminent' || r.timeAnalysis?.tier === 'closing-soon' ||
-        (r.timeAnalysis?.daysToClose !== undefined && r.timeAnalysis.daysToClose <= 14)
-      ),
-      longTailOpportunities: allOpportunities.filter(r => r.longTail !== null),
-      hotMarkets,
-      stats: {
-        marketsAnalyzed: rawMarkets.length,
-        opportunitiesFound: allOpportunities.length,
-        // Count pending (no-date) and up to 14-day markets as closing-soon
-        closingSoonCount: allOpportunities.filter(r =>
-          !r.market.endDateIso ||
-          r.timeAnalysis?.tier === 'pending' ||
-          r.timeAnalysis?.tier === 'imminent' || r.timeAnalysis?.tier === 'closing-soon' ||
-          (r.timeAnalysis?.daysToClose !== undefined && r.timeAnalysis.daysToClose <= 14)
-        ).length,
-        longTailCount: allOpportunities.filter(r => r.longTail !== null).length,
-        todayCount: todayOpportunities.length,
-        nearCertainCount: nearCertainOpportunities.length,
-        highestConviction: allOpportunities[0]?.convictionScore || null,
-        avgConviction: allOpportunities.length > 0
-          ? Math.round(allOpportunities.reduce((s, r) => s + r.convictionScore, 0) / allOpportunities.length)
-          : null,
-      }
-    }
-
-    // Cache the response to prevent concurrent pipeline floods
-    cachedResponse = { data: responseData, expiry: Date.now() + RESPONSE_CACHE_TTL }
-    pipelineRunning = false
+    // Build LLM-enhanced response and cache it for 90 seconds
+    const llmData = buildResponseData(recommendations, rawMarkets, true)
+    cachedResponse = { data: llmData, expiry: Date.now() + RESPONSE_CACHE_TTL }
+    console.log(`[LLM Pipeline] Complete — cached LLM-enhanced results`)
 
     // Fire-and-forget: trigger deep analysis if stale
     if (isDeepRunStale()) {
       const marketsForDeep = recommendations
-        .filter((r: any) => r.analysisDepth !== 'deep')
+        .filter(r => r.analysisDepth !== 'deep')
         .slice(0, 15)
-        .map((r: any) => ({
+        .map(r => ({
           id: r.market.id,
           question: r.market.question,
           currentPrice: r.odds,
@@ -958,14 +987,4 @@ export async function GET() {
         console.error('[Deep Analysis] Background run failed:', err)
       )
     }
-
-    return Response.json(responseData)
-  } catch (error) {
-    pipelineRunning = false
-    console.error('Polymarket API error:', error)
-    return NextResponse.json(
-      { success: false, error: 'Failed to fetch Polymarket data', opportunities: [], hotNowOpportunities: [], todayOpportunities: [], nearCertainOpportunities: [], closingSoonOpportunities: [], longTailOpportunities: [], hotMarkets: [], stats: null },
-      { status: 500 }
-    )
-  }
 }

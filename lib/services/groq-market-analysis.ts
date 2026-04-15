@@ -96,13 +96,20 @@ function setCache(question: string, result: LLMMarketAnalysis): void {
 
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
 
-async function callGroq(prompt: string, retries = 3): Promise<string> {
+type GroqModel = 'llama-3.3-70b-versatile' | 'llama-3.1-8b-instant'
+
+async function callGroq(prompt: string, retries = 3, model: GroqModel = 'llama-3.3-70b-versatile'): Promise<string> {
   const apiKey = process.env.GROQ_API_KEY
   if (!apiKey) throw new Error('GROQ_API_KEY not set')
 
+  const is8B = model === 'llama-3.1-8b-instant'
+  const timeoutMs = is8B ? 15000 : 20000
+  const maxTokens = is8B ? 400 : 600
+  const tag = is8B ? '[Groq 8B]' : '[Groq 70B]'
+
   for (let attempt = 0; attempt < retries; attempt++) {
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 20000) // 20s timeout for 70B
+    const timeout = setTimeout(() => controller.abort(), timeoutMs)
 
     try {
       const res = await fetch(GROQ_URL, {
@@ -112,10 +119,10 @@ async function callGroq(prompt: string, retries = 3): Promise<string> {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'llama-3.3-70b-versatile',
+          model,
           messages: [{ role: 'user', content: prompt }],
           temperature: 0.1,
-          max_tokens: 600,
+          max_tokens: maxTokens,
           response_format: { type: 'json_object' },
         }),
         signal: controller.signal,
@@ -123,8 +130,8 @@ async function callGroq(prompt: string, retries = 3): Promise<string> {
       clearTimeout(timeout)
 
       if (res.status === 429) {
-        const waitMs = Math.min(15000, (attempt + 1) * 5000)
-        console.log(`[Groq 70B] Rate limited, waiting ${waitMs}ms before retry ${attempt + 1}/${retries}`)
+        const waitMs = is8B ? Math.min(3000, (attempt + 1) * 1000) : Math.min(15000, (attempt + 1) * 5000)
+        console.log(`${tag} Rate limited, waiting ${waitMs}ms before retry ${attempt + 1}/${retries}`)
         await new Promise(r => setTimeout(r, waitMs))
         continue
       }
@@ -139,11 +146,11 @@ async function callGroq(prompt: string, retries = 3): Promise<string> {
     } catch (e: any) {
       clearTimeout(timeout)
       if (e.name === 'AbortError') {
-        console.log(`[Groq 70B] Timeout on attempt ${attempt + 1}`)
+        console.log(`${tag} Timeout on attempt ${attempt + 1}`)
         continue
       }
       if (attempt === retries - 1) throw e
-      await new Promise(r => setTimeout(r, 3000))
+      await new Promise(r => setTimeout(r, is8B ? 1000 : 3000))
     }
   }
   throw new Error('Groq: max retries exceeded')
@@ -251,13 +258,14 @@ Return JSON with these exact fields:
 
 export async function analyzeMarketWithLLM(
   market: MarketForAnalysis,
-  evidence: CategoryEvidence
+  evidence: CategoryEvidence,
+  model: GroqModel = 'llama-3.3-70b-versatile'
 ): Promise<LLMMarketAnalysis> {
   const cached = getCached(market.question)
   if (cached) return cached
 
   try {
-    const raw = await callGroq(buildStructuredPrompt(market, evidence))
+    const raw = await callGroq(buildStructuredPrompt(market, evidence), 3, model)
     let parsed: any
     try {
       parsed = JSON.parse(raw)
@@ -388,10 +396,12 @@ export async function analyzeMarketWithLLM(
  */
 export async function analyzeMarketsBatch(
   markets: MarketForAnalysis[],
-  evidenceMap: Map<string, CategoryEvidence>
+  evidenceMap: Map<string, CategoryEvidence>,
+  model: GroqModel = 'llama-3.3-70b-versatile'
 ): Promise<Map<string, LLMMarketAnalysis>> {
   const results = new Map<string, LLMMarketAnalysis>()
-  const DELAY_MS = 1500  // 1.5s between LLM calls for Groq rate limit
+  const is8B = model === 'llama-3.1-8b-instant'
+  const DELAY_MS = is8B ? 1000 : 1500  // 8B has higher rate limits but still needs spacing
 
   console.log(`[Groq Analysis] Processing ${markets.length} markets with pre-gathered evidence...`)
 
@@ -418,7 +428,7 @@ export async function analyzeMarketsBatch(
     }
 
     try {
-      const analysis = await analyzeMarketWithLLM(market, evidence)
+      const analysis = await analyzeMarketWithLLM(market, evidence, model)
       results.set(market.question, analysis)
       const edgePct = (analysis.edgeSize * 100).toFixed(1)
       console.log(

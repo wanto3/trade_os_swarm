@@ -77,8 +77,10 @@ interface TradeRecommendation {
 interface ApiResponse {
   success: boolean
   timestamp: number
+  llmAnalyzed?: boolean
   opportunities: TradeRecommendation[]
   hotNowOpportunities: TradeRecommendation[]
+  valuePlayOpportunities?: TradeRecommendation[]
   closingSoonOpportunities: TradeRecommendation[]
   longTailOpportunities: TradeRecommendation[]
   hotMarkets: Market[]
@@ -158,7 +160,7 @@ interface Portfolio {
 // ── Sort Types ────────────────────────────────────────────────────────────────
 
 type SortKey = 'fastestProfit' | 'safety' | 'ev' | 'closing' | 'confidence'
-type FilterKey = 'all' | 'high' | 'medium' | 'low' | '24h' | 'today' | '3days' | '7days' | '14days' | '30days' | 'anyEdge'
+type FilterKey = 'all' | 'high' | 'medium' | 'low' | '24h' | 'today' | '3days' | '7days' | '14days' | '30days' | 'anyEdge' | 'value'
 type KellyMode = 'quarter' | 'half' | 'full'
 type TabKey = 'opportunities' | 'paper-trades' | 'performance' | 'settings'
 
@@ -437,10 +439,12 @@ export function PolymarketSection() {
     } catch { /* ignore */ }
   }
 
+  // Auto-refresh: fast poll (10s) when waiting for AI analysis, slow (2min) once enhanced
   useEffect(() => {
-    const id = setInterval(fetchData, 120000)
+    const interval = data?.llmAnalyzed ? 120000 : 10000
+    const id = setInterval(fetchData, interval)
     return () => clearInterval(id)
-  }, [fetchData])
+  }, [fetchData, data?.llmAnalyzed])
 
   const loadBalance = async () => {
     setBalanceLoading(true)
@@ -618,18 +622,34 @@ export function PolymarketSection() {
 
   // ── Derived data ─────────────────────────────────────────────────────────────
 
-  // Use opportunities if available, fall back to hotNowOpportunities for display
-  const opportunities = (data?.opportunities?.length ?? 0) > 0
-    ? data!.opportunities
-    : data?.hotNowOpportunities ?? []
+  // Merge opportunities + hotNowOpportunities + valuePlayOpportunities, deduplicated by market id
+  // This ensures all filters have markets to show
+  const mergedOpportunities = (() => {
+    const opps = data?.opportunities ?? []
+    const hot = data?.hotNowOpportunities ?? []
+    const value = data?.valuePlayOpportunities ?? []
+    const seen = new Set(opps.map(o => o.market.id))
+    const merged = [...opps]
+    for (const list of [hot, value]) {
+      for (const item of list) {
+        if (!seen.has(item.market.id)) {
+          merged.push(item)
+          seen.add(item.market.id)
+        }
+      }
+    }
+    return merged
+  })()
+  const opportunities = mergedOpportunities
   const filtered = applyMultiSort(opportunities).filter(rec => {
     if (filterKey === 'high') return rec.confidence === 'high'
     if (filterKey === 'medium') return rec.confidence === 'medium'
     if (filterKey === 'low') return rec.confidence === 'low'
     if (filterKey === 'anyEdge') return rec.expectedValue > 0.03 && rec.safetyScore >= 40
+    if (filterKey === 'value') return rec.odds >= 0.50 && rec.odds <= 0.90 && (rec.convictionScore ?? 0) >= 55
     // Only show markets with a real end date in time-based filters
     if (!rec.market.endDateIso) return filterKey === 'all'
-    if (filterKey === '24h') return liveDays(rec) <= 1
+    if (filterKey === '24h') return liveDays(rec) <= 2
     if (filterKey === 'today') return liveDays(rec) <= 3
     if (filterKey === '3days') return liveDays(rec) <= 3
     if (filterKey === '7days') return liveDays(rec) <= 7
@@ -705,6 +725,12 @@ export function PolymarketSection() {
             </h2>
             <p style={{ fontSize: '0.65rem', color: '#6e7681', margin: 0 }}>
               {opportunities.length} opportunities
+              {data && !data.llmAnalyzed && (
+                <span style={{ color: '#f0883e', fontWeight: 600 }}> • AI analyzing...</span>
+              )}
+              {data?.llmAnalyzed && (
+                <span style={{ color: '#3fb950', fontWeight: 600 }}> • AI enhanced</span>
+              )}
               {liveTradingEnabled && liveTradingStatus?.enabled ? (
                 <>
                   <span style={{ color: '#f85149', fontWeight: 600 }}> • LIVE</span>
@@ -1049,6 +1075,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
                 { key: 'today' as FilterKey, label: `≤3d` },
                 { key: '7days' as FilterKey, label: `≤7d` },
                 { key: '14days' as FilterKey, label: `≤14d` },
+                { key: 'value' as FilterKey, label: `Value` },
                 { key: 'high' as FilterKey, label: `HIGH` },
                 { key: 'medium' as FilterKey, label: `MED` },
                 { key: 'all' as FilterKey, label: `All (${filtered.length})` },
@@ -1058,9 +1085,9 @@ POLYMARKET_CLOB_API_SECRET=...`}
                   onClick={() => setFilterKey(tab.key)}
                   style={{
                     padding: '3px 8px', fontSize: '0.58rem', fontWeight: 600,
-                    background: filterKey === tab.key ? (tab.key === '24h' ? 'rgba(248,81,73,0.2)' : tab.key === '14days' || tab.key === '7days' ? 'rgba(240,136,62,0.2)' : tab.key === 'today' ? 'rgba(240,136,62,0.15)' : 'rgba(63, 185, 80, 0.15)') : 'transparent',
-                    color: filterKey === tab.key ? (tab.key === '24h' ? '#f85149' : tab.key === '14days' || tab.key === '7days' || tab.key === 'today' ? '#f0883e' : '#3fb950') : '#6e7681',
-                    border: `1px solid ${filterKey === tab.key ? (tab.key === '24h' ? 'rgba(248,81,73,0.35)' : tab.key === '14days' || tab.key === '7days' || tab.key === 'today' ? 'rgba(240,136,62,0.3)' : 'rgba(63, 185, 80, 0.3)') : '#30363d'}`,
+                    background: filterKey === tab.key ? (tab.key === 'value' ? 'rgba(168,85,247,0.2)' : tab.key === '24h' ? 'rgba(248,81,73,0.2)' : tab.key === '14days' || tab.key === '7days' ? 'rgba(240,136,62,0.2)' : tab.key === 'today' ? 'rgba(240,136,62,0.15)' : 'rgba(63, 185, 80, 0.15)') : 'transparent',
+                    color: filterKey === tab.key ? (tab.key === 'value' ? '#a855f7' : tab.key === '24h' ? '#f85149' : tab.key === '14days' || tab.key === '7days' || tab.key === 'today' ? '#f0883e' : '#3fb950') : '#6e7681',
+                    border: `1px solid ${filterKey === tab.key ? (tab.key === 'value' ? 'rgba(168,85,247,0.35)' : tab.key === '24h' ? 'rgba(248,81,73,0.35)' : tab.key === '14days' || tab.key === '7days' || tab.key === 'today' ? 'rgba(240,136,62,0.3)' : 'rgba(63, 185, 80, 0.3)') : '#30363d'}`,
                     borderRadius: '16px', cursor: 'pointer',
                   }}
                 >
@@ -1133,8 +1160,10 @@ POLYMARKET_CLOB_API_SECRET=...`}
                 const ev = kellyBet * rec.expectedValue
                 const isAlreadyPlaced = openPositions.some(p => p.marketId === rec.market.id)
                 const liveDaysToClose = liveDays(rec)
-                const confColor = rec.confidence === 'high' ? '#3fb950' : rec.confidence === 'medium' ? '#f0883e' : '#8b949e'
-                const confBg = rec.confidence === 'high' ? 'rgba(63,185,80,0.12)' : rec.confidence === 'medium' ? 'rgba(240,136,62,0.12)' : 'rgba(139,148,158,0.1)'
+                // Use convictionLabel for badge color — it reflects deep analysis + learning adjustments
+                const label = rec.convictionLabel || 'risky'
+                const confColor = label === 'no-brainer' ? '#a855f7' : label === 'high' ? '#3fb950' : label === 'consider' ? '#f0883e' : '#8b949e'
+                const confBg = label === 'no-brainer' ? 'rgba(168,85,247,0.12)' : label === 'high' ? 'rgba(63,185,80,0.12)' : label === 'consider' ? 'rgba(240,136,62,0.12)' : 'rgba(139,148,158,0.1)'
                 const outcomeColor = rec.outcome.toLowerCase() === 'yes' ? '#3fb950' : '#f85149'
 
                 return (
@@ -1183,7 +1212,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
                           flexShrink: 0,
                           letterSpacing: '0.03em',
                         }}>
-                          {rec.confidence.toUpperCase()}
+                          {label === 'no-brainer' ? 'NO-BRAINER' : label.toUpperCase()}
                         </span>
                         {rec.analysisDepth === 'deep' && (
                           <span className="px-1.5 py-0.5 rounded text-[10px] font-bold"
@@ -1218,6 +1247,26 @@ POLYMARKET_CLOB_API_SECRET=...`}
                         }}>
                           +{(rec.expectedValue * 100).toFixed(1)}% EV
                         </span>
+                        {rec.odds > 0 && rec.odds <= 0.90 && (
+                          <span style={{
+                            fontSize: '0.55rem',
+                            fontWeight: 600,
+                            color: (1/rec.odds - 1) >= 0.25 ? '#3fb950' : '#58a6ff',
+                            opacity: 0.8,
+                          }}>
+                            {((1/rec.odds - 1) * 100).toFixed(0)}% return
+                          </span>
+                        )}
+                        {rec.odds > 0.90 && (
+                          <span style={{
+                            fontSize: '0.5rem',
+                            fontWeight: 600,
+                            color: '#f85149',
+                            opacity: 0.7,
+                          }}>
+                            {((1/rec.odds - 1) * 100).toFixed(0)}% return | {(rec.odds * 100).toFixed(0)}% at risk
+                          </span>
+                        )}
                         {rec.analysisDepth === 'deep' && rec.baseRate != null && (
                           <span className="text-[10px] opacity-60" style={{ color: '#a855f7' }}>
                             Base: {(rec.baseRate * 100).toFixed(0)}% | +/-{((rec.uncertaintyRange || 0.15) * 100).toFixed(0)}%

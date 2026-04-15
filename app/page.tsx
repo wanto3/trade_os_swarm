@@ -129,6 +129,11 @@ export default function DashboardPage() {
     }
   }, [fetchPrices])
 
+  // Prefetch prediction market data on page load so it's ready when user opens Markets tab
+  useEffect(() => {
+    fetch('/api/polymarket', { cache: 'no-store' }).catch(() => {})
+  }, [])
+
   // Order book mock
   const midPrice = selectedPrice.price
   const spread = midPrice * 0.0003

@@ -1,1 +1,73 @@
-{"portfolios":[],"compressed":[],"globalStats":{"totalTrades":0,"totalResolved":0,"totalWins":0,"totalLosses":0,"overallWinRate":null}}
+{
+  "portfolios": [
+    {
+      "date": "2026-04-15",
+      "entries": [
+        {
+          "marketId": "1901442",
+          "question": "Will Elon Musk post 300-319 tweets from April 10 to April 17, 2026?",
+          "side": "no",
+          "entryOdds": 0.76,
+          "convictionScore": 70,
+          "convictionLabel": "consider",
+          "evidenceSources": [
+            "news",
+            "search"
+          ],
+          "analysisDepth": "deep",
+          "category": "general",
+          "estimatedProbability": 0.76,
+          "baseRate": 0.5,
+          "uncertaintyRange": 0.2,
+          "id": "pt-1776224923238-asxloq",
+          "date": "2026-04-15",
+          "addedAt": "2026-04-15T03:48:43.238Z",
+          "resolved": false,
+          "outcome": null,
+          "resolvedAt": null,
+          "resolutionPrice": null
+        },
+        {
+          "marketId": "1928800",
+          "question": "Will the price of Bitcoin be above $76,000 on April 16?",
+          "side": "no",
+          "entryOdds": 0.826,
+          "convictionScore": 97,
+          "convictionLabel": "no-brainer",
+          "evidenceSources": [
+            "news",
+            "search"
+          ],
+          "analysisDepth": "deep",
+          "category": "general",
+          "estimatedProbability": 0.826,
+          "baseRate": 0.5,
+          "uncertaintyRange": 0.1,
+          "id": "pt-1776224926104-o1e2me",
+          "date": "2026-04-15",
+          "addedAt": "2026-04-15T03:48:46.104Z",
+          "resolved": false,
+          "outcome": null,
+          "resolvedAt": null,
+          "resolutionPrice": null
+        }
+      ],
+      "stats": {
+        "total": 2,
+        "resolved": 0,
+        "wins": 0,
+        "losses": 0,
+        "pending": 2,
+        "winRate": null
+      }
+    }
+  ],
+  "compressed": [],
+  "globalStats": {
+    "totalTrades": 2,
+    "totalResolved": 0,
+    "totalWins": 0,
+    "totalLosses": 0,
+    "overallWinRate": null
+  }
+}
