@@ -507,6 +507,7 @@ function scoreMarket(market: GammaMarket): TradeRecommendation | null {
 // ── Global response cache to prevent concurrent LLM pipeline floods ──────────
 let cachedResponse: { data: any; expiry: number } | null = null
 let llmPipelineRunning = false
+let continuationRunning = false
 const RESPONSE_CACHE_TTL = 90_000  // 90 seconds
 const FAST_CACHE_TTL = 15_000  // 15 seconds — fast results expire quickly so LLM results replace them
 
@@ -817,7 +818,8 @@ async function runLLMPipeline(recommendations: TradeRecommendation[], rawMarkets
     const usedQuestions = new Set<string>()
     const usedTopics = new Set<string>()
     const categoryCounts = { crypto: 0, sports: 0, policy: 0, general: 0 }
-    const MAX_ANALYSIS = 20
+    const MAX_ANALYSIS = 12  // first batch — keep small for <15s wait
+    const CONTINUATION_BATCH = 15  // additional markets analyzed in background after first batch
 
     // Topic fingerprint: first 4 meaningful non-numeric words to group similar markets
     // e.g. "Will Elon Musk post 260-279 tweets..." and "...280-299 tweets..." → same topic
@@ -1050,7 +1052,13 @@ async function runLLMPipeline(recommendations: TradeRecommendation[], rawMarkets
     // Build LLM-enhanced response and cache it for 90 seconds
     const llmData = buildResponseData(recommendations, rawMarkets, true)
     cachedResponse = { data: llmData, expiry: Date.now() + RESPONSE_CACHE_TTL }
-    console.log(`[LLM Pipeline] Complete — cached LLM-enhanced results`)
+    console.log(`[LLM Pipeline] Complete (first batch) — cached LLM-enhanced results`)
+
+    // ── Continuation pass: analyze MORE markets in background, refresh cache when done ──
+    // This way users see the first 12 quickly, then more analyzed picks come in over ~10-20s.
+    runContinuationAnalysis(recommendations, rawMarkets, CONTINUATION_BATCH).catch(err =>
+      console.error('[Continuation] Failed:', err)
+    )
 
     // Fire-and-forget: trigger deep analysis if stale — but delay 30s so Groq rate limits
     // have a chance to reset after the fast pass finishes
@@ -1074,4 +1082,87 @@ async function runLLMPipeline(recommendations: TradeRecommendation[], rawMarkets
       }, 30_000)  // 30s delay — let rate limits cool off
       console.log('[Deep Analysis] Scheduled in 30s to avoid Groq rate-limit contention')
     }
+}
+
+// Continuation pass: analyze additional markets after the first batch finishes.
+// Runs in the background and refreshes the cached response when complete, so the user
+// sees more analyzed picks without waiting on the initial request.
+async function runContinuationAnalysis(
+  recommendations: TradeRecommendation[],
+  rawMarkets: GammaMarket[],
+  batchSize: number,
+) {
+  if (continuationRunning) {
+    console.log('[Continuation] Already running, skipping')
+    return
+  }
+  continuationRunning = true
+  const startMs = Date.now()
+  try {
+    // Pick markets that aren't already analyzed (still 'pending') and have meaningful volume
+    const pending = recommendations
+      .filter(r => r.analysisDepth === 'pending' && (r.market.volume24hr || 0) > 5000)
+      .sort((a, b) => fastSignalScore(b) - fastSignalScore(a))
+      .slice(0, batchSize)
+
+    if (pending.length === 0) {
+      console.log('[Continuation] No pending markets to analyze')
+      return
+    }
+
+    console.log(`[Continuation] Analyzing ${pending.length} additional markets in background...`)
+
+    const { gatherEvidenceBatch } = await import('@/lib/services/category-research.service')
+    const { analyzeMarketsBatch } = await import('@/lib/services/groq-market-analysis')
+
+    const marketsForAnalysis = pending.map(rec => ({
+      question: rec.market.question,
+      currentPrice: rec.odds,
+      outcomes: rec.market.outcomes as string[],
+      endDate: rec.market.endDateIso,
+      volume: rec.market.volumeNum,
+      liquidity: rec.market.liquidityNum,
+    }))
+
+    const evidenceMap = await gatherEvidenceBatch(marketsForAnalysis.map(m => m.question))
+    const llmResults = await analyzeMarketsBatch(marketsForAnalysis, evidenceMap, 'llama-3.1-8b-instant') as Map<string, import('@/lib/services/groq-market-analysis').LLMMarketAnalysis>
+
+    // Apply results to the recommendation objects
+    let upgraded = 0
+    for (const rec of pending) {
+      const analysis = llmResults.get(rec.market.question)
+      if (!analysis) continue
+      rec.estimatedProbability = analysis.estimatedProbability
+      if (analysis.direction === 'no') {
+        const noOdds = 1 - rec.odds
+        const noEstimate = 1 - analysis.estimatedProbability
+        rec.expectedValue = (noEstimate - noOdds) / (1 - noOdds)
+      } else {
+        rec.expectedValue = (analysis.estimatedProbability - rec.odds) / (1 - rec.odds)
+      }
+      rec.reasoning = analysis.reasoning
+      rec.confidence = analysis.confidence
+      const confidenceBase = { high: 88, medium: 62, low: 30 }
+      const baseScore = confidenceBase[analysis.confidence] || 30
+      const edgeBonus = Math.min(7, Math.round(analysis.edgeSize * 100))
+      const evidenceBonus = Math.min(5, (analysis.evidenceCount || 0) * 2)
+      rec.convictionScore = Math.min(100, baseScore + edgeBonus + evidenceBonus)
+      rec.convictionLabel = getConvictionLabel(rec.convictionScore)
+      rec.safetyScore = rec.convictionScore
+      rec.upside = `Market: ${(rec.odds * 100).toFixed(1)}% → LLM Est: ${(analysis.estimatedProbability * 100).toFixed(1)}% | Edge: ${(analysis.edgeSize * 100).toFixed(1)}%`
+      rec.analysisDepth = 'quick'
+      upgraded++
+    }
+
+    // Refresh cache so next request sees the new analyzed picks
+    const llmData = buildResponseData(recommendations, rawMarkets, true)
+    cachedResponse = { data: llmData, expiry: Date.now() + RESPONSE_CACHE_TTL }
+
+    const elapsed = ((Date.now() - startMs) / 1000).toFixed(1)
+    console.log(`[Continuation] Upgraded ${upgraded}/${pending.length} markets to analyzed in ${elapsed}s — cache refreshed`)
+  } catch (e) {
+    console.error('[Continuation] Error:', e instanceof Error ? e.message : e)
+  } finally {
+    continuationRunning = false
+  }
 }
