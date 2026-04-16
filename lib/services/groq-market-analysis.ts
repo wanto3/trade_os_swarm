@@ -401,51 +401,54 @@ export async function analyzeMarketsBatch(
 ): Promise<Map<string, LLMMarketAnalysis>> {
   const results = new Map<string, LLMMarketAnalysis>()
   const is8B = model === 'llama-3.1-8b-instant'
-  const DELAY_MS = is8B ? 1000 : 1500  // 8B has higher rate limits but still needs spacing
+  // 8B has ~30 RPM free-tier limit; run 4 in parallel (well under limit), 70B tighter so only 2
+  const CONCURRENCY = is8B ? 4 : 2
 
-  console.log(`[Groq Analysis] Processing ${markets.length} markets with pre-gathered evidence...`)
+  console.log(`[Groq Analysis] Processing ${markets.length} markets with concurrency=${CONCURRENCY}...`)
+  const startMs = Date.now()
 
-  for (let i = 0; i < markets.length; i++) {
-    const market = markets[i]
-
-    // Skip if already cached
+  // Partition markets: cached vs needs-analysis
+  const toAnalyze: { market: MarketForAnalysis; idx: number }[] = []
+  markets.forEach((market, i) => {
     const cached = getCached(market.question)
     if (cached) {
       results.set(market.question, cached)
       console.log(`[Groq ${i + 1}/${markets.length}] CACHED: ${market.question.substring(0, 40)}...`)
-      continue
+    } else {
+      toAnalyze.push({ market, idx: i })
     }
+  })
 
-    // Get pre-gathered evidence (or build empty if missing)
-    const evidence = evidenceMap.get(market.question) || {
-      category: 'general' as const,
-      bullishFindings: [],
-      bearishFindings: [],
-      neutralFindings: [],
-      overallSignal: 'none' as const,
-      signalStrength: 0,
-      keyInsights: [],
-    }
-
-    try {
-      const analysis = await analyzeMarketWithLLM(market, evidence, model)
-      results.set(market.question, analysis)
-      const edgePct = (analysis.edgeSize * 100).toFixed(1)
-      console.log(
-        `[Groq ${i + 1}/${markets.length}] ${market.question.substring(0, 40)}... | ` +
-        `${analysis.confidence} conf | edge=${edgePct}% | bet=${analysis.shouldBet} | ` +
-        `dir=${analysis.direction} | signal=${analysis.signalStrength}`
-      )
-    } catch (e) {
-      console.error(`[Groq ${i + 1}/${markets.length}] FAILED:`, e instanceof Error ? e.message : '')
-    }
-
-    // Delay between API calls (skip after last)
-    if (i < markets.length - 1) {
-      await new Promise(r => setTimeout(r, DELAY_MS))
-    }
+  // Process in parallel chunks of CONCURRENCY
+  for (let chunkStart = 0; chunkStart < toAnalyze.length; chunkStart += CONCURRENCY) {
+    const chunk = toAnalyze.slice(chunkStart, chunkStart + CONCURRENCY)
+    await Promise.all(chunk.map(async ({ market, idx }) => {
+      const evidence = evidenceMap.get(market.question) || {
+        category: 'general' as const,
+        bullishFindings: [],
+        bearishFindings: [],
+        neutralFindings: [],
+        overallSignal: 'none' as const,
+        signalStrength: 0,
+        keyInsights: [],
+      }
+      try {
+        const analysis = await analyzeMarketWithLLM(market, evidence, model)
+        results.set(market.question, analysis)
+        const edgePct = (analysis.edgeSize * 100).toFixed(1)
+        console.log(
+          `[Groq ${idx + 1}/${markets.length}] ${market.question.substring(0, 40)}... | ` +
+          `${analysis.confidence} conf | edge=${edgePct}% | bet=${analysis.shouldBet} | ` +
+          `dir=${analysis.direction} | signal=${analysis.signalStrength}`
+        )
+      } catch (e) {
+        console.error(`[Groq ${idx + 1}/${markets.length}] FAILED:`, e instanceof Error ? e.message : '')
+      }
+    }))
   }
 
+  const elapsed = ((Date.now() - startMs) / 1000).toFixed(1)
+  console.log(`[Groq Analysis] ${results.size}/${markets.length} done in ${elapsed}s`)
   return results
 }
 

@@ -817,7 +817,7 @@ async function runLLMPipeline(recommendations: TradeRecommendation[], rawMarkets
     const usedQuestions = new Set<string>()
     const usedTopics = new Set<string>()
     const categoryCounts = { crypto: 0, sports: 0, policy: 0, general: 0 }
-    const MAX_ANALYSIS = 10
+    const MAX_ANALYSIS = 20
 
     // Topic fingerprint: first 4 meaningful non-numeric words to group similar markets
     // e.g. "Will Elon Musk post 260-279 tweets..." and "...280-299 tweets..." → same topic
@@ -844,15 +844,22 @@ async function runLLMPipeline(recommendations: TradeRecommendation[], rawMarkets
       categoryCounts[cat as keyof typeof categoryCounts] = (categoryCounts[cat as keyof typeof categoryCounts] || 0) + 1
     }
 
-    // Second pass: ensure at least 1 from each underrepresented category
-    for (const cat of ['crypto', 'sports', 'policy'] as const) {
-      if (categoryCounts[cat] === 0 && selectedForAnalysis.length < MAX_ANALYSIS) {
-        const candidate = recommendations.find(r =>
-          categorize(r.market.question) === cat && !usedQuestions.has(r.market.question)
-        )
-        if (candidate) {
+    // Second pass: ensure at least 2 from each underrepresented category for real diversity
+    for (const cat of ['crypto', 'sports', 'policy', 'general'] as const) {
+      const minPerCat = 2
+      const current = categoryCounts[cat] || 0
+      if (current < minPerCat && selectedForAnalysis.length < MAX_ANALYSIS) {
+        const candidates = recommendations
+          .filter(r => categorize(r.market.question) === cat && !usedQuestions.has(r.market.question))
+          .slice(0, minPerCat - current)
+        for (const candidate of candidates) {
+          if (selectedForAnalysis.length >= MAX_ANALYSIS) break
+          const topic = topicKey(candidate.market.question)
+          if (usedTopics.has(topic)) continue
           selectedForAnalysis.push(candidate)
           usedQuestions.add(candidate.market.question)
+          usedTopics.add(topic)
+          categoryCounts[cat] = (categoryCounts[cat] || 0) + 1
         }
       }
     }
@@ -863,6 +870,20 @@ async function runLLMPipeline(recommendations: TradeRecommendation[], rawMarkets
       .filter(r => r.odds >= 0.50 && r.odds <= 0.85 && !usedQuestions.has(r.market.question))
       .sort((a, b) => (b.market.volume24hr || 0) - (a.market.volume24hr || 0))
     for (const rec of valueCandidates) {
+      if (selectedForAnalysis.length >= MAX_ANALYSIS) break
+      const topic = topicKey(rec.market.question)
+      if (usedTopics.has(topic)) continue
+      selectedForAnalysis.push(rec)
+      usedQuestions.add(rec.market.question)
+      usedTopics.add(topic)
+    }
+
+    // Fourth pass: fill remaining slots with any unanalyzed markets by volume
+    // This maximizes the number of analyzed opportunities shown
+    const remainingCandidates = recommendations
+      .filter(r => !usedQuestions.has(r.market.question) && (r.market.volume24hr || 0) > 5000)
+      .sort((a, b) => (b.market.volume24hr || 0) - (a.market.volume24hr || 0))
+    for (const rec of remainingCandidates) {
       if (selectedForAnalysis.length >= MAX_ANALYSIS) break
       const topic = topicKey(rec.market.question)
       if (usedTopics.has(topic)) continue
@@ -1031,7 +1052,8 @@ async function runLLMPipeline(recommendations: TradeRecommendation[], rawMarkets
     cachedResponse = { data: llmData, expiry: Date.now() + RESPONSE_CACHE_TTL }
     console.log(`[LLM Pipeline] Complete — cached LLM-enhanced results`)
 
-    // Fire-and-forget: trigger deep analysis if stale
+    // Fire-and-forget: trigger deep analysis if stale — but delay 30s so Groq rate limits
+    // have a chance to reset after the fast pass finishes
     if (isDeepRunStale()) {
       const marketsForDeep = recommendations
         .filter(r => r.analysisDepth !== 'deep')
@@ -1045,8 +1067,11 @@ async function runLLMPipeline(recommendations: TradeRecommendation[], rawMarkets
           volume: r.market.volumeNum || 0,
           liquidity: r.market.liquidityNum || 0,
         }))
-      runDeepAnalysis(marketsForDeep).catch(err =>
-        console.error('[Deep Analysis] Background run failed:', err)
-      )
+      setTimeout(() => {
+        runDeepAnalysis(marketsForDeep).catch(err =>
+          console.error('[Deep Analysis] Background run failed:', err)
+        )
+      }, 30_000)  // 30s delay — let rate limits cool off
+      console.log('[Deep Analysis] Scheduled in 30s to avoid Groq rate-limit contention')
     }
 }
