@@ -452,6 +452,246 @@ export async function analyzeMarketsBatch(
   return results
 }
 
+// ─── Multi-Market Batch Prompt ──────────────────────────────────────────────
+// One Groq API call analyzes N markets at once. Trades per-market reasoning depth for
+// dramatic rate-limit reduction (25 markets → 3 calls instead of 25). Use for the fast 8B
+// triage pass; the deep 70B pass keeps one-call-per-market for full reasoning chains.
+
+/**
+ * Compact prompt that asks the model to analyze a list of markets and return an array of
+ * verdicts. Each market gets only a one-line summary in the prompt, but the model can still
+ * apply its base-rate intuition + supplied evidence headlines to each one. Token budget per
+ * market is ~50 (input) + ~80 (output) — vs ~600 + ~400 for the deep prompt.
+ */
+function buildMultiMarketPrompt(
+  items: Array<{ market: MarketForAnalysis; evidence: CategoryEvidence; idx: number }>,
+): string {
+  const lines = items.map(({ market, evidence, idx }) => {
+    const days = market.endDate
+      ? Math.max(0, Math.ceil((new Date(market.endDate).getTime() - Date.now()) / 86400000))
+      : null
+    const pricePct = (market.currentPrice * 100).toFixed(1)
+    const volK = (market.volume / 1000).toFixed(0)
+    // One-line evidence summary so the model has SOME signal beyond the question text.
+    // Take the strongest bullish + bearish finding only — the rest gets dropped to save tokens.
+    const top = (arr: typeof evidence.bullishFindings) =>
+      arr.length > 0 ? arr[0].text.substring(0, 140) : '(none)'
+    const yesEv = top(evidence.bullishFindings)
+    const noEv = top(evidence.bearishFindings)
+    return `[${idx}] "${market.question}"
+    market=${pricePct}% YES | $${volK}K vol | closes in ${days ?? '?'}d
+    YES-evidence: ${yesEv}
+    NO-evidence: ${noEv}
+    signal=${evidence.overallSignal}/${evidence.signalStrength}`
+  }).join('\n\n')
+
+  return `You are a prediction market analyst. Analyze each market below and return a verdict for each.
+
+For each market: estimate the true probability, decide direction (yes/no/skip), set confidence, and write ONE sentence of reasoning. SKIP is the default when evidence is weak/balanced or your estimate is within 5% of market price. Only flag shouldBet=true when there is real edge AND clear directional evidence.
+
+═══════════════════════════════════════
+MARKETS:
+
+${lines}
+
+═══════════════════════════════════════
+OUTPUT FORMAT — return JSON exactly like:
+{
+  "verdicts": [
+    {
+      "id": <market index from above>,
+      "yourEstimate": 0.0-1.0,
+      "direction": "yes" | "no" | "skip",
+      "confidence": "high" | "medium" | "low",
+      "shouldBet": true | false,
+      "reasoning": "ONE sentence on why",
+      "keyDriver": "the single most important factor"
+    },
+    ...one verdict per market...
+  ]
+}
+
+Return ALL ${items.length} verdicts in the array. Do not skip any market.`
+}
+
+/**
+ * Multi-market batch analysis — packs N markets per Groq call to dramatically reduce API
+ * call count. Cuts a 25-market continuation pass from 25 calls → 3-4 calls.
+ *
+ * Trade-off: less reasoning depth per market than analyzeMarketsBatch (which sends one full
+ * structured prompt per market). Use this for fast 8B triage. Fall back to per-market on
+ * any chunk that fails to parse so partial results still come through.
+ *
+ * @param markets - Markets to analyze
+ * @param evidenceMap - Pre-gathered evidence per question
+ * @param batchSize - Markets per Groq call (default 8 — balances reasoning vs token budget)
+ * @param model - Groq model (8B recommended; 70B works but slower per call)
+ */
+export async function analyzeMarketsMultiBatch(
+  markets: MarketForAnalysis[],
+  evidenceMap: Map<string, CategoryEvidence>,
+  batchSize: number = 8,
+  model: GroqModel = 'llama-3.1-8b-instant'
+): Promise<Map<string, LLMMarketAnalysis>> {
+  const results = new Map<string, LLMMarketAnalysis>()
+  const startMs = Date.now()
+
+  // Partition: cached markets bypass the LLM entirely
+  const toAnalyze: MarketForAnalysis[] = []
+  for (const m of markets) {
+    const cached = getCached(m.question)
+    if (cached) {
+      results.set(m.question, cached)
+    } else {
+      toAnalyze.push(m)
+    }
+  }
+
+  if (toAnalyze.length === 0) {
+    console.log(`[Groq MultiBatch] All ${markets.length} cached — no API calls`)
+    return results
+  }
+
+  const totalCalls = Math.ceil(toAnalyze.length / batchSize)
+  console.log(`[Groq MultiBatch] ${toAnalyze.length} markets in ${totalCalls} call(s) of ${batchSize} (${model})`)
+
+  // Build chunks; each chunk = one Groq call.
+  for (let chunkStart = 0; chunkStart < toAnalyze.length; chunkStart += batchSize) {
+    const chunk = toAnalyze.slice(chunkStart, chunkStart + batchSize)
+    const callIdx = Math.floor(chunkStart / batchSize) + 1
+
+    const items = chunk.map((market, i) => {
+      const evidence = evidenceMap.get(market.question) || {
+        category: 'general' as const,
+        bullishFindings: [],
+        bearishFindings: [],
+        neutralFindings: [],
+        overallSignal: 'none' as const,
+        signalStrength: 0,
+        keyInsights: [],
+      }
+      return { market, evidence, idx: i }
+    })
+
+    try {
+      const prompt = buildMultiMarketPrompt(items)
+      // Larger token budget than per-market (8 markets × ~80 tokens = 640).
+      const raw = await callGroqWithBudget(prompt, model, chunk.length * 100 + 200)
+
+      let parsed: any
+      try {
+        parsed = JSON.parse(raw)
+      } catch {
+        console.error(`[Groq MultiBatch ${callIdx}/${totalCalls}] Malformed JSON — skipping ${chunk.length} markets this round`)
+        continue
+      }
+
+      const verdicts = Array.isArray(parsed.verdicts) ? parsed.verdicts : []
+      let appliedThisCall = 0
+      for (const verdict of verdicts) {
+        const idx = typeof verdict.id === 'number' ? verdict.id : -1
+        if (idx < 0 || idx >= chunk.length) continue
+        const market = chunk[idx]
+        const evidence = items[idx].evidence
+
+        const yourEstimate = Math.min(0.99, Math.max(0.01, verdict.yourEstimate ?? market.currentPrice))
+        const edgeSize = Math.abs(yourEstimate - market.currentPrice)
+        const keyDriver = typeof verdict.keyDriver === 'string' ? verdict.keyDriver : ''
+        const reasoning = (keyDriver ? `KEY DRIVER: ${keyDriver}. ` : '') +
+          (typeof verdict.reasoning === 'string' ? verdict.reasoning : '')
+
+        const result: LLMMarketAnalysis = {
+          estimatedProbability: yourEstimate,
+          reasoning: reasoning.substring(0, 500),
+          confidence: (['high', 'medium', 'low'].includes(verdict.confidence) ? verdict.confidence : 'low') as 'high' | 'medium' | 'low',
+          evidence: [],
+          shouldBet: verdict.shouldBet === true,
+          direction: (['yes', 'no', 'skip'].includes(verdict.direction) ? verdict.direction : 'skip') as 'yes' | 'no' | 'skip',
+          edgeSize,
+          evidenceCount: evidence.bullishFindings.length + evidence.bearishFindings.length + evidence.neutralFindings.length,
+          signalStrength: evidence.signalStrength,
+          baseRate: null,
+          subQuestions: [],
+          uncertaintyRange: 0.15,
+          premortemRisks: [],
+          reasoningChain: null,
+        }
+
+        // Apply same safety rules as the single-market path so verdicts are comparable
+        if (result.confidence === 'low') { result.shouldBet = false; result.direction = 'skip' }
+        if (evidence.signalStrength < 25) { result.shouldBet = false; result.direction = 'skip' }
+        if (edgeSize < 0.05) { result.shouldBet = false; result.direction = 'skip' }
+
+        results.set(market.question, result)
+        setCache(market.question, result)
+        appliedThisCall++
+      }
+      console.log(`[Groq MultiBatch ${callIdx}/${totalCalls}] ${appliedThisCall}/${chunk.length} verdicts applied`)
+    } catch (e) {
+      console.error(`[Groq MultiBatch ${callIdx}/${totalCalls}] Call failed:`, e instanceof Error ? e.message : '')
+      // Don't fall back to single-market here — the whole point is rate-limit reduction.
+      // Markets without verdicts stay un-set; caller's quotaStarved gate will catch it.
+    }
+  }
+
+  const elapsed = ((Date.now() - startMs) / 1000).toFixed(1)
+  console.log(`[Groq MultiBatch] ${results.size}/${markets.length} done in ${elapsed}s (${totalCalls} API call(s))`)
+  return results
+}
+
+// callGroq variant that lets the caller set max_tokens — multi-market needs more headroom
+// than the single-market path (which is hard-coded to 400/600 in callGroq).
+async function callGroqWithBudget(prompt: string, model: GroqModel, maxTokens: number, retries = 3): Promise<string> {
+  const apiKey = process.env.GROQ_API_KEY
+  if (!apiKey) throw new Error('GROQ_API_KEY not set')
+
+  const is8B = model === 'llama-3.1-8b-instant'
+  const timeoutMs = is8B ? 25000 : 35000  // bigger output → longer timeout
+  const tag = is8B ? '[Groq 8B Batch]' : '[Groq 70B Batch]'
+
+  for (let attempt = 0; attempt < retries; attempt++) {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const res = await fetch(GROQ_URL, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.1,
+          max_tokens: maxTokens,
+          response_format: { type: 'json_object' },
+        }),
+        signal: controller.signal,
+      })
+      clearTimeout(timeout)
+
+      if (res.status === 429) {
+        const waitMs = is8B ? Math.min(5000, (attempt + 1) * 1500) : Math.min(20000, (attempt + 1) * 7000)
+        console.log(`${tag} Rate limited, waiting ${waitMs}ms before retry ${attempt + 1}/${retries}`)
+        await new Promise(r => setTimeout(r, waitMs))
+        continue
+      }
+      if (!res.ok) {
+        const err = await res.text()
+        throw new Error(`Groq ${res.status}: ${err.substring(0, 200)}`)
+      }
+      const data = await res.json()
+      return data.choices?.[0]?.message?.content || '{}'
+    } catch (e: any) {
+      clearTimeout(timeout)
+      if (e.name === 'AbortError') {
+        console.log(`${tag} Timeout on attempt ${attempt + 1}`)
+        continue
+      }
+      if (attempt === retries - 1) throw e
+      await new Promise(r => setTimeout(r, is8B ? 2000 : 5000))
+    }
+  }
+  throw new Error('Groq: max retries exceeded (multi-batch)')
+}
+
 // ─── Legacy Support (deprecated) ────────────────────────────────────────────
 
 /**

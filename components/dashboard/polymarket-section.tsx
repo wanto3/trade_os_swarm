@@ -93,6 +93,12 @@ interface ApiResponse {
     avgConviction?: number | null
     highestSafety: number | null
     avgSafety: number | null
+    // Live LLM pipeline progress — surfaced by the API so we can render "Analyzing X of Y"
+    // on the Pending header while the background pass is in flight.
+    analyzingNow?: number
+    analyzingTotal?: number
+    pipelineActive?: boolean
+    pipelineStage?: 'idle' | 'pending' | 'evidence' | 'analyzing' | 'continuation'
   }
 }
 
@@ -299,7 +305,7 @@ export function PolymarketSection() {
   const [loading, setLoading] = useState(true)
   const [walletData, setWalletData] = useState<{ positions: number; trades: number; balanceUSD: number; gnosisUSDC: number; polygonUSDT: number; totalUSD: number } | null>(null)
   const [lastUpdated, setLastUpdated] = useState<number | null>(null)
-  const [sortKey, setSortKey] = useState<SortKey>('fastestProfit')
+  const [sortKey, setSortKey] = useState<SortKey>('closing')
   const [secondarySort, setSecondarySort] = useState<SortKey | null>(null)
   const [filterKey, setFilterKey] = useState<FilterKey>('14days')
   const [kellyMode, setKellyMode] = useState<KellyMode>('quarter')
@@ -407,18 +413,33 @@ export function PolymarketSection() {
   const getPortfolioEntry = (marketId: string) => todayPortfolio.find((e: any) => e.marketId === marketId)
 
   const fetchData = useCallback(async () => {
-    setLoading(true)
+    // Use functional setState so this callback has NO dependency on `data` —
+    // otherwise fetchData rebuilds on every poll and the interval useEffect tears down
+    // and recreates the timer, causing visual churn.
+    let hadData = false
+    setData(prev => { hadData = prev !== null; return prev })
+    if (!hadData) setLoading(true)
     try {
       const res = await fetch('/api/polymarket', { cache: 'no-store' })
       const json: ApiResponse = await res.json()
       if (json.success) {
-        setData(json)
+        // Guard against the "everything disappears" flicker: if we already have opportunities
+        // and a poll returns an empty list, KEEP the previous data. This protects against
+        // momentary backend hiccups (cache eviction, rate-limit response with 0 items, etc.)
+        // that would otherwise wipe the UI for one render cycle.
+        const incomingCount = (json.opportunities?.length ?? 0) + (json.hotNowOpportunities?.length ?? 0)
+        setData(prev => {
+          const prevCount = (prev?.opportunities?.length ?? 0) + (prev?.hotNowOpportunities?.length ?? 0)
+          if (prev && prevCount > 0 && incomingCount === 0) return prev
+          return json
+        })
         setLastUpdated(json.timestamp > 0 ? json.timestamp : null)
       } else {
-        setData({ success: true, timestamp: 0, opportunities: [], hotNowOpportunities: [], closingSoonOpportunities: [], longTailOpportunities: [], hotMarkets: [], stats: { marketsAnalyzed: 0, opportunitiesFound: 0, highestSafety: null, avgSafety: null } })
+        // Failed response: keep previous data if we have it
+        setData(prev => prev ?? { success: true, timestamp: 0, opportunities: [], hotNowOpportunities: [], closingSoonOpportunities: [], longTailOpportunities: [], hotMarkets: [], stats: { marketsAnalyzed: 0, opportunitiesFound: 0, highestSafety: null, avgSafety: null } })
       }
     } catch {
-      setData({ success: true, timestamp: 0, opportunities: [], hotNowOpportunities: [], closingSoonOpportunities: [], longTailOpportunities: [], hotMarkets: [], stats: { marketsAnalyzed: 0, opportunitiesFound: 0, highestSafety: null, avgSafety: null } })
+      setData(prev => prev ?? { success: true, timestamp: 0, opportunities: [], hotNowOpportunities: [], closingSoonOpportunities: [], longTailOpportunities: [], hotMarkets: [], stats: { marketsAnalyzed: 0, opportunitiesFound: 0, highestSafety: null, avgSafety: null } })
     }
     setLoading(false)
   }, [])
@@ -649,8 +670,10 @@ export function PolymarketSection() {
     if (filterKey === 'value') return rec.odds >= 0.50 && rec.odds <= 0.90 && (rec.convictionScore ?? 0) >= 55
     // Only show markets with a real end date in time-based filters
     if (!rec.market.endDateIso) return filterKey === 'all'
-    if (filterKey === '24h') return liveDays(rec) <= 2
-    if (filterKey === 'today') return liveDays(rec) <= 3
+    // 24h filter = closing within 24 hours. liveDays uses Math.ceil so anything in the next
+    // 24 hours rounds to 1 day; previously this was <=2 which incorrectly included 2-day picks.
+    if (filterKey === '24h') return liveDays(rec) <= 1
+    if (filterKey === 'today') return liveDays(rec) <= 1
     if (filterKey === '3days') return liveDays(rec) <= 3
     if (filterKey === '7days') return liveDays(rec) <= 7
     if (filterKey === '14days') return liveDays(rec) <= 14
@@ -1155,8 +1178,28 @@ POLYMARKET_CLOB_API_SECRET=...`}
               </div>
             ) : filtered.length > 0 ? (
               (() => {
-                // Split into analyzed (AI-graded picks) vs pending (not yet scored by AI)
-                const analyzed = filtered.filter(r => r.analysisDepth === 'quick' || r.analysisDepth === 'deep')
+                // Three-tier split so the user sees the real recommendation hierarchy, not
+                // just "anything the LLM touched":
+                //
+                //   1. DEEP bets    — 70B + cross-platform odds + evidence chain, kellyFraction>0.
+                //                      These are the highest-conviction, most-validated picks.
+                //   2. QUICK bets   — 8B triage verdict, kellyFraction>0. Real edge but less
+                //                      vetted than deep; watch for deep upgrade in next cycle.
+                //   3. REVIEWED    — LLM-analyzed but kellyFraction=0 (no edge / skip verdict).
+                //                      Shown dimmed so the user can confirm coverage without
+                //                      mistaking them for actual recommendations.
+                //   4. PENDING     — Not yet analyzed. Hides in its own section below.
+                //
+                // Filter key is kellyFraction (not expectedValue) because Kelly=0 is the exact
+                // point at which the Kelly calculator decides the bet isn't worth placing given
+                // the uncertainty in the estimate. That matches the "$0 If Win / $0 If Lose"
+                // rendering on the cards, so the split is consistent with what the UI shows.
+                const hasEdge = (r: TradeRecommendation) => r.kellyFraction > 0
+                const deepBets = filtered.filter(r => r.analysisDepth === 'deep' && hasEdge(r))
+                const quickBets = filtered.filter(r => r.analysisDepth === 'quick' && hasEdge(r))
+                const reviewedNoEdge = filtered.filter(r =>
+                  (r.analysisDepth === 'quick' || r.analysisDepth === 'deep') && !hasEdge(r)
+                )
                 const pending = filtered.filter(r => r.analysisDepth === 'pending' || !r.analysisDepth)
 
                 const SectionHeader = ({ title, count, color, hint }: { title: string; count: number; color: string; hint: string }) => (
@@ -1188,12 +1231,10 @@ POLYMARKET_CLOB_API_SECRET=...`}
                   </div>
                 )
 
-                return (
-                  <>
-                    {analyzed.length > 0 && (
-                      <SectionHeader title="AI-Analyzed Picks" count={analyzed.length} color="#3fb950" hint="graded, conviction-scored" />
-                    )}
-                    {analyzed.map((rec) => {
+                // Render a single analyzed-pick card. The `dimmed` flag is for the
+                // "reviewed — no edge" group: opacity drops + border dashes so the user can
+                // visually distinguish them from real recommendations at a glance.
+                const renderAnalyzedCard = (rec: TradeRecommendation, dimmed: boolean) => {
                 const kellyBet = getKellyBet(rec)
                 const potentialWin = kellyBet * ((1 / rec.odds) - 1)
                 const ev = kellyBet * rec.expectedValue
@@ -1214,12 +1255,13 @@ POLYMARKET_CLOB_API_SECRET=...`}
                     style={{
                       display: 'flex',
                       backgroundColor: '#161b22',
-                      border: `1px solid ${confColor}22`,
+                      border: `1px ${dimmed ? 'dashed' : 'solid'} ${confColor}22`,
                       borderRadius: '10px',
                       overflow: 'hidden',
                       textDecoration: 'none',
-                      transition: 'border-color 0.2s, box-shadow 0.2s',
+                      transition: 'border-color 0.2s, box-shadow 0.2s, opacity 0.2s',
                       cursor: 'pointer',
+                      opacity: dimmed ? 0.55 : 1,  // reviewed-no-edge cards fade so they don't compete visually with real recommendations
                     }}
                     onMouseEnter={e => {
                       (e.currentTarget as HTMLElement).style.borderColor = confColor + '55'
@@ -1422,10 +1464,69 @@ POLYMARKET_CLOB_API_SECRET=...`}
                     </div>
                   </a>
                 )
-              })}
-                    {pending.length > 0 && (
-                      <SectionHeader title="Pending AI Analysis" count={pending.length} color="#8b949e" hint={data?.llmAnalyzed ? "next refresh cycle" : "AI analyzing now…"} />
+                }  // end renderAnalyzedCard
+
+                return (
+                  <>
+                    {/* Tier 1: Deep Analysis Bets — purple, top of stack. These passed
+                        through the 70B + cross-platform odds + evidence chain pipeline. */}
+                    {deepBets.length > 0 && (
+                      <SectionHeader
+                        title="🔬 Deep-Analyzed Bets"
+                        count={deepBets.length}
+                        color="#a855f7"
+                        hint="70B + cross-platform validated"
+                      />
                     )}
+                    {deepBets.map(rec => renderAnalyzedCard(rec, false))}
+
+                    {/* Tier 2: Quick Analysis Bets — green, mid stack. 8B triage verdict
+                        with real edge. Will upgrade to deep on next deep-analysis cycle. */}
+                    {quickBets.length > 0 && (
+                      <SectionHeader
+                        title="⚡ Quick-Analyzed Bets"
+                        count={quickBets.length}
+                        color="#3fb950"
+                        hint="8B triage — awaiting deep validation"
+                      />
+                    )}
+                    {quickBets.map(rec => renderAnalyzedCard(rec, false))}
+
+                    {/* Tier 3: Reviewed but no edge — dimmed. The LLM looked at these and
+                        said "skip, market is efficient." Shown for transparency so the user
+                        knows we covered them, not so the user acts on them. */}
+                    {reviewedNoEdge.length > 0 && (
+                      <SectionHeader
+                        title="📋 Reviewed — No Edge"
+                        count={reviewedNoEdge.length}
+                        color="#6e7681"
+                        hint="LLM verdict: market is efficient"
+                      />
+                    )}
+                    {reviewedNoEdge.map(rec => renderAnalyzedCard(rec, true))}
+
+                    {pending.length > 0 && (() => {
+                      // Build a live progress hint from the API stats. Three states:
+                      //   1. Pipeline active with a known total → "Analyzing X of Y" with stage label
+                      //   2. Pipeline active but total unknown yet (selection still happening) → "AI analyzing now…"
+                      //   3. Pipeline idle (cached results, waiting for next refresh) → "next refresh cycle"
+                      const stats = data?.stats
+                      let hint = data?.llmAnalyzed ? 'next refresh cycle' : 'AI analyzing now…'
+                      if (stats?.pipelineActive) {
+                        const total = stats.analyzingTotal ?? 0
+                        const now = stats.analyzingNow ?? 0
+                        if (total > 0) {
+                          const stageLabel =
+                            stats.pipelineStage === 'evidence' ? ' • gathering evidence' :
+                            stats.pipelineStage === 'continuation' ? ' • continuation pass' :
+                            ''
+                          hint = `Analyzing ${Math.min(now, total)} of ${total}${stageLabel}`
+                        } else {
+                          hint = stats.pipelineStage === 'pending' ? 'selecting markets…' : 'AI analyzing now…'
+                        }
+                      }
+                      return <SectionHeader title="Pending AI Analysis" count={pending.length} color="#8b949e" hint={hint} />
+                    })()}
                     {pending.map((rec) => {
                       const liveDaysToClose = liveDays(rec)
                       return (
