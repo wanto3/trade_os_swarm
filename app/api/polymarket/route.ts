@@ -327,6 +327,35 @@ function getConvictionLabel(score: number): ConvictionLabel {
   return 'risky'
 }
 
+/**
+ * Apply edge gating to a conviction label.
+ *
+ * The base `getConvictionLabel(score)` is purely confidence-driven, which produces a UX
+ * footgun: a 95%-priced market where the LLM agrees the truth is 95% scores high
+ * confidence (edgeBonus tiny, but baseScore 88 already qualifies for 'no-brainer'). The
+ * dashboard then shows a NO-BRAINER badge next to a 0.0% EV row, telling the user to
+ * smash the buy button on a market with no money in it.
+ *
+ * This helper demotes the label whenever the actual recommended trade has no real edge
+ * or the LLM said skip. "no-brainer" and "high" both require:
+ *   - shouldBet === true (LLM thinks this is actionable)
+ *   - |EV| ≥ 5% (the recommended side has at least a 5% return on capital)
+ * Otherwise we drop one tier — high/no-brainer become 'consider', and high-scoring skip
+ * markets that the LLM is just confidently watching get slotted into 'consider' as well.
+ */
+function gateConvictionLabel(
+  rawLabel: ConvictionLabel,
+  shouldBet: boolean,
+  expectedValue: number,
+): ConvictionLabel {
+  if (rawLabel !== 'no-brainer' && rawLabel !== 'high') return rawLabel
+  const hasMeaningfulEdge = shouldBet && Math.abs(expectedValue) >= 0.05
+  if (hasMeaningfulEdge) return rawLabel
+  // Demote: confidence is high but there's nothing to bet → it's at most a 'consider'
+  // signal (interesting, not actionable).
+  return 'consider'
+}
+
 function scoreMarket(market: GammaMarket): TradeRecommendation | null {
   // Note: negRisk sub-markets are NOT filtered out — they have their own individual pages
   // on Polymarket (e.g., /event/will-connecticut-win-the-2026-ncaa-tournament). Many
@@ -673,13 +702,15 @@ function applyLLMAnalysisToRec(
   // estimating prob LOWER than market price (or vice versa). The math is unambiguous —
   // bet NO when estimated < market, bet YES when estimated > market. Trust the numbers,
   // not the direction label.
+  //
+  // CRITICAL: do NOT branch on direction === 'skip' here. We still need to pick the
+  // math-correct side for the EV display, otherwise we end up computing the YES-side EV
+  // on a market the LLM thinks is going NO — which produces grotesque numbers like
+  // -418.9% EV (e.g. odds=0.894, estProb=0.45 → (0.45-0.894)/0.106 ≈ -4.18). The
+  // shouldBet=false intent is communicated separately via the WATCH-ONLY tag and the
+  // demoted conviction label below; the EV column should always show a sane number.
   const mathSaysNo = analysis.estimatedProbability < rec.odds
-  const effectiveDirection: 'yes' | 'no' | 'skip' =
-    analysis.direction === 'skip' ? 'skip' :
-    mathSaysNo ? 'no' : 'yes'
-
-  // Direction-aware EV: when betting NO, compute EV for the NO side
-  if (effectiveDirection === 'no') {
+  if (mathSaysNo) {
     const noOdds = 1 - rec.odds
     const noEstimate = 1 - analysis.estimatedProbability
     rec.expectedValue = (noEstimate - noOdds) / (1 - noOdds)
@@ -696,7 +727,11 @@ function applyLLMAnalysisToRec(
   const edgeBonus = Math.min(7, Math.round(analysis.edgeSize * 100))
   const evidenceBonus = Math.min(5, (analysis.evidenceCount || 0) * 2)
   rec.convictionScore = Math.min(100, baseScore + edgeBonus + evidenceBonus)
-  rec.convictionLabel = getConvictionLabel(rec.convictionScore)
+  rec.convictionLabel = gateConvictionLabel(
+    getConvictionLabel(rec.convictionScore),
+    analysis.shouldBet,
+    rec.expectedValue,
+  )
   rec.safetyScore = rec.convictionScore
   if (rec.analysisDepth !== 'deep') rec.analysisDepth = 'quick'
 
@@ -956,7 +991,23 @@ export async function GET() {
       if (deepResult) {
         rec.analysisDepth = 'deep'
         rec.convictionScore = deepResult.convictionScore
-        rec.convictionLabel = getConvictionLabel(rec.convictionScore)
+        // Recompute EV from the deep result so the displayed number matches the deeper
+        // probability estimate (otherwise we'd carry the stale fast-pass EV through).
+        // Same math-correct side selection as applyLLMAnalysisToRec to avoid -418% bugs
+        // on near-certain markets.
+        rec.estimatedProbability = deepResult.estimatedProbability
+        const dMathSaysNo = deepResult.estimatedProbability < rec.odds
+        rec.expectedValue = dMathSaysNo
+          ? ((1 - deepResult.estimatedProbability) - (1 - rec.odds)) / rec.odds
+          : (deepResult.estimatedProbability - rec.odds) / (1 - rec.odds)
+        // Treat the deep verdict as "shouldBet" only when meaningful edge exists; this
+        // mirrors the gating in applyLLMAnalysisToRec so a high-confidence-but-no-edge
+        // deep result doesn't get a NO-BRAINER badge with 0% EV.
+        rec.convictionLabel = gateConvictionLabel(
+          getConvictionLabel(rec.convictionScore),
+          Math.abs(rec.expectedValue) >= 0.05,
+          rec.expectedValue,
+        )
         rec.safetyScore = rec.convictionScore
         rec.baseRate = deepResult.baseRate
         rec.uncertaintyRange = deepResult.uncertaintyRange
@@ -1349,7 +1400,18 @@ async function runLLMPipeline(recommendations: TradeRecommendation[], rawMarkets
       if (deepResult) {
         rec.analysisDepth = 'deep'
         rec.convictionScore = deepResult.convictionScore
-        rec.convictionLabel = getConvictionLabel(rec.convictionScore)
+        // Same EV recompute + label gating as the earlier deep merge — confidence-only
+        // labels were mislabelling 0%-edge markets as no-brainer.
+        rec.estimatedProbability = deepResult.estimatedProbability
+        const dMathSaysNo = deepResult.estimatedProbability < rec.odds
+        rec.expectedValue = dMathSaysNo
+          ? ((1 - deepResult.estimatedProbability) - (1 - rec.odds)) / rec.odds
+          : (deepResult.estimatedProbability - rec.odds) / (1 - rec.odds)
+        rec.convictionLabel = gateConvictionLabel(
+          getConvictionLabel(rec.convictionScore),
+          Math.abs(rec.expectedValue) >= 0.05,
+          rec.expectedValue,
+        )
         rec.safetyScore = rec.convictionScore
         rec.baseRate = deepResult.baseRate
         rec.uncertaintyRange = deepResult.uncertaintyRange
@@ -1368,7 +1430,14 @@ async function runLLMPipeline(recommendations: TradeRecommendation[], rawMarkets
         const catAdj = learningAdj.byCategoryAdjustment[category] || 0
         const tierAdj = learningAdj.byTierAdjustment[rec.convictionLabel] || 0
         rec.convictionScore = Math.min(100, Math.max(0, rec.convictionScore + catAdj + tierAdj))
-        rec.convictionLabel = getConvictionLabel(rec.convictionScore)
+        // Re-gate after learning adjustment moves the score; otherwise a +adj that bumps
+        // a 'consider' across the 90 threshold could re-introduce a no-brainer label on
+        // a 0%-edge pick.
+        rec.convictionLabel = gateConvictionLabel(
+          getConvictionLabel(rec.convictionScore),
+          rec.analysisDepth !== 'pending' && Math.abs(rec.expectedValue) >= 0.05,
+          rec.expectedValue,
+        )
       }
     }
 
