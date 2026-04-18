@@ -23,6 +23,13 @@ export async function register() {
   // Skip in test runs so vitest startups stay fast.
   if (process.env.NODE_ENV === 'test') return
 
+  // Skip on Vercel: pre-warming a localhost endpoint is meaningless on serverless.
+  // There's no persistent server — each request spins up a fresh function. The fetch
+  // below would either hit a non-existent server or wake a function that immediately
+  // dies before any caching benefit accrues. The proper Vercel-native warm strategy
+  // is a Vercel Cron job hitting /api/polymarket on a schedule (separate from this hook).
+  if (process.env.VERCEL) return
+
   // Don't block boot — fire after a short delay so the HTTP server is listening.
   setTimeout(() => {
     const port = process.env.PORT || '3000'

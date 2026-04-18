@@ -6,6 +6,22 @@ import { classifyCategory } from '@/lib/services/category-research.service'
 // Force dynamic rendering — never cache Polymarket data
 export const dynamic = 'force-dynamic'
 
+// Vercel function config:
+//   - maxDuration = 60s gives the full Pro-tier budget (Hobby caps at 10s and ignores higher
+//     values; Pro respects up to 60s for synchronous routes, 300s for crons).
+//   - runtime = 'nodejs' is required because the route uses fs (file cache) and the Groq SDK.
+//     Edge runtime would crash on the first fs.readFileSync call.
+export const maxDuration = 60
+export const runtime = 'nodejs'
+
+// Detect Vercel serverless environment. Used to:
+//   1. Disable file-cache writes (Vercel filesystem is read-only outside /tmp, and /tmp is
+//      ephemeral per-invocation — writing there is pointless and just throws errors).
+//   2. Skip the fire-and-forget continuation + deep passes (they `setTimeout` work that
+//      Vercel kills as soon as the HTTP response is sent — they literally cannot run).
+//   3. Skip the instrumentation pre-warm (no persistent server to warm).
+const IS_VERCEL = !!process.env.VERCEL
+
 export interface PolymarketMarket {
   id: string
   question: string
@@ -861,6 +877,13 @@ function buildResponseData(
 
 export async function GET() {
   try {
+    // ── Boot diagnostics (logged once per request — visible in `vercel logs`) ────
+    // These tell us at a glance whether the request can even succeed:
+    //   - GROQ_API_KEY present? (without it, all verdicts are pending)
+    //   - Running on Vercel? (changes which code paths execute)
+    //   - Has cache? (file cache works locally; on Vercel it's effectively in-memory only)
+    console.log(`[Route] GET /api/polymarket — vercel=${IS_VERCEL} groqKey=${!!process.env.GROQ_API_KEY} hasCachedResponse=${!!cachedResponse} pipelineRunning=${llmPipelineRunning}`)
+
     // Phase 1: Return cached response instantly if available
     // Overlay live pipeline progress so polling clients see fresh "Analyzing X of Y" counters
     // even while serving the same cached opportunities payload.
@@ -1338,7 +1361,15 @@ async function runLLMPipeline(recommendations: TradeRecommendation[], rawMarkets
     // ── Continuation pass: analyze MORE markets in background, refresh cache when done ──
     // This way users see the first 12 quickly, then more analyzed picks come in over ~10-20s.
     // Skip when quota-starved — adding more requests during a 429 storm just delays recovery.
-    if (!quotaStarved) {
+    //
+    // ALSO skip on Vercel: this is fire-and-forget after the response is sent. On a long-
+    // running Node server the promise keeps executing. On Vercel serverless the function is
+    // killed the instant the HTTP response is returned to the client, so this code literally
+    // never runs in production — it just leaks a wasted setTimeout and confuses the logs.
+    if (IS_VERCEL) {
+      // Local-dev parity: reset progress so the UI doesn't show stale "analyzing".
+      resetPipelineProgress()
+    } else if (!quotaStarved) {
       runContinuationAnalysis(recommendations, rawMarkets, CONTINUATION_BATCH).catch(err =>
         console.error('[Continuation] Failed:', err)
       )
@@ -1351,7 +1382,10 @@ async function runLLMPipeline(recommendations: TradeRecommendation[], rawMarkets
     // have a chance to reset after the fast pass finishes.
     // Also skip entirely if the 8B pass was starved — 70B is even more rate-limited and would
     // spend its whole budget retrying without landing verdicts.
-    if (isDeepRunStale() && !quotaStarved) {
+    // Same Vercel constraint as continuation: setTimeout(deep, 60_000) after the response
+    // returns is dead code on serverless — the function is killed before the timer fires.
+    // We just skip the deep schedule entirely; cron-based deep refresh is the real fix.
+    if (isDeepRunStale() && !quotaStarved && !IS_VERCEL) {
       // Only deep-analyze markets where edge actually exists. Skip:
       //   1. Already-deep results (would be a wasted call)
       //   2. Near-certain prices (≤5% or ≥95%) — these are no-brainer / already-resolved priced;

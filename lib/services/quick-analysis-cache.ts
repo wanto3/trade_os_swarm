@@ -39,9 +39,17 @@ const CACHE_FILE = path.join(process.cwd(), 'data', 'quick-analysis-cache.json')
 const RESULT_TTL_MS = 15 * 60 * 1000   // 15 minutes — refresh more often than deep
 const ODDS_DRIFT_THRESHOLD = 0.05      // 5% absolute price move → re-analyze
 
+// On Vercel serverless the filesystem outside `/tmp` is read-only, and `/tmp` is per-
+// invocation (gone when the function returns). Persisting to disk is pointless and just
+// throws EROFS. We detect Vercel and skip all disk I/O — the in-memory `memCache` still
+// works within a single function invocation, but cross-invocation persistence requires
+// a real KV store (Vercel KV / Upstash). That migration is the next step for prod.
+const IS_VERCEL = !!process.env.VERCEL
+
 // ─── Cache I/O ──────────────────────────────────────────────────────────────────
 
 function readCache(): QuickCache {
+  if (IS_VERCEL) return memCache ?? { results: {} }  // serverless: in-memory only
   try {
     const raw = fs.readFileSync(CACHE_FILE, 'utf-8')
     return JSON.parse(raw) as QuickCache
@@ -60,6 +68,8 @@ function writeCache(cache: QuickCache): void {
     }
   }
   cache.results = results
+
+  if (IS_VERCEL) return  // serverless: in-memory only, skip disk write
 
   const dir = path.dirname(CACHE_FILE)
   if (!fs.existsSync(dir)) {
