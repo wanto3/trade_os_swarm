@@ -979,7 +979,18 @@ export async function GET() {
       cachedResponse = { data: fastData, expiry: Date.now() + FAST_CACHE_TTL }
     }
 
-    // Phase 3: Fire LLM analysis in background — updates cache when done
+    // Phase 3: LLM analysis. On a long-running Node server we fire-and-forget here so the
+    // user gets the fast response immediately and the next poll picks up the LLM-enhanced
+    // cached version ~30s later. On Vercel serverless that pattern is BROKEN — the function
+    // is killed the instant the HTTP response is sent, so a fire-and-forget runLLMPipeline
+    // never executes. The result was that every prod request returned in ~3s with all picks
+    // marked PENDING, forever, no matter how many times the user refreshed.
+    //
+    // The fix on Vercel: AWAIT the pipeline before returning. This makes the request slow
+    // (~30-60s for the first cold load) but at least produces real verdicts. Subsequent
+    // requests within the cache TTL hit the in-memory cachedResponse and return instantly.
+    // Without persistent KV the cache is per-invocation, so each cold start eats the full
+    // ~30s wait — that's the next thing to fix (KV migration).
     if (!llmPipelineRunning) {
       llmPipelineRunning = true
       // Seed pipeline progress so a poll between fast-response and selection still shows "active".
@@ -989,16 +1000,24 @@ export async function GET() {
       pipelineProgress.completed = 0
       pipelineProgress.stage = 'pending'
       pipelineProgress.startedAt = Date.now()
-      runLLMPipeline(recommendations, rawMarkets).catch(err => {
+
+      const pipelinePromise = runLLMPipeline(recommendations, rawMarkets).catch(err => {
         console.error('[LLM Pipeline] Error:', err)
-        // On error, the continuation pass won't run, so we have to clear progress ourselves
-        // — otherwise the UI sticks on "analyzing" forever.
         resetPipelineProgress()
       }).finally(() => {
         llmPipelineRunning = false
-        // Don't reset progress on success — the continuation pass takes over and will reset
-        // itself when the second batch finishes.
       })
+
+      if (IS_VERCEL) {
+        // Block until the pipeline finishes so the response actually contains LLM verdicts.
+        // The fast-response Phase 2 result is overwritten by runLLMPipeline's cachedResponse
+        // update, so we re-read cachedResponse after the await to return the enhanced version.
+        await pipelinePromise
+        if (cachedResponse) {
+          return Response.json(overlayProgress(cachedResponse.data))
+        }
+        // Pipeline ran but didn't populate cache (shouldn't happen, but defend against it).
+      }
     }
 
     return Response.json(overlayProgress(fastData))
