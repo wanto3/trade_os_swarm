@@ -1136,7 +1136,13 @@ async function runLLMPipeline(recommendations: TradeRecommendation[], rawMarkets
     // Larger batches now that the cross-cycle quick cache prevents duplicate analysis.
     // Each cycle only spends LLM quota on markets without a fresh cached verdict, so we can
     // afford to push more candidates per cycle and accumulate analyzed picks faster.
-    const MAX_ANALYSIS = 20  // first batch — bumped from 12
+    //
+    // MAX_ANALYSIS is the hard ceiling for this cycle's first-batch budget. We push it up to
+    // 40 so closing-soon (≤24h) markets — which the user is making same-day decisions on —
+    // can ALL fit in priority without being capped at 10 like before. The bulk multi-batch
+    // sends 12-20 markets per Groq call so 40 markets ≈ 3-4 API calls, well under Vercel's
+    // 60s maxDuration even with retries.
+    const MAX_ANALYSIS = 40
     const CONTINUATION_BATCH = 25  // background expansion — bumped from 15
 
     // Topic fingerprint: first 4 meaningful non-numeric words to group similar markets
@@ -1150,22 +1156,33 @@ async function runLLMPipeline(recommendations: TradeRecommendation[], rawMarkets
         .join('-')
     }
 
-    // Pass 0 (priority): markets closing within 24h get analyzed first.
-    // These are time-critical — the user can act on them today, so they need real LLM scoring fast.
-    // Claim up to half the budget; remaining slots go to the diversity passes below.
-    // We track which questions are closing-soon so the LLM stage can give them their own
-    // small-batch (= higher quality) Groq call, separate from the bigger bulk-batch.
+    // Pass 0 (priority): markets closing within 24h get analyzed FIRST and exhaustively.
+    // The user is making same-day decisions on these — they need real verdicts before we
+    // spend any budget on lower-priority value plays or diversity fillers.
+    //
+    // Changes vs. previous behavior:
+    //   - No volume floor. The old `volume24hr > 1000` filter was hiding low-volume but
+    //     still actionable markets (especially niche sports/policy events near resolution).
+    //     We still implicitly filter junk via RANGE_BUCKET_RE / hasWeakFoundation upstream.
+    //   - No CLOSING_SOON_BUDGET cap. Take up to (MAX_ANALYSIS - 5) closing-soon picks so
+    //     a long tail of closing-soon markets can land while still leaving a few slots for
+    //     value/diversity passes. 5 reserve slots is enough because the rest of the budget
+    //     would have been spent on those passes anyway.
+    //   - Topic dedup stays — we don't want to spend 8 calls on "Will X be between 280-299
+    //     tweets?" range buckets when one verdict on the topic answers all of them.
     const closingSoonQuestions = new Set<string>()
-    const CLOSING_SOON_BUDGET = Math.ceil(MAX_ANALYSIS / 2)
+    const CLOSING_SOON_RESERVE = 5  // slots held back for value/diversity passes
+    const CLOSING_SOON_LIMIT = Math.max(MAX_ANALYSIS - CLOSING_SOON_RESERVE, 1)
     const closingSoonCandidates = analyzableRecommendations
-      .filter(r => r.daysToClose <= 1 && (r.market.volume24hr || 0) > 1000)
+      .filter(r => r.daysToClose <= 1)  // dropped the volume floor
       .sort((a, b) => {
-        // Sooner first, then higher volume as tiebreaker
+        // Sooner first, then higher volume as tiebreaker (high-vol markets are more
+        // likely to have an edge; low-vol can be wildly mispriced but liquidity is thin).
         if (Math.abs(a.daysToClose - b.daysToClose) > 0.05) return a.daysToClose - b.daysToClose
         return (b.market.volume24hr || 0) - (a.market.volume24hr || 0)
       })
     for (const rec of closingSoonCandidates) {
-      if (selectedForAnalysis.length >= CLOSING_SOON_BUDGET) break
+      if (selectedForAnalysis.length >= CLOSING_SOON_LIMIT) break
       if (usedQuestions.has(rec.market.question)) continue
       const topic = topicKey(rec.market.question)
       if (usedTopics.has(topic)) continue
@@ -1176,7 +1193,7 @@ async function runLLMPipeline(recommendations: TradeRecommendation[], rawMarkets
       const cat = categorize(rec.market.question)
       categoryCounts[cat as keyof typeof categoryCounts] = (categoryCounts[cat as keyof typeof categoryCounts] || 0) + 1
     }
-    console.log(`[LLM Pipeline] Closing-soon (≤24h) priority: ${selectedForAnalysis.length} markets selected`)
+    console.log(`[LLM Pipeline] Closing-soon (≤24h) priority: ${selectedForAnalysis.length} markets selected from ${closingSoonCandidates.length} candidates`)
 
     // First pass: add top candidates by fast signal score, deduplicated by topic
     // Now favors 50-90% range (where real edge lives) over 90%+ penny picks
@@ -1279,12 +1296,17 @@ async function runLLMPipeline(recommendations: TradeRecommendation[], rawMarkets
 
     // Run the two tiers in parallel — they're independent Groq calls and the high-quality tier
     // shouldn't have to wait on the bulk tier.
+    //
+    // Batch sizes bumped to reduce wall-clock time: closing-soon now packs 8 markets per call
+    // (was 4 — still small enough for high-quality reasoning) and bulk packs 20 (was 12). With
+    // up to 35 closing-soon markets that's ~5 calls instead of ~9, comfortably under Vercel's
+    // 60s maxDuration even with one retry.
     const [closingSoonResults, bulkResults] = await Promise.all([
       closingSoonForLLM.length > 0
-        ? analyzeMarketsMultiBatch(closingSoonForLLM, evidenceMap, 4, 'llama-3.1-8b-instant')
+        ? analyzeMarketsMultiBatch(closingSoonForLLM, evidenceMap, 8, 'llama-3.1-8b-instant')
         : Promise.resolve(new Map<string, import('@/lib/services/groq-market-analysis').LLMMarketAnalysis>()),
       restForLLM.length > 0
-        ? analyzeMarketsMultiBatch(restForLLM, evidenceMap, 12, 'llama-3.1-8b-instant')
+        ? analyzeMarketsMultiBatch(restForLLM, evidenceMap, 20, 'llama-3.1-8b-instant')
         : Promise.resolve(new Map<string, import('@/lib/services/groq-market-analysis').LLMMarketAnalysis>()),
     ])
 
