@@ -592,6 +592,24 @@ export function PolymarketSection() {
   const liveDays = (rec: TradeRecommendation) =>
     rec.closingDate ? Math.max(0, Math.ceil((rec.closingDate - Date.now()) / (1000 * 60 * 60 * 24))) : 999
 
+  // Calendar-day comparison for the "TODAY" badge. Math.ceil-based liveDays returns 1 for
+  // anything within the next 24h ceiling — so a market closing tomorrow morning gets
+  // labelled TODAY, which made users think actions had to happen now. We instead check
+  // whether the closingDate falls on the user's local calendar today.
+  const closesToday = (rec: TradeRecommendation): boolean => {
+    if (!rec.closingDate) return false
+    const close = new Date(rec.closingDate)
+    const now = new Date()
+    return (
+      close.getFullYear() === now.getFullYear() &&
+      close.getMonth() === now.getMonth() &&
+      close.getDate() === now.getDate()
+    )
+  }
+  // Render the time-to-close badge: "TODAY" only when truly today, otherwise "1d", "2d"...
+  const closeBadge = (rec: TradeRecommendation): string =>
+    closesToday(rec) ? 'TODAY' : `${liveDays(rec)}d`
+
   const applyMultiSort = (items: TradeRecommendation[]): TradeRecommendation[] => {
     const sorters: Array<{ fn: (a: TradeRecommendation, b: TradeRecommendation) => number }> = []
 
@@ -1375,7 +1393,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
                           {(rec.odds * 100).toFixed(0)}% → {(rec.estimatedProbability * 100).toFixed(0)}%
                         </span>
                         <span style={{ fontSize: '0.55rem', fontWeight: 600, color: liveDaysToClose <= 3 ? '#3fb950' : '#6e7681' }}>
-                          {liveDaysToClose <= 1 ? 'TODAY' : `${liveDaysToClose}d`}
+                          {closeBadge(rec)}
                         </span>
                       </div>
 
@@ -1573,7 +1591,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
                             <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.65rem', color: '#6e7681' }}>
                               <span>{rec.outcome} @ {(rec.odds * 100).toFixed(1)}%</span>
                               <span>Vol {formatVolume(rec.market.volume24hr || 0)}/24h</span>
-                              {rec.market.endDateIso && <span>{liveDaysToClose <= 1 ? 'closes today' : `${Math.round(liveDaysToClose)}d to close`}</span>}
+                              {rec.market.endDateIso && <span>{closesToday(rec) ? 'closes today' : `${liveDaysToClose}d to close`}</span>}
                             </div>
                             <div style={{ fontSize: '0.6rem', color: '#484f58', fontStyle: 'italic' }}>
                               Awaiting LLM scoring — no position recommended yet
