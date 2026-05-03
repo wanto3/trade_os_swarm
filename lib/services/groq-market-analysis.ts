@@ -141,7 +141,7 @@ async function callGroq(prompt: string, retries = 3): Promise<string> {
 
 // ─── Structured Two-Sided Reasoning Prompt ──────────────────────────────────
 
-function buildStructuredPrompt(m: MarketForAnalysis, evidence: CategoryEvidence): string {
+export function buildStructuredPrompt(m: MarketForAnalysis, evidence: CategoryEvidence): string {
   const days = m.endDate
     ? Math.max(0, Math.ceil((new Date(m.endDate).getTime() - Date.now()) / 86400000))
     : null
@@ -232,6 +232,80 @@ Return JSON with these exact fields:
 }`
 }
 
+// ─── Response Parser (shared by Groq + Claude Code paths) ───────────────────
+
+/**
+ * Parse the JSON response that buildStructuredPrompt elicits.
+ * Used by both the Groq pipeline (analyzeMarketWithLLM) and the Claude Code
+ * pipeline (edge-engine.ts via callClaudeCode).
+ */
+export function parseAnalysisResponse(
+  raw: string,
+  market: MarketForAnalysis,
+  evidence: CategoryEvidence
+): LLMMarketAnalysis {
+  const evidenceCount = evidence.bullishFindings.length + evidence.bearishFindings.length + evidence.neutralFindings.length
+
+  let parsed: any
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return {
+      estimatedProbability: market.currentPrice,
+      reasoning: 'LLM returned malformed JSON. No edge detected.',
+      confidence: 'low',
+      evidence: [],
+      shouldBet: false,
+      direction: 'skip',
+      edgeSize: 0,
+      evidenceCount,
+      signalStrength: evidence.signalStrength,
+    }
+  }
+
+  const yourEstimate = Math.min(0.99, Math.max(0.01, parsed.yourEstimate ?? market.currentPrice))
+  const edgeSize = Math.abs(yourEstimate - market.currentPrice)
+
+  const keyDrivers = Array.isArray(parsed.keyDrivers) ? parsed.keyDrivers.slice(0, 3) : []
+  const keyDriversText = keyDrivers.length > 0 ? `KEY DRIVERS: ${keyDrivers.join(' | ')}. ` : ''
+  const reasoning = (keyDriversText + (parsed.reasoning || '')).substring(0, 500)
+
+  const result: LLMMarketAnalysis = {
+    estimatedProbability: yourEstimate,
+    reasoning,
+    confidence: (['high', 'medium', 'low'].includes(parsed.confidence) ? parsed.confidence : 'low') as 'high' | 'medium' | 'low',
+    evidence: Array.isArray(parsed.citedEvidence) ? parsed.citedEvidence.slice(0, 5) : [],
+    shouldBet: parsed.shouldBet === true,
+    direction: (['yes', 'no', 'skip'].includes(parsed.direction) ? parsed.direction : 'skip') as 'yes' | 'no' | 'skip',
+    edgeSize,
+    evidenceCount,
+    signalStrength: evidence.signalStrength,
+  }
+
+  // ── Safety / Calibration Rules ──────────────────────────────────────────
+  // Rule 1: Force SKIP if confidence is 'low'
+  if (result.confidence === 'low') {
+    result.shouldBet = false
+    result.direction = 'skip'
+  }
+  // Rule 2: Force SKIP if evidence signal strength < 25
+  if (evidence.signalStrength < 25) {
+    result.shouldBet = false
+    result.direction = 'skip'
+  }
+  // Rule 3: Force SKIP if edge is tiny (not worth fees/spread)
+  if (edgeSize < 0.05) {
+    result.shouldBet = false
+    result.direction = 'skip'
+  }
+  // Rule 4: Cap confidence at medium if no real evidence was found
+  if (evidence.bullishFindings.length === 0 && evidence.bearishFindings.length === 0 && result.confidence === 'high') {
+    result.confidence = 'medium'
+  }
+
+  return result
+}
+
 // ─── Main Analysis Function ──────────────────────────────────────────────────
 
 export async function analyzeMarketWithLLM(
@@ -243,78 +317,11 @@ export async function analyzeMarketWithLLM(
 
   try {
     const raw = await callGroq(buildStructuredPrompt(market, evidence))
-    let parsed: any
-    try {
-      parsed = JSON.parse(raw)
-    } catch {
-      console.error('[Groq 70B] Malformed JSON from LLM, returning fallback:', market.question.substring(0, 50))
-      return {
-        estimatedProbability: market.currentPrice,
-        reasoning: 'LLM returned malformed JSON. No edge detected.',
-        confidence: 'low',
-        evidence: [],
-        shouldBet: false,
-        direction: 'skip',
-        edgeSize: 0,
-        evidenceCount: evidence.bullishFindings.length + evidence.bearishFindings.length + evidence.neutralFindings.length,
-        signalStrength: evidence.signalStrength,
-      }
-    }
-
-    // Parse estimate and compute edge
-    const yourEstimate = Math.min(0.99, Math.max(0.01, parsed.yourEstimate ?? market.currentPrice))
-    const edgeSize = Math.abs(yourEstimate - market.currentPrice)
-
-    // Build reasoning with KEY DRIVERS prefix
-    const keyDrivers = Array.isArray(parsed.keyDrivers) ? parsed.keyDrivers.slice(0, 3) : []
-    const keyDriversText = keyDrivers.length > 0
-      ? `KEY DRIVERS: ${keyDrivers.join(' | ')}. `
-      : ''
-    const reasoning = (keyDriversText + (parsed.reasoning || '')).substring(0, 500)
-
-    const result: LLMMarketAnalysis = {
-      estimatedProbability: yourEstimate,
-      reasoning,
-      confidence: (['high', 'medium', 'low'].includes(parsed.confidence) ? parsed.confidence : 'low') as 'high' | 'medium' | 'low',
-      evidence: Array.isArray(parsed.citedEvidence) ? parsed.citedEvidence.slice(0, 5) : [],
-      shouldBet: parsed.shouldBet === true,
-      direction: (['yes', 'no', 'skip'].includes(parsed.direction) ? parsed.direction : 'skip') as 'yes' | 'no' | 'skip',
-      edgeSize,
-      evidenceCount: evidence.bullishFindings.length + evidence.bearishFindings.length + evidence.neutralFindings.length,
-      signalStrength: evidence.signalStrength,
-    }
-
-    // ── Safety / Calibration Rules ──────────────────────────────────────────
-
-    // Rule 1: Force SKIP if confidence is 'low'
-    if (result.confidence === 'low') {
-      result.shouldBet = false
-      result.direction = 'skip'
-    }
-
-    // Rule 2: Force SKIP if evidence signal strength < 25
-    if (evidence.signalStrength < 25) {
-      result.shouldBet = false
-      result.direction = 'skip'
-    }
-
-    // Rule 3: Force SKIP if edge is tiny (not worth fees/spread)
-    if (edgeSize < 0.05) {
-      result.shouldBet = false
-      result.direction = 'skip'
-    }
-
-    // Rule 4: Cap confidence at medium if no real evidence was found
-    if (evidence.bullishFindings.length === 0 && evidence.bearishFindings.length === 0 && result.confidence === 'high') {
-      result.confidence = 'medium'
-    }
-
+    const result = parseAnalysisResponse(raw, market, evidence)
     setCache(market.question, result)
     return result
-
   } catch (error) {
     console.error('[Groq 70B] Analysis failed:', market.question.substring(0, 50), error instanceof Error ? error.message : '')
-
     return {
       estimatedProbability: market.currentPrice,
       reasoning: 'LLM analysis unavailable. No edge detected.',
