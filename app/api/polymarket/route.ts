@@ -640,16 +640,23 @@ export async function GET() {
     const MAX_ANALYSIS = 30  // up from 10 — leverage Max sub for broader exploration
     const CATEGORY_CAP = 8
 
-    type EnrichedCandidate = (typeof recommendations)[0] & { dpsTier: 'high' | 'medium' | 'low'; dpsCategory: string }
-    const enriched: EnrichedCandidate[] = recommendations.map(rec => {
+    // DPS info stored in a side-Map keyed by question — keeps the original
+    // rec references intact so downstream mutations propagate to the
+    // recommendations array (and thus to the response opportunities filter).
+    const dpsInfo = new Map<string, { tier: 'high' | 'medium' | 'low'; category: string }>()
+    for (const rec of recommendations) {
       const dps = scoreDomainPredictability(rec.market.question)
-      return Object.assign({}, rec, { dpsTier: dps.tier, dpsCategory: dps.category })
-    })
+      dpsInfo.set(rec.market.question, { tier: dps.tier, category: dps.category })
+    }
 
-    const highDPS = enriched.filter(r => r.dpsTier === 'high').sort((a, b) => fastSignalScore(b) - fastSignalScore(a))
-    const medDPS = enriched.filter(r => r.dpsTier === 'medium').sort((a, b) => fastSignalScore(b) - fastSignalScore(a))
+    const highDPS = recommendations
+      .filter(r => dpsInfo.get(r.market.question)?.tier === 'high')
+      .sort((a, b) => fastSignalScore(b) - fastSignalScore(a))
+    const medDPS = recommendations
+      .filter(r => dpsInfo.get(r.market.question)?.tier === 'medium')
+      .sort((a, b) => fastSignalScore(b) - fastSignalScore(a))
 
-    const selectedForAnalysis: EnrichedCandidate[] = []
+    const selectedForAnalysis: TradeRecommendation[] = []
     const usedQuestions = new Set<string>()
     const categoryFill: Record<string, number> = {}
 
@@ -657,11 +664,12 @@ export async function GET() {
     for (const cand of highDPS) {
       if (selectedForAnalysis.length >= MAX_ANALYSIS) break
       if (usedQuestions.has(cand.market.question)) continue
-      const usedInCat = categoryFill[cand.dpsCategory] || 0
+      const cat = dpsInfo.get(cand.market.question)?.category ?? 'general'
+      const usedInCat = categoryFill[cat] || 0
       if (usedInCat >= CATEGORY_CAP) continue
       selectedForAnalysis.push(cand)
       usedQuestions.add(cand.market.question)
-      categoryFill[cand.dpsCategory] = usedInCat + 1
+      categoryFill[cat] = usedInCat + 1
     }
 
     // Second pass: medium-DPS to fill remaining slots (no per-category cap)
@@ -672,10 +680,11 @@ export async function GET() {
       usedQuestions.add(cand.market.question)
     }
 
+    const highCount = selectedForAnalysis.filter(r => dpsInfo.get(r.market.question)?.tier === 'high').length
+    const medCount = selectedForAnalysis.filter(r => dpsInfo.get(r.market.question)?.tier === 'medium').length
     console.log(
       `[Pipeline] Selected ${selectedForAnalysis.length} markets for LLM analysis ` +
-      `(high-DPS: ${selectedForAnalysis.filter(r => r.dpsTier === 'high').length}, ` +
-      `medium-DPS: ${selectedForAnalysis.filter(r => r.dpsTier === 'medium').length}). ` +
+      `(high-DPS: ${highCount}, medium-DPS: ${medCount}). ` +
       `Categories: ${JSON.stringify(categoryFill)}`
     )
 
@@ -724,13 +733,20 @@ export async function GET() {
       // Replace fake estimates with real LLM analysis
       rec.estimatedProbability = analysis.estimatedProbability
 
-      // Direction-aware EV: when LLM recommends betting NO, compute EV for the NO side
+      // Direction-aware EV:
+      //  - 'yes':  bet on the YES side, EV from market YES odds
+      //  - 'no':   bet on the NO side, EV from market NO odds
+      //  - 'skip': don't bet — preserve EV at 0 so opportunities filter excludes
+      //            it but the card still appears in the broader feeds with reasoning
       if (analysis.direction === 'no') {
         const noOdds = 1 - rec.odds
         const noEstimate = 1 - analysis.estimatedProbability
         rec.expectedValue = (noEstimate - noOdds) / (1 - noOdds)
-      } else {
+      } else if (analysis.direction === 'yes') {
         rec.expectedValue = (analysis.estimatedProbability - rec.odds) / (1 - rec.odds)
+      } else {
+        // skip — leave EV at 0 (will be excluded from opportunities, surfaced as WATCH ONLY)
+        rec.expectedValue = 0
       }
       rec.reasoning = analysis.reasoning
       rec.timeAnalysis = timeAnalysis

@@ -18,6 +18,34 @@ export interface EdgeEngineResult {
   dpsMultiplierApplied: number
 }
 
+// ─── Per-question result cache (10min TTL) ───────────────────────────────────
+// Prevents redundant Opus/Sonnet subprocess spawns when the same question
+// shows up in successive batches within a single refresh window.
+const RESULT_CACHE_TTL_MS = 10 * 60 * 1000
+const resultCache = new Map<string, { result: EdgeEngineResult; expiry: number }>()
+
+function getCachedResult(question: string): EdgeEngineResult | null {
+  const entry = resultCache.get(question)
+  if (entry && entry.expiry > Date.now()) return entry.result
+  return null
+}
+
+function setCachedResult(question: string, result: EdgeEngineResult): void {
+  resultCache.set(question, { result, expiry: Date.now() + RESULT_CACHE_TTL_MS })
+  // Periodic eviction to bound memory
+  if (resultCache.size > 300) {
+    const now = Date.now()
+    for (const [k, v] of Array.from(resultCache.entries())) {
+      if (v.expiry <= now) resultCache.delete(k)
+    }
+  }
+}
+
+/** Test/debug only: clear the in-memory cache. */
+export function _clearEdgeEngineCache(): void {
+  resultCache.clear()
+}
+
 function skippedAnalysis(market: MarketForAnalysis, evidence: CategoryEvidence, reason: string): LLMMarketAnalysis {
   return {
     estimatedProbability: market.currentPrice,
@@ -43,17 +71,23 @@ export async function analyzeMarketWithEdgeEngine(
   market: MarketForAnalysis,
   evidence: CategoryEvidence
 ): Promise<EdgeEngineResult> {
+  // Cache hit: return prior analysis to avoid spawning another subprocess
+  const cached = getCachedResult(market.question)
+  if (cached) return cached
+
   const dps = scoreDomainPredictability(market.question)
   const modelChoice = recommendModel(dps.tier)
   const multiplier = dpsConvictionMultiplier(dps.tier)
 
   if (modelChoice === 'skip') {
-    return {
+    const skipResult: EdgeEngineResult = {
       analysis: skippedAnalysis(market, evidence, dps.rationale),
       modelUsed: 'skip',
       dps,
       dpsMultiplierApplied: multiplier,
     }
+    setCachedResult(market.question, skipResult)
+    return skipResult
   }
 
   const model = modelChoice === 'opus' ? 'claude-opus-4-7' : 'claude-sonnet-4-6'
@@ -73,12 +107,14 @@ export async function analyzeMarketWithEdgeEngine(
     if (multiplier < 1.0 && analysis.confidence === 'high') {
       analysis.confidence = 'medium'
     }
-    return {
+    const result: EdgeEngineResult = {
       analysis,
       modelUsed: modelChoice === 'opus' ? 'opus' : 'sonnet',
       dps,
       dpsMultiplierApplied: multiplier,
     }
+    setCachedResult(market.question, result)
+    return result
   } catch (e) {
     const isRateLimit = e instanceof ClaudeCodeRateLimitError
     console.warn(
@@ -86,12 +122,14 @@ export async function analyzeMarketWithEdgeEngine(
       (e as Error).message
     )
     const fallback = await analyzeMarketWithLLM(market, evidence)
-    return {
+    const result: EdgeEngineResult = {
       analysis: fallback,
       modelUsed: 'groq-fallback',
       dps,
       dpsMultiplierApplied: multiplier,
     }
+    setCachedResult(market.question, result)
+    return result
   }
 }
 

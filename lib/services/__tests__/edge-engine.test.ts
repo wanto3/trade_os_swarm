@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { analyzeMarketWithEdgeEngine } from '../edge-engine'
+import { analyzeMarketWithEdgeEngine, _clearEdgeEngineCache } from '../edge-engine'
 import type { MarketForAnalysis, CategoryEvidence } from '../groq-market-analysis'
 
 vi.mock('../claude-code-llm.service', () => ({
@@ -42,6 +42,7 @@ const baseEvidence: CategoryEvidence = {
 describe('analyzeMarketWithEdgeEngine', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    _clearEdgeEngineCache()
   })
 
   it('routes high-DPS markets to Opus via claude-code-llm', async () => {

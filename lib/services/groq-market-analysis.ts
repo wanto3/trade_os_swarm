@@ -288,8 +288,11 @@ export function parseAnalysisResponse(
     result.shouldBet = false
     result.direction = 'skip'
   }
-  // Rule 2: Force SKIP if evidence signal strength < 25
-  if (evidence.signalStrength < 25) {
+  // Rule 2: Force SKIP if web evidence signal is weak — UNLESS the LLM is
+  //         high-confidence. Strong models (Opus 4.7) can reason from training
+  //         data even when DuckDuckGo/News yield thin findings; we shouldn't
+  //         override their judgment with a keyword-based signal score.
+  if (evidence.signalStrength < 25 && result.confidence !== 'high') {
     result.shouldBet = false
     result.direction = 'skip'
   }
@@ -298,8 +301,16 @@ export function parseAnalysisResponse(
     result.shouldBet = false
     result.direction = 'skip'
   }
-  // Rule 4: Cap confidence at medium if no real evidence was found
-  if (evidence.bullishFindings.length === 0 && evidence.bearishFindings.length === 0 && result.confidence === 'high') {
+  // Rule 4: Cap confidence at medium if NO web evidence was found AND edge
+  //         is small. Strong-edge high-conf calls keep their confidence —
+  //         Opus knowing "LeBron is a basketball player not a politician"
+  //         doesn't need a news article to confirm it.
+  if (
+    evidence.bullishFindings.length === 0 &&
+    evidence.bearishFindings.length === 0 &&
+    result.confidence === 'high' &&
+    edgeSize < 0.20
+  ) {
     result.confidence = 'medium'
   }
 
