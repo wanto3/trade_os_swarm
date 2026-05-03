@@ -634,8 +634,11 @@ export async function GET() {
     // DPS-prioritized candidate selection: high-DPS first (politics, esports, box-office,
     // crypto-milestones), medium-DPS to fill, skip low-DPS. Per-category cap (8) ensures
     // diversity so we don't analyze 30 politics markets and zero crypto-milestones.
-    const MAX_ANALYSIS = 30  // up from 10 — leverage Max sub for broader exploration
-    const CATEGORY_CAP = 8
+    // Groq-default path: each call is ~5s + rate-limit retries. With
+    // concurrency=4 in the batch wrapper, 20 markets ≈ 25-40s wall time.
+    // Per-category cap 5 keeps coverage diverse across politics/esports/etc.
+    const MAX_ANALYSIS = 20
+    const CATEGORY_CAP = 5
 
     // DPS info stored in a side-Map keyed by question — keeps the original
     // rec references intact so downstream mutations propagate to the
@@ -701,7 +704,9 @@ export async function GET() {
     console.log(`[Pipeline] Gathered evidence for ${evidenceMap.size} markets`)
 
     // Stage 2: Run DPS-routed LLM analysis (Opus/Sonnet via Max, Groq fallback)
-    const edgeResults = await analyzeMarketsBatchWithEdgeEngine(marketsForAnalysis, evidenceMap, 6)
+    // Concurrency 4 with Groq path: each call ~5s + occasional 429 retry.
+    // 4 parallel keeps total wall time at ~25-40s for 20 markets.
+    const edgeResults = await analyzeMarketsBatchWithEdgeEngine(marketsForAnalysis, evidenceMap, 4)
     const llmResults = new Map<string, import('@/lib/services/groq-market-analysis').LLMMarketAnalysis>()
     for (const [q, r] of Array.from(edgeResults.entries())) {
       llmResults.set(q, r.analysis)

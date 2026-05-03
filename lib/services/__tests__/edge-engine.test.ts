@@ -43,9 +43,11 @@ describe('analyzeMarketWithEdgeEngine', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     _clearEdgeEngineCache()
+    delete process.env.EDGE_ENGINE_USE_CLAUDE_CODE
   })
 
-  it('routes high-DPS markets to Opus via claude-code-llm', async () => {
+  it('routes high-DPS markets to Sonnet via claude-code-llm when EDGE_ENGINE_USE_CLAUDE_CODE=1', async () => {
+    process.env.EDGE_ENGINE_USE_CLAUDE_CODE = '1'
     const { callClaudeCode } = await import('../claude-code-llm.service')
     ;(callClaudeCode as any).mockResolvedValue({
       keyDrivers: ['polls'],
@@ -59,9 +61,32 @@ describe('analyzeMarketWithEdgeEngine', () => {
 
     const result = await analyzeMarketWithEdgeEngine(baseMarket, baseEvidence)
 
-    expect(callClaudeCode).toHaveBeenCalledWith(expect.objectContaining({ model: 'claude-opus-4-7' }))
+    expect(callClaudeCode).toHaveBeenCalledWith(expect.objectContaining({ model: 'claude-sonnet-4-6' }))
     expect(result.analysis.estimatedProbability).toBeCloseTo(0.62, 2)
-    expect(result.modelUsed).toBe('opus')
+    expect(result.modelUsed).toBe('sonnet')
+    expect(result.dps.tier).toBe('high')
+  })
+
+  it('defaults to Groq direct path (no claude-code) for high-DPS', async () => {
+    const { callClaudeCode } = await import('../claude-code-llm.service')
+    const { analyzeMarketWithLLM } = await import('../groq-market-analysis')
+    ;(analyzeMarketWithLLM as any).mockResolvedValue({
+      estimatedProbability: 0.62,
+      reasoning: 'Groq direct',
+      confidence: 'high',
+      evidence: [],
+      shouldBet: true,
+      direction: 'yes',
+      edgeSize: 0.07,
+      evidenceCount: 1,
+      signalStrength: 60,
+    })
+
+    const result = await analyzeMarketWithEdgeEngine(baseMarket, baseEvidence)
+
+    expect(callClaudeCode).not.toHaveBeenCalled()
+    expect(analyzeMarketWithLLM).toHaveBeenCalled()
+    expect(result.modelUsed).toBe('groq-fallback')
     expect(result.dps.tier).toBe('high')
   })
 
@@ -76,6 +101,7 @@ describe('analyzeMarketWithEdgeEngine', () => {
   })
 
   it('falls back to Groq when Opus rate-limits', async () => {
+    process.env.EDGE_ENGINE_USE_CLAUDE_CODE = '1'
     const { callClaudeCode, ClaudeCodeRateLimitError } = await import('../claude-code-llm.service')
     const { analyzeMarketWithLLM } = await import('../groq-market-analysis')
     ;(callClaudeCode as any).mockRejectedValue(new ClaudeCodeRateLimitError('5-hour window exhausted'))
@@ -99,6 +125,7 @@ describe('analyzeMarketWithEdgeEngine', () => {
   })
 
   it('applies DPS conviction multiplier to medium-DPS markets', async () => {
+    process.env.EDGE_ENGINE_USE_CLAUDE_CODE = '1'
     const { callClaudeCode } = await import('../claude-code-llm.service')
     const medMarket = { ...baseMarket, question: 'Will some random thing happen?' }
     ;(callClaudeCode as any).mockResolvedValue({

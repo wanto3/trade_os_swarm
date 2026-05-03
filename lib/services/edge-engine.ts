@@ -90,47 +90,59 @@ export async function analyzeMarketWithEdgeEngine(
     return skipResult
   }
 
-  const model = modelChoice === 'opus' ? 'claude-opus-4-7' : 'claude-sonnet-4-6'
-  const prompt = buildStructuredPrompt(market, evidence)
+  // Default path: Groq Llama 3.3 70B. Spawning 30+ parallel `claude -p`
+  // subprocesses for Opus/Sonnet was too slow under Max rate limits — calls
+  // pile up and time out. Groq finishes a market in ~5s, fits the dashboard
+  // load budget, and the structured two-sided prompt + safety rules in
+  // parseAnalysisResponse give us decent quality. Per-market Opus deep-dive
+  // is the planned escape hatch (separate endpoint, opt-in by user click).
+  // Keeping DPS classification + multiplier + skip behavior intact.
+  const useClaudeCode = process.env.EDGE_ENGINE_USE_CLAUDE_CODE === '1'
 
-  try {
-    const rawResponse = await callClaudeCode<any>({
-      prompt: prompt + '\n\nReturn ONLY a JSON object matching the OUTPUT FORMAT above. No prose before or after.',
-      model,
-      timeoutMs: 45_000,
-    })
-    // callClaudeCode already JSON-parses; re-stringify so parseAnalysisResponse can consume
-    // the raw-string contract it shares with the Groq path.
-    const analysis = parseAnalysisResponse(JSON.stringify(rawResponse), market, evidence)
-    // Apply DPS multiplier — if confidence is high but multiplier is <1, downgrade so a
-    // medium-DPS "high confidence" can't outrank a true high-DPS pick.
-    if (multiplier < 1.0 && analysis.confidence === 'high') {
-      analysis.confidence = 'medium'
+  if (useClaudeCode) {
+    const model = modelChoice === 'opus' ? 'claude-opus-4-7' : 'claude-sonnet-4-6'
+    const prompt = buildStructuredPrompt(market, evidence)
+    try {
+      const rawResponse = await callClaudeCode<unknown>({
+        prompt: prompt + '\n\nReturn ONLY a JSON object matching the OUTPUT FORMAT above. No prose before or after.',
+        model,
+        timeoutMs: 60_000,
+      })
+      const analysis = parseAnalysisResponse(JSON.stringify(rawResponse), market, evidence)
+      if (multiplier < 1.0 && analysis.confidence === 'high') {
+        analysis.confidence = 'medium'
+      }
+      const result: EdgeEngineResult = {
+        analysis,
+        modelUsed: modelChoice === 'opus' ? 'opus' : 'sonnet',
+        dps,
+        dpsMultiplierApplied: multiplier,
+      }
+      setCachedResult(market.question, result)
+      return result
+    } catch (e) {
+      const isRateLimit = e instanceof ClaudeCodeRateLimitError
+      console.warn(
+        `[edge-engine] ${model} failed (${isRateLimit ? 'rate-limit' : 'error'}), falling back to Groq:`,
+        (e as Error).message
+      )
+      // fall through to Groq path
     }
-    const result: EdgeEngineResult = {
-      analysis,
-      modelUsed: modelChoice === 'opus' ? 'opus' : 'sonnet',
-      dps,
-      dpsMultiplierApplied: multiplier,
-    }
-    setCachedResult(market.question, result)
-    return result
-  } catch (e) {
-    const isRateLimit = e instanceof ClaudeCodeRateLimitError
-    console.warn(
-      `[edge-engine] ${model} failed (${isRateLimit ? 'rate-limit' : 'error'}), falling back to Groq:`,
-      (e as Error).message
-    )
-    const fallback = await analyzeMarketWithLLM(market, evidence)
-    const result: EdgeEngineResult = {
-      analysis: fallback,
-      modelUsed: 'groq-fallback',
-      dps,
-      dpsMultiplierApplied: multiplier,
-    }
-    setCachedResult(market.question, result)
-    return result
   }
+
+  // Direct Groq path (default)
+  const groqAnalysis = await analyzeMarketWithLLM(market, evidence)
+  if (multiplier < 1.0 && groqAnalysis.confidence === 'high') {
+    groqAnalysis.confidence = 'medium'
+  }
+  const result: EdgeEngineResult = {
+    analysis: groqAnalysis,
+    modelUsed: useClaudeCode ? 'groq-fallback' : 'groq-fallback',
+    dps,
+    dpsMultiplierApplied: multiplier,
+  }
+  setCachedResult(market.question, result)
+  return result
 }
 
 /**

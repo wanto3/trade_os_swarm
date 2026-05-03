@@ -89,8 +89,14 @@ export function scoreDomainPredictability(question: string): DPSResult {
 }
 
 export function recommendModel(tier: DPSTier): ModelChoice {
+  // Speed/quality tradeoff: Sonnet 4.6 is 3-4x faster than Opus 4.7 with
+  // near-equivalent quality on yes/no prediction-market analysis. Going
+  // Sonnet across the board keeps dashboard load times under 60s instead
+  // of 2-3 minutes. Opus is reserved for explicit per-market deep-dives
+  // (a future feature) where a user wants the strongest model on a single
+  // important pick. Low-DPS still skips entirely.
   switch (tier) {
-    case 'high': return 'opus'
+    case 'high': return 'sonnet'
     case 'medium': return 'sonnet'
     case 'low': return 'skip'
   }

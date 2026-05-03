@@ -40,8 +40,8 @@ describe('scoreDomainPredictability', () => {
 })
 
 describe('recommendModel', () => {
-  it('routes high DPS to opus', () => {
-    expect(recommendModel('high')).toBe('opus')
+  it('routes high DPS to sonnet (current speed/quality tradeoff)', () => {
+    expect(recommendModel('high')).toBe('sonnet')
   })
   it('routes medium DPS to sonnet', () => {
     expect(recommendModel('medium')).toBe('sonnet')
