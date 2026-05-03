@@ -301,22 +301,22 @@ function getConvictionLabel(score: number): ConvictionLabel {
   return 'risky'
 }
 
-function scoreMarket(market: GammaMarket): TradeRecommendation | null {
+function scoreMarket(market: GammaMarket): TradeRecommendation[] {
   // Note: negRisk sub-markets are NOT filtered out — they have their own individual pages
   // on Polymarket (e.g., /event/will-connecticut-win-the-2026-ncaa-tournament). Many
   // short-term markets (NCAA, Masters, elections) are negRisk, so blocking them would
   // miss most urgent opportunities.
 
-  if (!market.outcomePrices || !market.outcomes) return null
+  if (!market.outcomePrices || !market.outcomes) return []
 
   let outcomePrices: number[]
   try {
     const parsed = JSON.parse(market.outcomePrices)
-    if (!Array.isArray(parsed) || parsed.length < 2) return null
+    if (!Array.isArray(parsed) || parsed.length < 2) return []
     outcomePrices = parsed.map(Number).filter(p => !isNaN(p) && p > 0 && p < 1)
-    if (outcomePrices.length < 2) return null
+    if (outcomePrices.length < 2) return []
   } catch {
-    return null
+    return []
   }
 
   // Determine time tier early so it can be used for liquidity and price checks
@@ -336,7 +336,7 @@ function scoreMarket(market: GammaMarket): TradeRecommendation | null {
 
   // Conservative: minimum $1K liquidity for all markets
   const liquidityMin = 1000
-  if (market.liquidityNum < liquidityMin) return null
+  if (market.liquidityNum < liquidityMin) return []
 
   // Widen price range to capture near-certain (0.999+) and near-impossible (0.001+) outcomes
   // These are valid trading opportunities — especially for short-term markets
@@ -486,13 +486,10 @@ function scoreMarket(market: GammaMarket): TradeRecommendation | null {
     })
   }
 
-  if (recommendations.length === 0) return null
-  // Sort by conviction score first, then EV
-  recommendations.sort((a, b) => {
-    if (Math.abs(b.convictionScore - a.convictionScore) > 3) return b.convictionScore - a.convictionScore
-    return b.expectedValue - a.expectedValue
-  })
-  return recommendations[0]
+  // Return BOTH sides (YES and NO recs) of every market so the LLM analysis
+  // pipeline can route the bet to whichever side it recommends. The route's
+  // downstream apply loop sets EV=0 on the wrong-side rec.
+  return recommendations
 }
 // ── Global response cache to prevent concurrent LLM pipeline floods ──────────
 // The dashboard auto-refreshes frequently, but LLM analysis takes 30-60s.
@@ -574,8 +571,8 @@ export async function GET() {
       if (market.endDateIso && new Date(market.endDateIso).getTime() < now) {
         continue
       }
-      const rec = scoreMarket(market)
-      if (rec) recommendations.push(rec)
+      const recs = scoreMarket(market)
+      for (const rec of recs) recommendations.push(rec)
     }
 
     recommendations.sort((a, b) => {
@@ -716,36 +713,43 @@ export async function GET() {
     const skippedCount = edgeValues.filter(r => r.modelUsed === 'skip').length
     console.log(`[Pipeline] Edge engine — opus: ${opusCount}, sonnet: ${sonnetCount}, groq-fallback: ${fallbackCount}, skipped: ${skippedCount}`)
 
-    // Apply LLM analysis results to each recommendation
-    for (const rec of selectedForAnalysis) {
+    // Apply LLM analysis to BOTH sides (YES and NO recs) of every analyzed
+    // market. The selection step dedups by question so only one rec per market
+    // is sent to the LLM, but downstream filters look at every rec — so we
+    // must update both sides here. Side-aware logic below assigns positive EV
+    // to the matching-direction rec and 0 to the wrong-side rec.
+    for (const rec of recommendations) {
       const analysis = llmResults.get(rec.market.question)
-      if (!analysis) {
-        console.log(`[Pipeline] NO MATCH for: "${rec.market.question.substring(0, 50)}"`)
-        continue
+      if (!analysis) continue
+      // Log once per question (skip the NO-side dupe log)
+      if (rec.outcome === 'Yes' || rec.outcome === '1') {
+        console.log(`[Pipeline] MATCHED: "${rec.market.question.substring(0, 40)}" → conf=${analysis.confidence}, edge=${(analysis.edgeSize*100).toFixed(1)}%`)
       }
-      console.log(`[Pipeline] MATCHED: "${rec.market.question.substring(0, 40)}" → conf=${analysis.confidence}, edge=${(analysis.edgeSize*100).toFixed(1)}%`)
 
       const timeAnalysis = analyzeTimeEdge(rec.market.endDateIso, {
         volumeNum: rec.market.volumeNum,
         liquidityNum: rec.market.liquidityNum,
       } as any)
 
-      // Replace fake estimates with real LLM analysis
-      rec.estimatedProbability = analysis.estimatedProbability
+      // Side-aware estimate: rec.outcome is either 'Yes' or 'No'. The LLM's
+      // estimatedProbability is always the YES probability. Store it on the
+      // rec from the rec's *own* outcome perspective so downstream code (Kelly
+      // sizing in createPosition, EV display, dashboards) uses self-consistent
+      // numbers.
+      const isYesSide = rec.outcome === 'Yes' || rec.outcome === '1'
+      rec.estimatedProbability = isYesSide
+        ? analysis.estimatedProbability
+        : 1 - analysis.estimatedProbability
 
-      // Direction-aware EV:
-      //  - 'yes':  bet on the YES side, EV from market YES odds
-      //  - 'no':   bet on the NO side, EV from market NO odds
-      //  - 'skip': don't bet — preserve EV at 0 so opportunities filter excludes
-      //            it but the card still appears in the broader feeds with reasoning
-      if (analysis.direction === 'no') {
-        const noOdds = 1 - rec.odds
-        const noEstimate = 1 - analysis.estimatedProbability
-        rec.expectedValue = (noEstimate - noOdds) / (1 - noOdds)
-      } else if (analysis.direction === 'yes') {
-        rec.expectedValue = (analysis.estimatedProbability - rec.odds) / (1 - rec.odds)
+      // Side-aware EV: only the rec whose outcome MATCHES the LLM direction
+      // gets positive EV. The opposite-side rec sits at 0 (won't appear in
+      // opportunities). 'skip' = abstain → EV stays 0 on both sides.
+      const matchesDirection =
+        (analysis.direction === 'yes' && isYesSide) ||
+        (analysis.direction === 'no' && !isYesSide)
+      if (matchesDirection) {
+        rec.expectedValue = (rec.estimatedProbability - rec.odds) / (1 - rec.odds)
       } else {
-        // skip — leave EV at 0 (will be excluded from opportunities, surfaced as WATCH ONLY)
         rec.expectedValue = 0
       }
       rec.reasoning = analysis.reasoning

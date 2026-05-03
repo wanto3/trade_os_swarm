@@ -18,6 +18,12 @@ export interface PolymarketPosition {
   marketImpliedProb: number
   expectedValue: number
   category: 'crypto' | 'sports' | 'policy' | 'general'
+  /** DPS category — granular tier for learning calibration. Optional for backward compat with older positions. */
+  dpsCategory?: string
+  /** DPS tier at time of placement. */
+  dpsTier?: 'high' | 'medium' | 'low'
+  /** Snapshot of LLM reasoning at placement time — for post-hoc analysis. */
+  reasoningAtPlacement?: string
   placedAt: number
   resolvedAt?: number
   status: 'open' | 'won' | 'lost'
@@ -217,13 +223,13 @@ export function createPosition(rec: TradeRecommendation): PolymarketPosition | n
     return null
   }
 
-  // Skip if closing within 1 day
-  if (rec.daysToClose <= 1) {
-    console.log(`[PolymarketPortfolio] Skipping ${rec.market.question}: closing within 1 day`)
-    return null
-  }
+  // Note: previously skipped markets closing within 1 day. Removed because
+  // many high-edge prediction-market opportunities resolve same-day; the user
+  // clicking the button knows what they're doing. Auto-trader can guard against
+  // imminent placement at its own layer if needed.
 
-  // Apply Kelly sizing
+  // Apply Kelly sizing — uses estimatedProbability/marketImpliedProb that are
+  // already side-correct (set by route.ts based on rec.outcome).
   const rawBet = calculateKellyBetSize(
     portfolio.bankroll,
     rec.estimatedProbability,
@@ -233,19 +239,45 @@ export function createPosition(rec: TradeRecommendation): PolymarketPosition | n
 
   // Cap at max bet size % of bankroll
   const maxBet = portfolio.bankroll * (config.maxBetSizePercent / 100)
-  const betSize = Math.min(rawBet, maxBet)
+  let betSize = Math.min(rawBet, maxBet)
 
-  if (betSize < 0.01) {
-    console.log(`[PolymarketPortfolio] Bet size too small: $${betSize.toFixed(2)}`)
+  // Floor: if Kelly is positive but tiny, place a minimal $1 paper bet so the
+  // user actually sees the trade in their portfolio. Without this, near-certain
+  // long-tail picks (Kelly ~ pennies) silently fail to place.
+  if (betSize > 0 && betSize < 1) {
+    betSize = Math.min(1, portfolio.bankroll)
+  }
+
+  if (betSize <= 0) {
+    console.log(
+      `[PolymarketPortfolio] Cannot place ${rec.market.question}: Kelly=0 (estimatedProb=${rec.estimatedProbability.toFixed(3)} vs market=${rec.marketImpliedProb.toFixed(3)} — model thinks this side is unfavorable)`
+    )
     return null
   }
 
   const entryPrice = rec.odds
+  if (entryPrice <= 0 || entryPrice >= 1) {
+    console.log(`[PolymarketPortfolio] Invalid entry price ${entryPrice} for ${rec.market.question}`)
+    return null
+  }
+
   const quantity = betSize / entryPrice
   const cost = entryPrice * quantity
   const potentialPayout = (1 - entryPrice) * quantity
 
   const outcomeIndex = rec.outcome === 'Yes' || rec.outcome === '1' ? 0 : 1
+
+  // Compute DPS at placement time so learning stats can group by tier/category later.
+  // Lazy import to avoid circular dep risk.
+  let dpsCategory: string | undefined
+  let dpsTier: 'high' | 'medium' | 'low' | undefined
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { scoreDomainPredictability } = require('./dps.service') as typeof import('./dps.service')
+    const dps = scoreDomainPredictability(rec.market.question)
+    dpsCategory = dps.category
+    dpsTier = dps.tier
+  } catch { /* DPS service not available — fall back to legacy category only */ }
 
   const position: PolymarketPosition = {
     id: `pm-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
@@ -263,6 +295,9 @@ export function createPosition(rec: TradeRecommendation): PolymarketPosition | n
     marketImpliedProb: rec.marketImpliedProb,
     expectedValue: rec.expectedValue,
     category: classifyCategory(rec.market.question),
+    dpsCategory,
+    dpsTier,
+    reasoningAtPlacement: rec.reasoning?.substring(0, 500),
     placedAt: Date.now(),
     status: 'open',
     url: rec.market.url,
@@ -278,7 +313,7 @@ export function createPosition(rec: TradeRecommendation): PolymarketPosition | n
   savePortfolioData()
   saveConfigData()
 
-  console.log(`[PolymarketPortfolio] Placed trade: ${rec.market.question} | ${rec.outcome} @ ${entryPrice} | Cost: $${cost.toFixed(2)}`)
+  console.log(`[PolymarketPortfolio] Placed trade: ${rec.market.question.substring(0, 60)} | ${rec.outcome} @ ${entryPrice} | $${cost.toFixed(2)} | DPS:${dpsTier}/${dpsCategory}`)
   return position
 }
 

@@ -263,7 +263,13 @@ export function parseAnalysisResponse(
     }
   }
 
-  const yourEstimate = Math.min(0.99, Math.max(0.01, parsed.yourEstimate ?? market.currentPrice))
+  // Normalize yourEstimate — LLM occasionally returns percentages (e.g., 98.5)
+  // instead of decimals (0.985). Anything > 1 must be a percentage.
+  let rawEstimate = parsed.yourEstimate ?? market.currentPrice
+  if (typeof rawEstimate === 'string') rawEstimate = parseFloat(rawEstimate)
+  if (typeof rawEstimate !== 'number' || isNaN(rawEstimate)) rawEstimate = market.currentPrice
+  if (rawEstimate > 1) rawEstimate /= 100
+  const yourEstimate = Math.min(0.99, Math.max(0.01, rawEstimate))
   const edgeSize = Math.abs(yourEstimate - market.currentPrice)
 
   const keyDrivers = Array.isArray(parsed.keyDrivers) ? parsed.keyDrivers.slice(0, 3) : []
