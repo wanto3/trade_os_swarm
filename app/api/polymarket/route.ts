@@ -616,19 +616,23 @@ export async function GET() {
     // Rate-limit fallback → Groq Llama 3.3 70B
     const { analyzeMarketsBatchWithEdgeEngine } = await import('@/lib/services/edge-engine')
     const { scoreDomainPredictability } = await import('@/lib/services/dps.service')
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { fetchOrderBookImbalance, analyzeTimeEdge } = (await import('@/lib/services/polymarket-research.service')) as any
+    const polymarketResearchModule = await import('@/lib/services/polymarket-research.service')
+    const fetchOrderBookImbalance = (polymarketResearchModule as Record<string, unknown>).fetchOrderBookImbalance as ((id: string) => Promise<{ imbalance: number; momentum: 'up' | 'down' | 'neutral' } | null>) | undefined
+    const { analyzeTimeEdge } = polymarketResearchModule
 
-    // Pre-fetch order book signals for top-volume candidates (parallel)
-    const obSignals = new Map<string, any>()
-    await Promise.allSettled(
-      topByVolume.map(async (rec) => {
-        try {
-          const signal = await fetchOrderBookImbalance(rec.market.id)
-          if (signal) obSignals.set(rec.market.id, signal)
-        } catch { /* skip on error */ }
-      })
-    )
+    // Pre-fetch order book signals for top-volume candidates (parallel).
+    // Function may not exist in the deprecated research service — handled gracefully.
+    const obSignals = new Map<string, { imbalance: number; momentum: 'up' | 'down' | 'neutral' }>()
+    if (typeof fetchOrderBookImbalance === 'function') {
+      await Promise.allSettled(
+        topByVolume.map(async (rec) => {
+          try {
+            const signal = await fetchOrderBookImbalance(rec.market.id)
+            if (signal) obSignals.set(rec.market.id, signal)
+          } catch { /* skip on error */ }
+        })
+      )
+    }
 
     // DPS-prioritized candidate selection: high-DPS first (politics, esports, box-office,
     // crypto-milestones), medium-DPS to fill, skip low-DPS. Per-category cap (8) ensures
