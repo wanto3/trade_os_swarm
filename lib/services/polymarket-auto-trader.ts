@@ -22,194 +22,22 @@ let intervalHandle: NodeJS.Timeout | null = null
 
 async function fetchOpportunities(): Promise<TradeRecommendation[]> {
   try {
-    const res = await fetch(
-      'https://gamma-api.polymarket.com/markets?closed=false&accepting_orders=true&order=volumeNum&ascending=false&limit=500',
-      { headers: { Accept: 'application/json' }, cache: 'no-store' }
-    )
-    if (!res.ok) throw new Error(`Gamma API error: ${res.status}`)
-    const rawMarkets: any[] = await res.json()
-
-    const now = Date.now()
-    const recommendations: TradeRecommendation[] = []
-
-    for (const market of rawMarkets) {
-      if ((market as any).negRisk === true) continue
-      if (!market.outcomePrices || !market.outcomes) continue
-      if (market.liquidityNum < 500) continue
-
-      let outcomePrices: number[]
-      try {
-        const parsed = JSON.parse(market.outcomePrices)
-        outcomePrices = parsed.map(Number).filter((p: number) => !isNaN(p) && p > 0 && p < 1)
-        if (outcomePrices.length < 2) continue
-      } catch { continue }
-
-      let outcomes: string[]
-      try {
-        outcomes = JSON.parse(market.outcomes)
-      } catch {
-        outcomes = ['Yes', 'No']
-      }
-
-      if (market.endDateIso && new Date(market.endDateIso).getTime() < now) continue
-
-      const daysToClose = market.endDateIso
-        ? Math.max(0, Math.ceil((new Date(market.endDateIso).getTime() - now) / (1000 * 60 * 60 * 24)))
-        : 999
-      const isImminent = daysToClose <= 1
-      const isClosingSoon = daysToClose <= 7
-
-      const url = market.events?.[0]?.slug
-        ? `https://polymarket.com/event/${market.events[0].slug}`
-        : market.slug
-          ? `https://polymarket.com/event/${market.slug}`
-          : `https://polymarket.com/event/${market.id}`
-
-      const q = (market.question || '').toLowerCase()
-      let category = 'general'
-      if (/\b(fed|rate|tariff|election|presid(ent|ential)|congress|law|pass|convicted|inflation|jobs|nomination)\b/.test(q)) category = 'policy'
-      else if (/\b(btc|bitcoin|eth(ereum)?|sol(ana)?|crypto|dogecoin|xrp|ada|dot|trump|meme|coin)\b/.test(q)) category = 'crypto'
-      else if (/\b(vs|beat|loss|score|game|team|league|championship|nba|nfl|mlb|premier|ufa|tennis|basketball|football|mvp|world cup|fifa|nhl|stanley cup|series|semifinal|quarterfinal|finals|playoffs)\b/.test(q)) category = 'sports'
-
-      for (let i = 0; i < Math.min(outcomePrices.length, 2); i++) {
-        const marketProb = outcomePrices[i]
-        if (marketProb < 0.001 || marketProb > 0.999) continue
-
-        // More aggressive bias for imminent/closing-soon markets
-        const categoryBias: Record<string, number> = {
-          crypto: isImminent ? 0.03 : isClosingSoon ? 0.02 : 0.01,
-          sports: isImminent ? 0.03 : isClosingSoon ? 0.02 : 0.01,
-          policy: isImminent ? -0.05 : isClosingSoon ? -0.03 : -0.02,
-          general: isImminent ? 0.02 : isClosingSoon ? 0.01 : 0.0,
-        }
-        const marketBias = categoryBias[category] || 0
-        const estimatedProb = Math.min(0.999, Math.max(0.001, marketProb + marketBias))
-        const ev = (estimatedProb - marketProb) / (1 - marketProb)
-        const evPct = ev * 100
-        const evThreshold = isImminent ? 0.5 : isClosingSoon ? 1 : 3
-        if (evPct < evThreshold || evPct > 50) continue
-
-        // Safety score (simplified)
-        let safetyScore = 0
-        const liq = market.liquidityNum || 0
-        if (liq >= 100000) safetyScore += 30
-        else if (liq >= 50000) safetyScore += 25
-        else if (liq >= 25000) safetyScore += 20
-        else if (liq >= 10000) safetyScore += 15
-        else if (liq >= 5000) safetyScore += 10
-        else safetyScore += 5
-
-        const vol = market.volumeNum || 0
-        if (vol >= 1000000) safetyScore += 20
-        else if (vol >= 500000) safetyScore += 15
-        else if (vol >= 100000) safetyScore += 10
-        else safetyScore += 5
-
-        if (evPct >= 3 && evPct <= 15) safetyScore += 20
-        else if (evPct > 15 && evPct <= 25) safetyScore += 15
-        else safetyScore += 8
-
-        if ((market.competitive || 0) >= 0.6) safetyScore += 10
-
-        safetyScore = Math.min(100, safetyScore)
-        if (safetyScore < 70) continue // HIGH conviction only
-
-        const confidence: 'high' | 'medium' | 'low' = safetyScore >= 70 ? 'high' : safetyScore >= 55 ? 'medium' : 'low'
-
-        const convictionScore = safetyScore
-        const convictionLabel = getConvictionLabel(convictionScore)
-
-        // Time analysis
-        let tier: 'imminent' | 'closing-soon' | 'medium' | 'long' = 'medium'
-        if (daysToClose <= 1) tier = 'imminent'
-        else if (daysToClose <= 7) tier = 'closing-soon'
-        else if (daysToClose <= 30) tier = 'medium'
-        else tier = 'long'
-        const closingSoonFactors: string[] = tier === 'imminent'
-          ? ['Resolution within 24 hours']
-          : tier === 'closing-soon'
-            ? ['Resolution within 7 days']
-            : tier === 'medium'
-              ? ['Resolution within 30 days']
-              : ['Long-duration market']
-        const resolutionUncertainty: 'low' | 'medium' | 'high' =
-          tier === 'imminent' ? 'low' : tier === 'closing-soon' || tier === 'medium' ? 'medium' : 'high'
-
-        const convictionBreakdown: ConvictionBreakdown = {
-          score: convictionScore,
-          label: convictionLabel,
-          factors: {
-            marketQuality: Math.round(liq >= 100000 ? 100 : liq >= 50000 ? 85 : liq >= 25000 ? 70 : liq >= 10000 ? 55 : 40),
-            timeEdge: tier === 'imminent' ? 95 : tier === 'closing-soon' ? 75 : tier === 'medium' ? 55 : 35,
-            researchAlignment: 50,
-            evRationality: evPct >= 3 && evPct <= 25 ? 100 : evPct > 25 && evPct <= 40 ? 70 : 40,
-          },
-        }
-
-        const timeAnalysis: TimeAnalysis = {
-          tier,
-          daysToClose,
-          closingSoonFactors,
-          resolutionUncertainty,
-        }
-
-        const rec: TradeRecommendation = {
-          market: {
-            id: market.id,
-            question: market.question,
-            outcomes,
-            outcomePrices,
-            volumeNum: market.volumeNum || 0,
-            liquidityNum: market.liquidityNum || 0,
-            volume24hr: market.volume24hr || 0,
-            bestBid: market.bestBid ? Number(market.bestBid) : null,
-            bestAsk: market.bestAsk ? Number(market.bestAsk) : null,
-            spread: market.spread ? Number(market.spread) : 0,
-            endDateIso: market.endDateIso || null,
-            slug: market.slug || '',
-            competitive: market.competitive || 0,
-            url,
-          },
-          outcome: outcomes[i] || (i === 0 ? 'Yes' : 'No'),
-          odds: marketProb,
-          estimatedProbability: estimatedProb,
-          marketImpliedProb: marketProb,
-          expectedValue: ev,
-          confidence,
-          reasoning: '',
-          upside: '',
-          riskLevel: liq >= 50000 ? 'low' : liq >= 10000 ? 'medium' : 'high',
-          maxBet: Math.min(Math.floor((liq * 0.005) / marketProb), 100),
-          safetyScore,
-          recommendedBet: 0,
-          kellyFraction: 0,
-          halfKellyBet: 0,
-          closingDate: market.endDateIso ? new Date(market.endDateIso).getTime() : now + 365 * 24 * 60 * 60 * 1000,
-          daysToClose,
-          convictionScore,
-          convictionLabel,
-          convictionBreakdown,
-          research: null,
-          longTail: null,
-          timeAnalysis,
-        }
-
-        recommendations.push(rec)
-      }
-    }
-
-    // Sort by safety score desc, then EV desc
-    recommendations.sort((a, b) => {
-      if (Math.abs(b.safetyScore - a.safetyScore) > 3) return b.safetyScore - a.safetyScore
-      return b.expectedValue - a.expectedValue
+    // Single source of truth: the API route runs the edge-engine pipeline.
+    // This eliminates the duplicate keyword pipeline that used to live here.
+    const baseUrl = process.env.INTERNAL_API_BASE || 'http://localhost:3000'
+    const res = await fetch(`${baseUrl}/api/polymarket`, {
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
     })
-
-    return recommendations
+    if (!res.ok) throw new Error(`Internal API error: ${res.status}`)
+    const data = await res.json()
+    return (data.opportunities || []) as TradeRecommendation[]
   } catch (error) {
     console.error('[PolymarketAutoTrader] Failed to fetch opportunities:', error)
     return []
   }
 }
+
 
 async function fetchClosedMarkets(marketIds: string[]): Promise<Map<string, 'yes' | 'no' | 'invalid'>> {
   const results = new Map<string, 'yes' | 'no' | 'invalid'>()
@@ -313,22 +141,49 @@ async function runPollCycle(): Promise<{ placed: number; resolved: number; error
 }
 
 export function startAutoTrader(): void {
-  if (intervalHandle) {
-    console.log('[PolymarketAutoTrader] Already running')
-    return
+  // Per project decision (2026-05-03): no background polling at all.
+  // Operating model is bet-cycle driven:
+  //   - Analysis runs on-demand when the dashboard hits /api/polymarket
+  //   - Position resolution runs lazily inside the same API call (see route.ts)
+  //   - Manual placement is still available via triggerPollCycle()
+  // This function is a no-op kept for backward compatibility with any existing callers.
+  console.log('[PolymarketAutoTrader] Background polling disabled (on-demand mode)')
+}
+
+/**
+ * Lazily resolve any open positions whose end-date has passed.
+ * Called from the API GET route on each dashboard visit.
+ */
+export async function runResolutionOnly(): Promise<{ resolved: number; errors: string[] }> {
+  const result: { resolved: number; errors: string[] } = { resolved: 0, errors: [] }
+  try {
+    await ensureInitialized()
+    const openPositions = getPositions(true)
+    if (openPositions.length === 0) return result
+
+    // Pre-filter: only positions whose closing date has passed (or unknown)
+    const now = Date.now()
+    const candidates = openPositions.filter(p => {
+      const closing = (p as unknown as { closingDate?: number }).closingDate
+      return !closing || closing <= now
+    })
+    if (candidates.length === 0) return result
+
+    const marketIds = candidates.map(p => p.marketId)
+    const resolutions = await fetchClosedMarkets(marketIds)
+
+    for (const pos of candidates) {
+      const resolution = resolutions.get(pos.marketId)
+      if (resolution) {
+        resolvePosition(pos.id, resolution as 'yes' | 'no' | 'invalid')
+        result.resolved++
+      }
+    }
+  } catch (error) {
+    result.errors.push(error instanceof Error ? error.message : 'Unknown error')
+    console.error('[PolymarketAutoTrader] Resolution check error:', error)
   }
-
-  // Run immediately on start
-  runPollCycle().then(r => {
-    console.log(`[PolymarketAutoTrader] Initial poll: placed=${r.placed}, resolved=${r.resolved}`)
-  })
-
-  intervalHandle = setInterval(async () => {
-    const r = await runPollCycle()
-    console.log(`[PolymarketAutoTrader] Poll cycle: placed=${r.placed}, resolved=${r.resolved}`)
-  }, POLL_INTERVAL_MS)
-
-  console.log(`[PolymarketAutoTrader] Started (poll interval: ${POLL_INTERVAL_MS / 1000 / 60} min)`)
+  return result
 }
 
 export function stopAutoTrader(): void {

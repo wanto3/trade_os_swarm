@@ -514,6 +514,21 @@ export async function GET() {
     }
 
     pipelineRunning = true
+
+    // Lazy resolution check: settle any positions that have closed since last visit.
+    // Runs in parallel with market fetch so it doesn't slow the response.
+    const resolutionPromise = (async () => {
+      try {
+        const { runResolutionOnly } = await import('@/lib/services/polymarket-auto-trader')
+        const r = await runResolutionOnly()
+        if (r.resolved > 0) {
+          console.log(`[Pipeline] Lazy resolution: resolved=${r.resolved} positions`)
+        }
+      } catch (e) {
+        console.error('[Pipeline] Lazy resolution failed:', e)
+      }
+    })()
+
     // Fetch by volume, volume24hr, AND by endDate (for 24hr coverage)
     const [volumeRes, volume24Res, endDateRes] = await Promise.all([
       fetch('https://gamma-api.polymarket.com/markets?closed=false&accepting_orders=true&order=volumeNum&ascending=false&limit=500', { headers: { 'Accept': 'application/json' }, cache: 'no-store' }),
