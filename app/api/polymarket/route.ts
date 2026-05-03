@@ -594,10 +594,15 @@ export async function GET() {
       .sort((a, b) => (b.market.volumeNum - a.market.volumeNum))
       .slice(0, 10)
 
-    // ── LLM-Powered Deep Analysis (Groq Llama 3.3 70B + Web Evidence) ──────
-    // 2-stage pipeline: gather evidence via web search, then feed to LLM
-    const { analyzeMarketsBatch } = await import('@/lib/services/groq-market-analysis')
-    const { fetchOrderBookImbalance, analyzeTimeEdge } = await import('@/lib/services/polymarket-research.service')
+    // ── DPS-Routed LLM Analysis (Opus 4.7 / Sonnet 4.6 via Max sub, Groq fallback) ──
+    // High-DPS markets (politics, esports, box-office, crypto-milestones) → Opus
+    // Medium-DPS → Sonnet 4.6
+    // Low-DPS (live sports, weather, crypto-price) → skip
+    // Rate-limit fallback → Groq Llama 3.3 70B
+    const { analyzeMarketsBatchWithEdgeEngine } = await import('@/lib/services/edge-engine')
+    const { scoreDomainPredictability } = await import('@/lib/services/dps.service')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { fetchOrderBookImbalance, analyzeTimeEdge } = (await import('@/lib/services/polymarket-research.service')) as any
 
     // Pre-fetch order book signals for top-volume candidates (parallel)
     const obSignals = new Map<string, any>()
@@ -610,43 +615,50 @@ export async function GET() {
       })
     )
 
-    // Select top 10 candidates with category diversity for deeper analysis
-    const categorize = (q: string): string => {
-      const lower = q.toLowerCase()
-      if (lower.includes('bitcoin') || lower.includes('btc') || lower.includes('eth') || lower.includes('crypto') || lower.includes('token')) return 'crypto'
-      if (lower.includes('win') && (lower.includes('vs') || lower.includes('cup') || lower.includes('game') || lower.includes('match') || lower.includes('series'))) return 'sports'
-      if (lower.includes('trump') || lower.includes('biden') || lower.includes('congress') || lower.includes('senate') || lower.includes('election') || lower.includes('president') || lower.includes('governor')) return 'policy'
-      return 'general'
-    }
+    // DPS-prioritized candidate selection: high-DPS first (politics, esports, box-office,
+    // crypto-milestones), medium-DPS to fill, skip low-DPS. Per-category cap (8) ensures
+    // diversity so we don't analyze 30 politics markets and zero crypto-milestones.
+    const MAX_ANALYSIS = 30  // up from 10 — leverage Max sub for broader exploration
+    const CATEGORY_CAP = 8
 
-    // Build diverse candidate set: top fast-signal scores + ensure category coverage
-    const selectedForAnalysis: typeof topCandidates = []
+    type EnrichedCandidate = (typeof recommendations)[0] & { dpsTier: 'high' | 'medium' | 'low'; dpsCategory: string }
+    const enriched: EnrichedCandidate[] = recommendations.map(rec => {
+      const dps = scoreDomainPredictability(rec.market.question)
+      return Object.assign({}, rec, { dpsTier: dps.tier, dpsCategory: dps.category })
+    })
+
+    const highDPS = enriched.filter(r => r.dpsTier === 'high').sort((a, b) => fastSignalScore(b) - fastSignalScore(a))
+    const medDPS = enriched.filter(r => r.dpsTier === 'medium').sort((a, b) => fastSignalScore(b) - fastSignalScore(a))
+
+    const selectedForAnalysis: EnrichedCandidate[] = []
     const usedQuestions = new Set<string>()
-    const categoryCounts = { crypto: 0, sports: 0, policy: 0, general: 0 }
-    const MAX_ANALYSIS = 10
+    const categoryFill: Record<string, number> = {}
 
-    // First pass: add top candidates by fast signal score
-    for (const rec of topCandidates) {
+    // First pass: high-DPS, capped per category
+    for (const cand of highDPS) {
       if (selectedForAnalysis.length >= MAX_ANALYSIS) break
-      if (usedQuestions.has(rec.market.question)) continue
-      selectedForAnalysis.push(rec)
-      usedQuestions.add(rec.market.question)
-      const cat = categorize(rec.market.question)
-      categoryCounts[cat as keyof typeof categoryCounts] = (categoryCounts[cat as keyof typeof categoryCounts] || 0) + 1
+      if (usedQuestions.has(cand.market.question)) continue
+      const usedInCat = categoryFill[cand.dpsCategory] || 0
+      if (usedInCat >= CATEGORY_CAP) continue
+      selectedForAnalysis.push(cand)
+      usedQuestions.add(cand.market.question)
+      categoryFill[cand.dpsCategory] = usedInCat + 1
     }
 
-    // Second pass: ensure at least 1 from each underrepresented category
-    for (const cat of ['crypto', 'sports', 'policy'] as const) {
-      if (categoryCounts[cat] === 0 && selectedForAnalysis.length < MAX_ANALYSIS) {
-        const candidate = recommendations.find(r => 
-          categorize(r.market.question) === cat && !usedQuestions.has(r.market.question)
-        )
-        if (candidate) {
-          selectedForAnalysis.push(candidate)
-          usedQuestions.add(candidate.market.question)
-        }
-      }
+    // Second pass: medium-DPS to fill remaining slots (no per-category cap)
+    for (const cand of medDPS) {
+      if (selectedForAnalysis.length >= MAX_ANALYSIS) break
+      if (usedQuestions.has(cand.market.question)) continue
+      selectedForAnalysis.push(cand)
+      usedQuestions.add(cand.market.question)
     }
+
+    console.log(
+      `[Pipeline] Selected ${selectedForAnalysis.length} markets for LLM analysis ` +
+      `(high-DPS: ${selectedForAnalysis.filter(r => r.dpsTier === 'high').length}, ` +
+      `medium-DPS: ${selectedForAnalysis.filter(r => r.dpsTier === 'medium').length}). ` +
+      `Categories: ${JSON.stringify(categoryFill)}`
+    )
 
     // Build MarketForAnalysis array for LLM stage
     const marketsForAnalysis = selectedForAnalysis.map(rec => ({
@@ -663,11 +675,18 @@ export async function GET() {
     const evidenceMap = await gatherEvidenceBatch(marketsForAnalysis.map(m => m.question))
     console.log(`[Pipeline] Gathered evidence for ${evidenceMap.size} markets`)
 
-    // Stage 2: Run structured LLM analysis with pre-gathered evidence
-    const llmResults = await analyzeMarketsBatch(marketsForAnalysis, evidenceMap) as Map<string, import('@/lib/services/groq-market-analysis').LLMMarketAnalysis>
-
-    console.log(`[Pipeline] LLM results: ${llmResults.size} analyzed. Keys: ${Array.from(llmResults.keys()).map(k => k.substring(0, 40)).join(' | ')}`)
-    console.log(`[Pipeline] Selected questions: ${selectedForAnalysis.map(r => r.market.question.substring(0, 40)).join(' | ')}`)
+    // Stage 2: Run DPS-routed LLM analysis (Opus/Sonnet via Max, Groq fallback)
+    const edgeResults = await analyzeMarketsBatchWithEdgeEngine(marketsForAnalysis, evidenceMap, 6)
+    const llmResults = new Map<string, import('@/lib/services/groq-market-analysis').LLMMarketAnalysis>()
+    for (const [q, r] of Array.from(edgeResults.entries())) {
+      llmResults.set(q, r.analysis)
+    }
+    const edgeValues = Array.from(edgeResults.values())
+    const opusCount = edgeValues.filter(r => r.modelUsed === 'opus').length
+    const sonnetCount = edgeValues.filter(r => r.modelUsed === 'sonnet').length
+    const fallbackCount = edgeValues.filter(r => r.modelUsed === 'groq-fallback').length
+    const skippedCount = edgeValues.filter(r => r.modelUsed === 'skip').length
+    console.log(`[Pipeline] Edge engine — opus: ${opusCount}, sonnet: ${sonnetCount}, groq-fallback: ${fallbackCount}, skipped: ${skippedCount}`)
 
     // Apply LLM analysis results to each recommendation
     for (const rec of selectedForAnalysis) {
@@ -747,6 +766,15 @@ export async function GET() {
       const obSignal = obSignals.get(rec.market.id)
       if (obSignal) {
         rec.orderBookSignal = { imbalance: obSignal.imbalance, momentum: obSignal.momentum }
+      }
+
+      // Tag reasoning with model + DPS info, apply DPS conviction multiplier
+      const edgeR = edgeResults.get(rec.market.question)
+      if (edgeR) {
+        rec.reasoning = `[${edgeR.modelUsed.toUpperCase()} | DPS:${edgeR.dps.tier}/${edgeR.dps.category}] ${rec.reasoning}`
+        // DPS multiplier caps low-DPS conviction so noisy domains can't dominate
+        rec.convictionScore = Math.round(rec.convictionScore * edgeR.dpsMultiplierApplied)
+        rec.safetyScore = rec.convictionScore
       }
     }
 
