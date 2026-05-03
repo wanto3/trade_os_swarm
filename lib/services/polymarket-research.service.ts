@@ -1,15 +1,24 @@
 /**
- * Polymarket Research Service
+ * @deprecated Polymarket Research Service (Keyword-based pipeline)
  *
- * 5-layer conviction pipeline for scoring Polymarket opportunities:
+ * As of 2026-05-03, market analysis is handled by `edge-engine.ts`, which routes
+ * through Claude Opus 4.7 / Sonnet 4.6 / Groq Llama 70B based on Domain
+ * Predictability Score. Do NOT extend the keyword/sentiment logic in this file.
+ *
+ * Still-used exports (kept for backward compatibility):
+ *   - fetchOrderBookImbalance — order book signal (consumed by route.ts)
+ *   - analyzeTimeEdge — time tier analysis (consumed by route.ts)
+ *
+ * Everything else (passSanityFilter, runDeepResearch, assessConvictionScore,
+ * detectLongTailEdges, estimateTrueProbability, scoreMarketPipeline) is unused
+ * by the new pipeline and may be removed in a future cleanup.
+ *
+ * Original layer descriptions for historical reference:
  *   Layer 1: Sanity Filter
  *   Layer 2: Deep Research Engine (DuckDuckGo web search)
  *   Layer 3: Time / Closing-Soon Analysis
  *   Layer 4: Conviction Scorer
  *   Layer 5: Long-Tail Edge Detector
- *
- * Key principle: NO Math.random() — all probability estimates are derived
- * from real data and analysis.
  */
 
 import type {
