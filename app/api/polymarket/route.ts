@@ -640,51 +640,102 @@ export async function GET() {
     const MAX_ANALYSIS = 30
     const CATEGORY_CAP = 6
 
-    // DPS info stored in a side-Map keyed by question — keeps the original
-    // rec references intact so downstream mutations propagate to the
-    // recommendations array (and thus to the response opportunities filter).
+    // DPS info per market (cached in a side-Map keyed by question).
     const dpsInfo = new Map<string, { tier: 'high' | 'medium' | 'low'; category: string }>()
     for (const rec of recommendations) {
       const dps = scoreDomainPredictability(rec.market.question)
       dpsInfo.set(rec.market.question, { tier: dps.tier, category: dps.category })
     }
 
-    const highDPS = recommendations
-      .filter(r => dpsInfo.get(r.market.question)?.tier === 'high')
-      .sort((a, b) => fastSignalScore(b) - fastSignalScore(a))
-    const medDPS = recommendations
-      .filter(r => dpsInfo.get(r.market.question)?.tier === 'medium')
-      .sort((a, b) => fastSignalScore(b) - fastSignalScore(a))
+    // Time-tiered selection: user trades primarily on 24h-closing markets,
+    // so these get top priority regardless of DPS. Longer-term markets fall
+    // under stricter DPS gating to keep analysis budget focused.
+    //
+    //   Tier 1 (closing in ≤24h): up to T1_MAX, ALL DPS tiers welcome
+    //   Tier 2 (closing in ≤7d):  high or medium DPS only
+    //   Tier 3 (closing later):   high DPS only (skip live-sports, weather, etc.)
+    const T1_MAX = 15  // closing-soon dominates analysis budget
+    const T1_DAYS = 1
+    const T2_DAYS = 7
+
+    const sortByFast = (arr: TradeRecommendation[]) =>
+      arr.slice().sort((a, b) => fastSignalScore(b) - fastSignalScore(a))
+
+    // Bracket-event dedup: keep at most 1 rec per parent event slug (e.g.
+    // "elon-musk-of-tweets-april-28-may-5" splits into 30+ price-bracket
+    // sub-markets — we pick the highest fast-signal one and skip the rest).
+    // Falls back to the question itself when slug is missing.
+    const dedupeByEvent = (arr: TradeRecommendation[]): TradeRecommendation[] => {
+      const seen = new Set<string>()
+      const out: TradeRecommendation[] = []
+      for (const r of sortByFast(arr)) {
+        // The parent event slug is in the part of the URL before the trailing
+        // sub-market slug. Strip the last segment to get the event.
+        const m = r.market.url.match(/\/event\/([^/]+)/)
+        const key = m ? m[1] : r.market.question.split(/\d/)[0].trim()
+        if (seen.has(key)) continue
+        seen.add(key)
+        out.push(r)
+      }
+      return out
+    }
+
+    const t1 = dedupeByEvent(recommendations.filter(r => r.daysToClose <= T1_DAYS))
+    const t2 = dedupeByEvent(recommendations.filter(r => r.daysToClose > T1_DAYS && r.daysToClose <= T2_DAYS))
+    const t3 = dedupeByEvent(recommendations.filter(r => r.daysToClose > T2_DAYS))
 
     const selectedForAnalysis: TradeRecommendation[] = []
     const usedQuestions = new Set<string>()
     const categoryFill: Record<string, number> = {}
+    const tierFill = { t1: 0, t2: 0, t3: 0 }
 
-    // First pass: high-DPS, capped per category
-    for (const cand of highDPS) {
-      if (selectedForAnalysis.length >= MAX_ANALYSIS) break
+    // Pass 1: tier-1 (≤24h) — high+medium DPS, skip low-DPS noise (live-sports,
+    // crypto-price brackets, weather, celebrity). Even though the user trades
+    // 24h markets daily, we skip inherently-noisy domains where Opus would
+    // just say "skip" anyway. Saves analysis budget for real opportunities.
+    for (const cand of t1) {
+      if (selectedForAnalysis.length >= T1_MAX) break
       if (usedQuestions.has(cand.market.question)) continue
-      const cat = dpsInfo.get(cand.market.question)?.category ?? 'general'
-      const usedInCat = categoryFill[cat] || 0
-      if (usedInCat >= CATEGORY_CAP) continue
+      const dps = dpsInfo.get(cand.market.question)
+      if (!dps || dps.tier === 'low') continue
       selectedForAnalysis.push(cand)
       usedQuestions.add(cand.market.question)
-      categoryFill[cat] = usedInCat + 1
+      const cat = dps.category
+      categoryFill[cat] = (categoryFill[cat] || 0) + 1
+      tierFill.t1++
     }
 
-    // Second pass: medium-DPS to fill remaining slots (no per-category cap)
-    for (const cand of medDPS) {
+    // Pass 2: tier-2 (≤7d) — high or medium DPS, with per-category cap
+    for (const cand of t2) {
       if (selectedForAnalysis.length >= MAX_ANALYSIS) break
       if (usedQuestions.has(cand.market.question)) continue
+      const dps = dpsInfo.get(cand.market.question)
+      if (!dps || dps.tier === 'low') continue
+      const cat = dps.category
+      if ((categoryFill[cat] || 0) >= CATEGORY_CAP) continue
       selectedForAnalysis.push(cand)
       usedQuestions.add(cand.market.question)
+      categoryFill[cat] = (categoryFill[cat] || 0) + 1
+      tierFill.t2++
     }
 
-    const highCount = selectedForAnalysis.filter(r => dpsInfo.get(r.market.question)?.tier === 'high').length
-    const medCount = selectedForAnalysis.filter(r => dpsInfo.get(r.market.question)?.tier === 'medium').length
+    // Pass 3: tier-3 (longer-term) — high DPS only, fill any remaining slots
+    for (const cand of t3) {
+      if (selectedForAnalysis.length >= MAX_ANALYSIS) break
+      if (usedQuestions.has(cand.market.question)) continue
+      const dps = dpsInfo.get(cand.market.question)
+      if (!dps || dps.tier !== 'high') continue
+      const cat = dps.category
+      if ((categoryFill[cat] || 0) >= CATEGORY_CAP) continue
+      selectedForAnalysis.push(cand)
+      usedQuestions.add(cand.market.question)
+      categoryFill[cat] = (categoryFill[cat] || 0) + 1
+      tierFill.t3++
+    }
+
     console.log(
       `[Pipeline] Selected ${selectedForAnalysis.length} markets for LLM analysis ` +
-      `(high-DPS: ${highCount}, medium-DPS: ${medCount}). ` +
+      `(≤24h: ${tierFill.t1}, ≤7d: ${tierFill.t2}, longer: ${tierFill.t3}). ` +
       `Categories: ${JSON.stringify(categoryFill)}`
     )
 
