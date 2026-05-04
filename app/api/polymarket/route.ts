@@ -334,8 +334,9 @@ function scoreMarket(market: GammaMarket): TradeRecommendation[] {
     outcomes = ['Yes', 'No']
   }
 
-  // Conservative: minimum $1K liquidity for all markets
-  const liquidityMin = 1000
+  // Lower minimum liquidity to capture niche markets (esports, smaller news
+  // events, prop bets). The LLM analysis is the real quality gate.
+  const liquidityMin = 500
   if (market.liquidityNum < liquidityMin) return []
 
   // Widen price range to capture near-certain (0.999+) and near-impossible (0.001+) outcomes
@@ -363,8 +364,10 @@ function scoreMarket(market: GammaMarket): TradeRecommendation[] {
     if (evPct < evThreshold || evPct > 50) continue
 
     const safetyScore = calculateSafetyScore(market, estimatedProb, marketProb, isImminent || isClosingSoon)
-    // Conservative: minimum 40 safety score for all markets
-    const safetyMin = 40
+    // Lower safety floor so smaller-volume markets (esports, niche news)
+    // make it through to LLM analysis. The LLM is the real quality gate;
+    // safetyScore here is just structural (liquidity/spread/volume).
+    const safetyMin = 25
     if (safetyScore < safetyMin) continue
 
     // ── Conviction fields (Task 3: basic wiring; Task 4 adds async deep research) ──
@@ -634,11 +637,10 @@ export async function GET() {
     // DPS-prioritized candidate selection: high-DPS first (politics, esports, box-office,
     // crypto-milestones), medium-DPS to fill, skip low-DPS. Per-category cap (8) ensures
     // diversity so we don't analyze 30 politics markets and zero crypto-milestones.
-    // Batched screening can comfortably handle 30+ markets in one call.
-    // Bumping the ceiling so users see broader coverage. Per-category cap
-    // keeps diversity across politics/esports/box-office/crypto-milestone/etc.
-    const MAX_ANALYSIS = 30
-    const CATEGORY_CAP = 6
+    // Batched screening handles 40+ markets in one Opus call. Bigger pool +
+    // looser per-category cap = more diverse opportunities surfaced.
+    const MAX_ANALYSIS = 40
+    const CATEGORY_CAP = 8
 
     // DPS info per market (cached in a side-Map keyed by question).
     const dpsInfo = new Map<string, { tier: 'high' | 'medium' | 'low'; category: string }>()
@@ -647,15 +649,15 @@ export async function GET() {
       dpsInfo.set(rec.market.question, { tier: dps.tier, category: dps.category })
     }
 
-    // Time-tiered selection: user trades primarily on 24h-closing markets,
-    // so these get top priority regardless of DPS. Longer-term markets fall
-    // under stricter DPS gating to keep analysis budget focused.
+    // Time-tiered selection: user trades closing-soon markets daily, so the
+    // 2-day window gets top priority. Longer-term markets fall under stricter
+    // DPS gating to keep analysis budget focused.
     //
-    //   Tier 1 (closing in ≤24h): up to T1_MAX, ALL DPS tiers welcome
-    //   Tier 2 (closing in ≤7d):  high or medium DPS only
-    //   Tier 3 (closing later):   high DPS only (skip live-sports, weather, etc.)
-    const T1_MAX = 20  // closing-soon dominates analysis budget — user trades these daily
-    const T1_DAYS = 1
+    //   Tier 1 (closing in ≤48h): up to T1_MAX, high+medium DPS
+    //   Tier 2 (closing in ≤7d):  fill remaining, high+medium DPS, per-cat cap
+    //   Tier 3 (closing later):   high DPS only
+    const T1_MAX = 25  // 2-day window — more breathing room than 24h
+    const T1_DAYS = 2
     const T2_DAYS = 7
 
     const sortByFast = (arr: TradeRecommendation[]) =>
@@ -823,13 +825,17 @@ export async function GET() {
         : 1 - analysis.estimatedProbability
 
       // Side-aware EV: only the rec whose outcome MATCHES the LLM direction
-      // gets positive EV. The opposite-side rec sits at 0 (won't appear in
-      // opportunities). 'skip' = abstain → EV stays 0 on both sides.
+      // gets positive EV. The opposite-side rec sits at 0. 'skip' = abstain.
+      // Edge case: even matching direction can produce negative EV when the
+      // market over-prices the favorable side (e.g. LLM says NO is 99% likely
+      // but market prices NO at 99.7% — paying more than expected value).
+      // Floor at 0 so the display stays sane and bets aren't recommended.
       const matchesDirection =
         (analysis.direction === 'yes' && isYesSide) ||
         (analysis.direction === 'no' && !isYesSide)
       if (matchesDirection) {
-        rec.expectedValue = (rec.estimatedProbability - rec.odds) / (1 - rec.odds)
+        const rawEv = (rec.estimatedProbability - rec.odds) / (1 - rec.odds)
+        rec.expectedValue = Math.max(0, rawEv)
       } else {
         rec.expectedValue = 0
       }

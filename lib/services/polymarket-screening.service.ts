@@ -117,7 +117,7 @@ async function callGroqBatch(prompt: string, retries = 3): Promise<string> {
           model: 'llama-3.3-70b-versatile',
           messages: [{ role: 'user', content: prompt }],
           temperature: 0.1,
-          max_tokens: 4000, // big enough for 30 market assessments
+          max_tokens: 6000, // big enough for 40 market assessments
           // Note: NOT requesting json_object response format because we want
           // an array, not an object wrapper.
         }),
