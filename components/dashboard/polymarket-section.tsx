@@ -296,11 +296,10 @@ export function PolymarketSection() {
   // winners that compound at small per-bet returns are sustainable.
   const [sortKey, setSortKey] = useState<SortKey>('winProb')
   const [secondarySort, setSecondarySort] = useState<SortKey | null>(null)
-  // Default 'all' so the EV/day-sorted Fastest Profit ranking can surface
-  // the highest-compounding picks regardless of close date. Powell at
-  // 89% EV closing in 11d (8.1%/day) is currently the best compound pick.
-  // User can click 24h/3d/7d to focus on shorter-window subsets.
-  const [filterKey, setFilterKey] = useState<FilterKey>('all')
+  // Default '24h' — user's current strategy is testing with small capital
+  // ($4) on short-term closing-today picks. Long-term picks (Greenland,
+  // Powell, etc.) still accessible via the "All" / 7d / 14d filter buttons.
+  const [filterKey, setFilterKey] = useState<FilterKey>('24h')
   const [kellyMode, setKellyMode] = useState<KellyMode>('quarter')
   const [bankroll, setBankroll] = useState<number>(500)
   const [bankrollInput, setBankrollInput] = useState<string>('500')
