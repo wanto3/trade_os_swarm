@@ -1075,14 +1075,39 @@ async function runFullPipeline(): Promise<any> {
     //   1. Anything with positive EV (the standard bar) → in
     //   2. Anything closing in ≤24h that Opus analyzed → in (regardless of EV)
     //      — user trades these daily; even WATCH-ONLY analysis is valuable info
-    // The card UI shows conviction/label/EV so the user judges quality.
-    const allOpportunities = recommendations.filter(r => {
+    const filteredRecs = recommendations.filter(r => {
       if (r.expectedValue > 0) return true
       const isClosingSoon = r.daysToClose <= 1
       const wasAnalyzed = llmResults.has(r.market.question)
       if (isClosingSoon && wasAnalyzed) return true
       return false
     })
+
+    // Dedupe pass 1: both YES and NO recs of the SAME market collapse to the
+    // one with higher EV. Was showing every market twice in the opportunities
+    // list (once per outcome), which felt repetitive.
+    const byQuestion = new Map<string, TradeRecommendation>()
+    for (const r of filteredRecs) {
+      const existing = byQuestion.get(r.market.question)
+      if (!existing || r.expectedValue > existing.expectedValue) {
+        byQuestion.set(r.market.question, r)
+      }
+    }
+
+    // Dedupe pass 2: bracket variants of the same parent event collapse to
+    // the highest-EV single bracket. E.g. five "Will BTC be above $X on May 5?"
+    // brackets sharing /event/btc-price-may-5 should surface as ONE pick.
+    const byEvent = new Map<string, TradeRecommendation>()
+    for (const r of Array.from(byQuestion.values())) {
+      // Extract parent event slug from URL: /event/{parent}/{market} or /event/{slug}
+      const m = r.market.url.match(/\/event\/([^/]+)/)
+      const eventKey = m ? m[1] : r.market.question
+      const existing = byEvent.get(eventKey)
+      if (!existing || r.expectedValue > existing.expectedValue) {
+        byEvent.set(eventKey, r)
+      }
+    }
+    const allOpportunities = Array.from(byEvent.values())
 
     // Hot Right Now: ALL markets closing within 3 days, sorted by volume24hr
     // These are the most active trading opportunities RIGHT NOW — show everything regardless of conviction
