@@ -606,13 +606,13 @@ export async function GET() {
       .sort((a, b) => (b.market.volumeNum - a.market.volumeNum))
       .slice(0, 10)
 
-    // ── DPS-Routed LLM Analysis (Opus 4.7 / Sonnet 4.6 via Max sub, Groq fallback) ──
-    // High-DPS markets (politics, esports, box-office, crypto-milestones) → Opus
-    // Medium-DPS → Sonnet 4.6
-    // Low-DPS (live sports, weather, crypto-price) → skip
-    // Rate-limit fallback → Groq Llama 3.3 70B
-    const { analyzeMarketsBatchWithEdgeEngine } = await import('@/lib/services/edge-engine')
-    const { scoreDomainPredictability } = await import('@/lib/services/dps.service')
+    // ── Phase 1: Batched one-shot screening (all markets in ONE Groq call) ──
+    // This is ~10s for 20 markets vs ~60s for sequential per-market calls.
+    // Phase 2 (per-market deep-dive with Opus) is opt-in via a separate
+    // endpoint and runs only on user click. DPS classification + skip
+    // for low-DPS domains still applies.
+    const { screenMarketsBatch, toScreeningInputs } = await import('@/lib/services/polymarket-screening.service')
+    const { scoreDomainPredictability, recommendModel } = await import('@/lib/services/dps.service')
     const polymarketResearchModule = await import('@/lib/services/polymarket-research.service')
     const fetchOrderBookImbalance = (polymarketResearchModule as Record<string, unknown>).fetchOrderBookImbalance as ((id: string) => Promise<{ imbalance: number; momentum: 'up' | 'down' | 'neutral' } | null>) | undefined
     const { analyzeTimeEdge } = polymarketResearchModule
@@ -634,11 +634,11 @@ export async function GET() {
     // DPS-prioritized candidate selection: high-DPS first (politics, esports, box-office,
     // crypto-milestones), medium-DPS to fill, skip low-DPS. Per-category cap (8) ensures
     // diversity so we don't analyze 30 politics markets and zero crypto-milestones.
-    // Groq-default path: each call is ~5s + rate-limit retries. With
-    // concurrency=4 in the batch wrapper, 20 markets ≈ 25-40s wall time.
-    // Per-category cap 5 keeps coverage diverse across politics/esports/etc.
-    const MAX_ANALYSIS = 20
-    const CATEGORY_CAP = 5
+    // Batched screening can comfortably handle 30+ markets in one call.
+    // Bumping the ceiling so users see broader coverage. Per-category cap
+    // keeps diversity across politics/esports/box-office/crypto-milestone/etc.
+    const MAX_ANALYSIS = 30
+    const CATEGORY_CAP = 6
 
     // DPS info stored in a side-Map keyed by question — keeps the original
     // rec references intact so downstream mutations propagate to the
@@ -703,20 +703,36 @@ export async function GET() {
     const evidenceMap = await gatherEvidenceBatch(marketsForAnalysis.map(m => m.question))
     console.log(`[Pipeline] Gathered evidence for ${evidenceMap.size} markets`)
 
-    // Stage 2: Run DPS-routed LLM analysis (Opus/Sonnet via Max, Groq fallback)
-    // Concurrency 4 with Groq path: each call ~5s + occasional 429 retry.
-    // 4 parallel keeps total wall time at ~25-40s for 20 markets.
-    const edgeResults = await analyzeMarketsBatchWithEdgeEngine(marketsForAnalysis, evidenceMap, 4)
+    // Stage 2: BATCHED screening — one Groq call analyzes all selected markets.
+    // The model sees them side-by-side and can comparison-rank, returning a
+    // JSON array of per-market assessments. ~5-10s vs ~25-40s sequential.
+    const marketIds = selectedForAnalysis.map(rec => rec.market.id)
+    const screeningInputs = toScreeningInputs(marketsForAnalysis, marketIds, evidenceMap)
+    const screeningResults = await screenMarketsBatch(screeningInputs)
+
+    // Build llmResults keyed by question (downstream code expects this shape).
+    // Map marketId → analysis, then question → analysis via selectedForAnalysis.
     const llmResults = new Map<string, import('@/lib/services/groq-market-analysis').LLMMarketAnalysis>()
-    for (const [q, r] of Array.from(edgeResults.entries())) {
-      llmResults.set(q, r.analysis)
+    for (const rec of selectedForAnalysis) {
+      const a = screeningResults.get(rec.market.id)
+      if (a) llmResults.set(rec.market.question, a)
     }
-    const edgeValues = Array.from(edgeResults.values())
-    const opusCount = edgeValues.filter(r => r.modelUsed === 'opus').length
-    const sonnetCount = edgeValues.filter(r => r.modelUsed === 'sonnet').length
-    const fallbackCount = edgeValues.filter(r => r.modelUsed === 'groq-fallback').length
-    const skippedCount = edgeValues.filter(r => r.modelUsed === 'skip').length
-    console.log(`[Pipeline] Edge engine — opus: ${opusCount}, sonnet: ${sonnetCount}, groq-fallback: ${fallbackCount}, skipped: ${skippedCount}`)
+    // Build a synthetic edgeResults so downstream loop (DPS tagging) still works.
+    const edgeResults = new Map<string, { analysis: import('@/lib/services/groq-market-analysis').LLMMarketAnalysis; modelUsed: 'screening'; dps: ReturnType<typeof scoreDomainPredictability>; dpsMultiplierApplied: number }>()
+    for (const rec of selectedForAnalysis) {
+      const a = llmResults.get(rec.market.question)
+      if (!a) continue
+      const dps = scoreDomainPredictability(rec.market.question)
+      const mult = dps.tier === 'high' ? 1.0 : dps.tier === 'medium' ? 0.85 : 0.5
+      edgeResults.set(rec.market.question, { analysis: a, modelUsed: 'screening', dps, dpsMultiplierApplied: mult })
+    }
+    // Apply DPS multiplier to confidence (cap medium-DPS high-conf to medium)
+    for (const r of Array.from(edgeResults.values())) {
+      if (r.dpsMultiplierApplied < 1.0 && r.analysis.confidence === 'high') {
+        r.analysis.confidence = 'medium'
+      }
+    }
+    console.log(`[Pipeline] Batch screening returned ${llmResults.size}/${selectedForAnalysis.length} assessments`)
 
     // Apply LLM analysis to BOTH sides (YES and NO recs) of every analyzed
     // market. The selection step dedups by question so only one rec per market
