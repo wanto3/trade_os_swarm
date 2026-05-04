@@ -796,10 +796,13 @@ export async function GET() {
       liquidity: rec.market.liquidityNum,
     }))
 
-    // Stage 1: Gather evidence for all selected markets in parallel
-    const { gatherEvidenceBatch } = await import('@/lib/services/category-research.service')
-    const evidenceMap = await gatherEvidenceBatch(marketsForAnalysis.map(m => m.question))
-    console.log(`[Pipeline] Gathered evidence for ${evidenceMap.size} markets`)
+    // Evidence gathering (Google News + DDG per market) was a leftover from
+    // the older Groq Llama path — Llama needed concrete evidence in the prompt
+    // to reason well. Opus 4.7 reasons effectively from training-data knowledge
+    // alone, and the per-market evidence fetch was costing 5-10s of wall time
+    // for marginal benefit. Skip it. (To re-enable: import gatherEvidenceBatch
+    // and pass evidenceMap to toScreeningInputs below.)
+    const evidenceMap = new Map<string, import('@/lib/services/category-research.service').CategoryEvidence>()
 
     // Stage 2: BATCHED screening — ONE LLM call analyzes all selected markets.
     // Default: Claude Opus 4.7 via `claude -p` subprocess on Max sub.
@@ -903,14 +906,14 @@ export async function GET() {
       const evidenceBonus = Math.min(5, (analysis.evidenceCount || 0) * 2)
 
       rec.convictionScore = Math.min(100, baseScore + edgeBonus + evidenceBonus)
-      // Only label "high" if LLM confirmed shouldBet=true + confidence=high
-      if (analysis.shouldBet && analysis.confidence === 'high' && rec.convictionScore >= 80) {
-        rec.convictionLabel = 'high'
-      } else if (analysis.shouldBet && analysis.confidence === 'medium' && rec.convictionScore >= 60) {
-        rec.convictionLabel = 'consider'
-      } else {
-        rec.convictionLabel = 'risky'
-      }
+      // Label matches conviction SCORE band so the card color reflects the
+      // displayed number. shouldBet=false caps the band at "consider" so a
+      // skip recommendation can't show as a green-bg "high" card.
+      const score = rec.convictionScore
+      if (score >= 90 && analysis.shouldBet) rec.convictionLabel = 'no-brainer'
+      else if (score >= 75 && analysis.shouldBet) rec.convictionLabel = 'high'
+      else if (score >= 55) rec.convictionLabel = 'consider'
+      else rec.convictionLabel = 'risky'
       rec.safetyScore = rec.convictionScore
 
       // Update upside string with real data
@@ -921,9 +924,10 @@ export async function GET() {
       const evidenceTag = analysis.evidenceCount > 0 ? ` [${analysis.evidenceCount} sources]` : ''
       rec.reasoning = `[${confidenceBadge}${evidenceTag}] ${analysis.reasoning}`
 
-      // If LLM says don't bet, mark it clearly
+      // If LLM says don't bet, tag the reasoning as WATCH-ONLY but keep the
+      // conviction label in step with the score (no longer auto-collapsing
+      // to 'risky' regardless of how strong the analysis was).
       if (!analysis.shouldBet) {
-        rec.convictionLabel = 'risky'
         rec.reasoning = `[⚠️ WATCH ONLY${evidenceTag}] ${analysis.reasoning}`
       }
 

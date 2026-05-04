@@ -277,7 +277,7 @@ const MODEL_LABEL: Record<ScreeningModel, string> = {
  *
  * Set PARALLEL_BATCHES env var to override the split count (default 2).
  */
-const PARALLEL_BATCHES = Math.max(1, parseInt(process.env.PARALLEL_BATCHES || '2', 10))
+const PARALLEL_BATCHES = Math.max(1, parseInt(process.env.PARALLEL_BATCHES || '3', 10))
 
 export async function screenMarketsBatch(
   markets: ScreeningInput[],
