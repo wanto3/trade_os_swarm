@@ -549,8 +549,11 @@ export async function GET() {
 
     // Fetch by volume, volume24hr, AND by endDate (for 24hr coverage)
     const [volumeRes, volume24Res, endDateRes] = await Promise.all([
-      fetch('https://gamma-api.polymarket.com/markets?closed=false&accepting_orders=true&order=volumeNum&ascending=false&limit=500', { headers: { 'Accept': 'application/json' }, cache: 'no-store' }),
-      fetch('https://gamma-api.polymarket.com/markets?closed=false&accepting_orders=true&order=volume24hr&ascending=false&limit=500', { headers: { 'Accept': 'application/json' }, cache: 'no-store' }),
+      // Top-1000 by various sorts — earlier 500 was missing lower-volume but
+      // legitimate categories (esports LCK matches, niche events, smaller
+      // political races). 1000 captures the long tail.
+      fetch('https://gamma-api.polymarket.com/markets?closed=false&accepting_orders=true&order=volumeNum&ascending=false&limit=1000', { headers: { 'Accept': 'application/json' }, cache: 'no-store' }),
+      fetch('https://gamma-api.polymarket.com/markets?closed=false&accepting_orders=true&order=volume24hr&ascending=false&limit=1000', { headers: { 'Accept': 'application/json' }, cache: 'no-store' }),
       fetch('https://gamma-api.polymarket.com/markets?closed=false&accepting_orders=true&order=endDate&ascending=true&limit=500', { headers: { 'Accept': 'application/json' }, cache: 'no-store' }),
     ])
 
@@ -709,49 +712,66 @@ export async function GET() {
     const categoryFill: Record<string, number> = {}
     const tierFill = { t1: 0, t2: 0, t3: 0 }
 
-    // Pass 1: tier-1 (≤24h) — high+medium DPS, skip low-DPS noise (live-sports,
-    // crypto-price brackets, weather, celebrity). Even though the user trades
-    // 24h markets daily, we skip inherently-noisy domains where Opus would
-    // just say "skip" anyway. Saves analysis budget for real opportunities.
-    for (const cand of t1) {
-      if (selectedForAnalysis.length >= T1_MAX) break
-      if (usedQuestions.has(cand.market.question)) continue
-      const dps = dpsInfo.get(cand.market.question)
-      if (!dps || dps.tier === 'low') continue
-      selectedForAnalysis.push(cand)
-      usedQuestions.add(cand.market.question)
-      const cat = dps.category
-      categoryFill[cat] = (categoryFill[cat] || 0) + 1
-      tierFill.t1++
+    // Helper: round-robin pick across DPS categories within a tier so we don't
+    // end up with 20 'general' picks and 0 esports. Trader insight: lower-
+    // volume markets often have more edge because they're less efficient.
+    type Tier = 't1' | 't2' | 't3'
+    const roundRobinPick = (
+      candidates: TradeRecommendation[],
+      tierLabel: Tier,
+      remainingBudget: () => number,
+      acceptDpsTier: (t: 'high' | 'medium' | 'low') => boolean
+    ) => {
+      // Group by DPS category, each group still in fast-signal order
+      const byCategory = new Map<string, TradeRecommendation[]>()
+      for (const rec of candidates) {
+        if (usedQuestions.has(rec.market.question)) continue
+        const dps = dpsInfo.get(rec.market.question)
+        if (!dps || !acceptDpsTier(dps.tier)) continue
+        const cat = dps.category
+        if (!byCategory.has(cat)) byCategory.set(cat, [])
+        byCategory.get(cat)!.push(rec)
+      }
+      // Sort categories by their best fast-signal candidate (so we hit busier
+      // categories first within the round but every category gets a turn)
+      const cats = Array.from(byCategory.keys())
+      // Round-robin: pull one from each category, then rotate
+      while (remainingBudget() > 0) {
+        let added = false
+        for (const cat of cats) {
+          if (remainingBudget() <= 0) break
+          if ((categoryFill[cat] || 0) >= CATEGORY_CAP) continue
+          const arr = byCategory.get(cat)!
+          let cand: TradeRecommendation | undefined
+          while (arr.length > 0) {
+            const next = arr.shift()!
+            if (!usedQuestions.has(next.market.question)) {
+              cand = next
+              break
+            }
+          }
+          if (!cand) continue
+          selectedForAnalysis.push(cand)
+          usedQuestions.add(cand.market.question)
+          categoryFill[cat] = (categoryFill[cat] || 0) + 1
+          tierFill[tierLabel]++
+          added = true
+        }
+        if (!added) break
+      }
     }
 
-    // Pass 2: tier-2 (≤7d) — high or medium DPS, with per-category cap
-    for (const cand of t2) {
-      if (selectedForAnalysis.length >= MAX_ANALYSIS) break
-      if (usedQuestions.has(cand.market.question)) continue
-      const dps = dpsInfo.get(cand.market.question)
-      if (!dps || dps.tier === 'low') continue
-      const cat = dps.category
-      if ((categoryFill[cat] || 0) >= CATEGORY_CAP) continue
-      selectedForAnalysis.push(cand)
-      usedQuestions.add(cand.market.question)
-      categoryFill[cat] = (categoryFill[cat] || 0) + 1
-      tierFill.t2++
-    }
+    // Pass 1: tier-1 (≤2d) — high+medium DPS, skip low-DPS noise.
+    roundRobinPick(t1, 't1', () => Math.max(0, T1_MAX - selectedForAnalysis.length),
+      (tier) => tier !== 'low')
 
-    // Pass 3: tier-3 (longer-term) — high DPS only, fill any remaining slots
-    for (const cand of t3) {
-      if (selectedForAnalysis.length >= MAX_ANALYSIS) break
-      if (usedQuestions.has(cand.market.question)) continue
-      const dps = dpsInfo.get(cand.market.question)
-      if (!dps || dps.tier !== 'high') continue
-      const cat = dps.category
-      if ((categoryFill[cat] || 0) >= CATEGORY_CAP) continue
-      selectedForAnalysis.push(cand)
-      usedQuestions.add(cand.market.question)
-      categoryFill[cat] = (categoryFill[cat] || 0) + 1
-      tierFill.t3++
-    }
+    // Pass 2: tier-2 (≤7d) — high or medium DPS
+    roundRobinPick(t2, 't2', () => Math.max(0, MAX_ANALYSIS - selectedForAnalysis.length),
+      (tier) => tier !== 'low')
+
+    // Pass 3: tier-3 (longer-term) — high DPS only
+    roundRobinPick(t3, 't3', () => Math.max(0, MAX_ANALYSIS - selectedForAnalysis.length),
+      (tier) => tier === 'high')
 
     console.log(
       `[Pipeline] Selected ${selectedForAnalysis.length} markets for LLM analysis ` +
