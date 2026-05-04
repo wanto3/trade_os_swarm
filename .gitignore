@@ -33,3 +33,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 .gstack/
+
+# runtime caches (regenerated on the fly — shouldn't be tracked)
+data/quick-analysis-cache.json

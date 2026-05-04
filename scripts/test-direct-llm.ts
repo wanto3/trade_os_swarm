@@ -2,7 +2,11 @@
 /**
  * Quick direct test of the LLM on a geopolitical market with manual evidence
  */
-const GROQ_API_KEY = 'REDACTED'
+const GROQ_API_KEY = process.env.GROQ_API_KEY ?? ''
+if (!GROQ_API_KEY) {
+  console.error('GROQ_API_KEY env var is required. Set it in .env.local or via the shell.')
+  process.exit(1)
+}
 
 async function main() {
   const models = [
