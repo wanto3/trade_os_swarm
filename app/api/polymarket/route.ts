@@ -1081,12 +1081,18 @@ async function runFullPipeline(): Promise<any> {
       return b.expectedValue - a.expectedValue
     })
 
-    // Opportunities filter: ONLY real edges (EV > 0). Was previously letting
-    // closing-soon analyzed picks through with EV=0 to give the user 'something
-    // to look at', but that polluted the main view with WATCH-ONLY entries.
-    // The closing-soon analyzed picks remain available in `closingTodayAnalyzed`
-    // for a separate "Watch list" display.
-    const filteredRecs = recommendations.filter(r => r.expectedValue > 0)
+    // Opportunities filter:
+    //   1. Real edges (EV > 0) → always in. These are the "tradable" picks.
+    //   2. Closing-in-24h analyzed markets → in even with EV=0, so the user
+    //      always has visibility into today's pool. They show as RISKY/yellow
+    //      and sort to the bottom by EV — won't crowd out real edges, but
+    //      give the user something to click into when they filter by 24h.
+    const filteredRecs = recommendations.filter(r => {
+      if (r.expectedValue > 0) return true
+      const isClosingSoon = r.daysToClose <= 1
+      const wasAnalyzed = llmResults.has(r.market.question)
+      return isClosingSoon && wasAnalyzed
+    })
 
     // Dedupe pass 1: both YES and NO recs of the SAME market collapse to the
     // one with higher EV. Was showing every market twice in the opportunities
