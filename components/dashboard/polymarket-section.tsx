@@ -289,11 +289,10 @@ export function PolymarketSection() {
   const [lastUpdated, setLastUpdated] = useState<number | null>(null)
   const [sortKey, setSortKey] = useState<SortKey>('fastestProfit')
   const [secondarySort, setSecondarySort] = useState<SortKey | null>(null)
-  // Default to 'all' so the user sees every opportunity on first load,
-  // not just ≤14d. Time filters are still one click away if they want to
-  // narrow down. Was 14days which hid most longer-term high-EV picks
-  // (Greenland, US-Iran, Trump out, etc.) by default.
-  const [filterKey, setFilterKey] = useState<FilterKey>('all')
+  // Default to '24h' — user's stated strategy is high-frequency closing-today
+  // bets to compound a small bankroll. Time filter buttons let them widen
+  // to 7d/14d/All when they want longer-term high-EV picks (Powell, Greenland).
+  const [filterKey, setFilterKey] = useState<FilterKey>('24h')
   const [kellyMode, setKellyMode] = useState<KellyMode>('quarter')
   const [bankroll, setBankroll] = useState<number>(500)
   const [bankrollInput, setBankrollInput] = useState<string>('500')
