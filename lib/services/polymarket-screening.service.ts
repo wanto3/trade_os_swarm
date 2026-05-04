@@ -266,18 +266,19 @@ const MODEL_LABEL: Record<ScreeningModel, string> = {
 }
 
 /**
- * Screen all candidate markets in ONE LLM batch call.
+ * Screen all candidate markets in PARALLEL batches via the chosen LLM.
  * Returns a Map keyed by marketId → LLMMarketAnalysis (compatible with
  * the existing per-market pipeline so route.ts logic stays the same).
  *
- * The model arg picks which engine handles the batch:
- * - 'opus':   Claude Opus 4.7 via `claude -p` subprocess (Max sub) — strongest
- *             reasoning, ~15-30s for 30 markets in one call. ONE subprocess
- *             so no parallel rate-limit problems.
- * - 'sonnet': Claude Sonnet 4.6 via `claude -p` — faster than Opus, very smart
- * - 'groq':   Groq Llama 3.3 70B via HTTP API — fastest (~5-10s) but lowest
- *             quality. Used as automatic fallback if Claude Code call fails.
+ * For 25 markets, splits into 2 parallel sub-batches of ~12 each. Wall
+ * time roughly halves vs a single 25-market call because output token
+ * generation is the bottleneck (Opus ~50 tok/sec for 6K output = 120s
+ * for one big call vs ~60s when split).
+ *
+ * Set PARALLEL_BATCHES env var to override the split count (default 2).
  */
+const PARALLEL_BATCHES = Math.max(1, parseInt(process.env.PARALLEL_BATCHES || '2', 10))
+
 export async function screenMarketsBatch(
   markets: ScreeningInput[],
   model: ScreeningModel = 'opus'
@@ -285,7 +286,40 @@ export async function screenMarketsBatch(
   const results = new Map<string, LLMMarketAnalysis>()
   if (markets.length === 0) return results
 
+  // Split into N sub-batches and run in parallel. If we have ≤8 markets,
+  // a single batch is faster than the parallel overhead.
+  const subBatchCount = markets.length <= 8 ? 1 : PARALLEL_BATCHES
+  if (subBatchCount > 1) {
+    const subSize = Math.ceil(markets.length / subBatchCount)
+    const subBatches: ScreeningInput[][] = []
+    for (let i = 0; i < markets.length; i += subSize) {
+      subBatches.push(markets.slice(i, i + subSize))
+    }
+    console.log(`[Screening] Splitting ${markets.length} markets into ${subBatches.length} parallel ${MODEL_LABEL[model]} batches of ~${subSize} each`)
+    const subResults = await Promise.all(
+      subBatches.map((sub) => screenSingleBatch(sub, model))
+    )
+    for (const sub of subResults) {
+      for (const [k, v] of Array.from(sub.entries())) results.set(k, v)
+    }
+    return results
+  }
+
   console.log(`[Screening] Batch-analyzing ${markets.length} markets in ONE ${MODEL_LABEL[model]} call`)
+  const single = await screenSingleBatch(markets, model)
+  for (const [k, v] of Array.from(single.entries())) results.set(k, v)
+  return results
+}
+
+/**
+ * Internal: one LLM call analyzing one sub-batch of markets.
+ */
+async function screenSingleBatch(
+  markets: ScreeningInput[],
+  model: ScreeningModel
+): Promise<Map<string, LLMMarketAnalysis>> {
+  const results = new Map<string, LLMMarketAnalysis>()
+  if (markets.length === 0) return results
   const prompt = buildBatchScreeningPrompt(markets)
 
   // Build fallback chain so we never end up with 0 results from a transient

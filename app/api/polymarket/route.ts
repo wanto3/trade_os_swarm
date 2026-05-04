@@ -703,9 +703,16 @@ export async function GET() {
       return out
     }
 
-    const t1 = dedupeByEvent(recommendations.filter(r => r.daysToClose <= T1_DAYS))
-    const t2 = dedupeByEvent(recommendations.filter(r => r.daysToClose > T1_DAYS && r.daysToClose <= T2_DAYS))
-    const t3 = dedupeByEvent(recommendations.filter(r => r.daysToClose > T2_DAYS))
+    // Price-range filter: focus the analysis budget on the "meaty middle"
+    // (10-90% market price). Near-certain markets at 95%+ or 5%- have no
+    // tradeable upside — even if Opus correctly says "NO is right" on a
+    // market priced at 95% NO, you only get 5% return. The middle is where
+    // mispricing creates real EV. Trader insight from user.
+    const inMeatyMiddle = (r: TradeRecommendation) => r.odds >= 0.10 && r.odds <= 0.90
+
+    const t1 = dedupeByEvent(recommendations.filter(r => r.daysToClose <= T1_DAYS && inMeatyMiddle(r)))
+    const t2 = dedupeByEvent(recommendations.filter(r => r.daysToClose > T1_DAYS && r.daysToClose <= T2_DAYS && inMeatyMiddle(r)))
+    const t3 = dedupeByEvent(recommendations.filter(r => r.daysToClose > T2_DAYS && inMeatyMiddle(r)))
 
     const selectedForAnalysis: TradeRecommendation[] = []
     const usedQuestions = new Set<string>()
