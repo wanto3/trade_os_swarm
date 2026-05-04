@@ -497,40 +497,90 @@ function scoreMarket(market: GammaMarket): TradeRecommendation[] {
 // ── Global response cache to prevent concurrent LLM pipeline floods ──────────
 // The dashboard auto-refreshes frequently, but LLM analysis takes 30-60s.
 // Without this, each refresh spawns a new LLM pipeline, flooding the rate limit.
-let cachedResponse: { data: any; expiry: number } | null = null
-// Concurrent-request dedup: when a pipeline is running, store the in-flight
-// promise so any subsequent request awaits the SAME pipeline rather than
-// kicking off a parallel one (which would double LLM calls and trigger
-// rate limits on Groq/Anthropic).
+// Stale-while-revalidate cache. `freshExpiry` is the green-zone (5min): data
+// returned without question. After that we enter the stale zone — return the
+// last-known data immediately AND kick off a background refresh so the next
+// request gets fresh data. Dashboard never waits more than the initial cold-
+// load (which the instrumentation pre-warm already covered on server boot).
+let cachedResponse: { data: any; freshExpiry: number; staleExpiry: number } | null = null
 let inflightPipeline: Promise<any> | null = null
-const RESPONSE_CACHE_TTL = 5 * 60_000  // 5 minutes — longer cache reduces LLM load
+const FRESH_TTL = 5 * 60_000   // 5 min — return without revalidation
+const STALE_TTL = 60 * 60_000  // 1 hour — return stale + background refresh
 
 export async function GET() {
-  // If we have a fresh cached response, return it immediately
-  if (cachedResponse && cachedResponse.expiry > Date.now()) {
+  const now = Date.now()
+
+  // FRESH: return immediately, no work
+  if (cachedResponse && now < cachedResponse.freshExpiry) {
     return Response.json(cachedResponse.data)
   }
 
-  // If a pipeline is already in-flight, AWAIT IT — don't kick off a
-  // second parallel LLM call. Subsequent dashboard refreshes during the
-  // initial load all share the same pipeline.
+  // STALE: return last-known data immediately, kick off background refresh
+  if (cachedResponse && now < cachedResponse.staleExpiry) {
+    if (!inflightPipeline) {
+      // Background refresh — fire and forget. Errors logged but don't propagate.
+      runFullPipeline()
+        .then((data) => {
+          cachedResponse = {
+            data,
+            freshExpiry: Date.now() + FRESH_TTL,
+            staleExpiry: Date.now() + STALE_TTL,
+          }
+          inflightPipeline = null
+        })
+        .catch((e) => {
+          console.warn('[Pipeline] Background refresh failed (stale data still served):', e instanceof Error ? e.message : e)
+          inflightPipeline = null
+        })
+      inflightPipeline = Promise.resolve()
+    }
+    return Response.json({ ...cachedResponse.data, cacheStatus: 'stale-revalidating' })
+  }
+
+  // COLD: no cache at all — must wait. If a pipeline is already running,
+  // share that promise rather than starting a parallel one.
   if (inflightPipeline) {
     try {
       const data = await inflightPipeline
       return Response.json(data)
     } catch {
-      // fall through and start a new pipeline if the in-flight one errored
+      // fall through
     }
   }
 
-  // Start a new pipeline and store the promise so concurrent requests share it.
-  let pipelineResolve: (data: any) => void = () => {}
-  let pipelineReject: (err: unknown) => void = () => {}
-  inflightPipeline = new Promise((resolve, reject) => {
-    pipelineResolve = resolve
-    pipelineReject = reject
-  })
+  inflightPipeline = runFullPipeline()
+    .then((data) => {
+      cachedResponse = {
+        data,
+        freshExpiry: Date.now() + FRESH_TTL,
+        staleExpiry: Date.now() + STALE_TTL,
+      }
+      inflightPipeline = null
+      return data
+    })
+    .catch((e) => {
+      inflightPipeline = null
+      throw e
+    })
 
+  try {
+    const data = await inflightPipeline
+    return Response.json(data)
+  } catch (error) {
+    console.error('Polymarket API error:', error)
+    return NextResponse.json(
+      { success: false, error: 'Failed to fetch Polymarket data', opportunities: [], hotNowOpportunities: [], todayOpportunities: [], nearCertainOpportunities: [], closingSoonOpportunities: [], longTailOpportunities: [], hotMarkets: [], stats: null },
+      { status: 500 }
+    )
+  }
+}
+
+/**
+ * Full Polymarket pipeline — fetch markets, score, run LLM screening, build
+ * response. Refactored out of GET so SWR can call it as a fire-and-forget
+ * background task.
+ */
+async function runFullPipeline(): Promise<any> {
   try {
 
     // Lazy resolution check: settle any positions that have closed since last visit.
@@ -1130,20 +1180,10 @@ export async function GET() {
       }
     }
 
-    // Cache the response and resolve the in-flight promise so any concurrent
-    // requests waiting on this pipeline get the same data.
-    cachedResponse = { data: responseData, expiry: Date.now() + RESPONSE_CACHE_TTL }
-    pipelineResolve(responseData)
-    inflightPipeline = null
-
-    return Response.json(responseData)
+    // Return the response data — the SWR layer in GET wraps caching.
+    return responseData
   } catch (error) {
-    pipelineReject(error)
-    inflightPipeline = null
-    console.error('Polymarket API error:', error)
-    return NextResponse.json(
-      { success: false, error: 'Failed to fetch Polymarket data', opportunities: [], hotNowOpportunities: [], todayOpportunities: [], nearCertainOpportunities: [], closingSoonOpportunities: [], longTailOpportunities: [], hotMarkets: [], stats: null },
-      { status: 500 }
-    )
+    console.error('[Pipeline] error:', error)
+    throw error
   }
 }
