@@ -1094,11 +1094,16 @@ async function runFullPipeline(): Promise<any> {
 
     // Opportunities filter:
     //   1. Positive-EV picks (real edges) → always in
-    //   2. Closing-in-24h analyzed picks → in even at EV=0, so user always
-    //      has visibility into today's analyzed pool. They sort to the bottom
-    //      by EV/day but at least appear when filtering by 24h.
+    //   2. High-win-probability picks (Opus confirms market with high conf,
+    //      estimatedProbability ≥ 0.80) → IN even at EV=0. User strategy is
+    //      win-rate over EV: high-prob picks compound bankroll reliably even
+    //      when the price reflects the probability and EV is small. A 90%
+    //      pick that pays 11% wins 90% of the time → sustainable growth.
+    //   3. Closing-in-24h analyzed picks → in for visibility into today's pool
     const filteredRecs = recommendations.filter(r => {
       if (r.expectedValue > 0) return true
+      const isHighWinProb = r.estimatedProbability >= 0.80 && llmResults.has(r.market.question)
+      if (isHighWinProb) return true
       const isClosingSoon = r.daysToClose <= 1
       const wasAnalyzed = llmResults.has(r.market.question)
       return isClosingSoon && wasAnalyzed

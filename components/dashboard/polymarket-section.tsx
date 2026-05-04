@@ -151,7 +151,7 @@ interface Portfolio {
 
 // ── Sort Types ────────────────────────────────────────────────────────────────
 
-type SortKey = 'fastestProfit' | 'safety' | 'ev' | 'closing' | 'confidence'
+type SortKey = 'fastestProfit' | 'winProb' | 'safety' | 'ev' | 'closing' | 'confidence'
 type FilterKey = 'all' | 'high' | 'medium' | 'low' | '24h' | 'today' | '3days' | '7days' | '14days' | '30days' | 'anyEdge'
 type KellyMode = 'quarter' | 'half' | 'full'
 type TabKey = 'opportunities' | 'paper-trades' | 'performance' | 'settings'
@@ -291,7 +291,10 @@ export function PolymarketSection() {
   const [loading, setLoading] = useState(true)
   const [walletData, setWalletData] = useState<{ positions: number; trades: number; balanceUSD: number; gnosisUSDC: number; polygonUSDT: number; totalUSD: number } | null>(null)
   const [lastUpdated, setLastUpdated] = useState<number | null>(null)
-  const [sortKey, setSortKey] = useState<SortKey>('fastestProfit')
+  // Default to 'winProb' (Sure Wins): user prioritizes WIN RATE over EV.
+  // High-mispriced bets that lose still drain bankroll; high-confidence
+  // winners that compound at small per-bet returns are sustainable.
+  const [sortKey, setSortKey] = useState<SortKey>('winProb')
   const [secondarySort, setSecondarySort] = useState<SortKey | null>(null)
   // Default 'all' so the EV/day-sorted Fastest Profit ranking can surface
   // the highest-compounding picks regardless of close date. Powell at
@@ -476,8 +479,9 @@ export function PolymarketSection() {
   // ── Sorting helpers ─────────────────────────────────────────────────────────
 
   const ALL_SORT_KEYS: SortItem[] = [
+    { key: 'winProb', label: '🎯 Sure Wins', color: '#3fb950' },
     { key: 'safety', label: '⚡ Conviction', color: '#8b5cf6' },
-    { key: 'confidence', label: '🎯 Confidence', color: '#3fb950' },
+    { key: 'confidence', label: '🎯 Confidence', color: '#56b6c2' },
     { key: 'ev', label: '📊 Highest EV', color: '#58a6ff' },
     { key: 'closing', label: '⏱️ Closing Soon', color: '#f0883e' },
     { key: 'fastestProfit', label: '💰 Fastest Profit', color: '#e03e92' },
@@ -498,6 +502,13 @@ export function PolymarketSection() {
         const scoreA = a.expectedValue / Math.max(liveDays(a), 1)
         const scoreB = b.expectedValue / Math.max(liveDays(b), 1)
         return scoreB - scoreA
+      }
+      if (sortKey === 'winProb') {
+        // Sort by Opus's estimated win probability for THIS rec's outcome
+        // (already side-corrected). Highest = most-confident wins. For small
+        // bankroll preservation: prefer many small reliable wins over big
+        // mispriced bets that lose 30% of the time.
+        return b.estimatedProbability - a.estimatedProbability
       }
       if (sortKey === 'safety') return b.safetyScore - a.safetyScore
       if (sortKey === 'confidence') {
