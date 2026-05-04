@@ -612,18 +612,68 @@ export function PolymarketSection() {
                 </span>
               )}
             </h2>
-            <p style={{ fontSize: '0.65rem', color: '#6e7681', margin: 0 }}>
-              {opportunities.length} opportunities
+            <p style={{ fontSize: '0.65rem', color: '#6e7681', margin: 0, display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+              <span>{opportunities.length} opportunities</span>
               {liveTradingEnabled && liveTradingStatus?.enabled ? (
                 <>
-                  <span style={{ color: '#f85149', fontWeight: 600 }}> • LIVE</span>
+                  <span style={{ color: '#f85149', fontWeight: 600 }}>• LIVE</span>
                   {liveTradingStatus.balance.usdc > 0 && (
-                    <span> • ${liveTradingStatus.balance.usdc.toFixed(2)} USDC</span>
+                    <span>• ${liveTradingStatus.balance.usdc.toFixed(2)} USDC</span>
                   )}
                 </>
               ) : (
-                <> • {openPositions.length} paper trades</>
+                <span>• {openPositions.length} paper trades</span>
               )}
+              {/* Analysis status badge — shows what model + when last analyzed */}
+              {(() => {
+                const extras = data as unknown as {
+                  stats?: { screeningModelUsed?: string; marketsScreened?: number; marketsAnalyzed?: number }
+                  cacheStatus?: string
+                  analysisInProgress?: boolean
+                } | null
+                const model = extras?.stats?.screeningModelUsed
+                const screened = extras?.stats?.marketsScreened
+                const total = extras?.stats?.marketsAnalyzed
+                const inProgress = extras?.analysisInProgress
+                const stale = extras?.cacheStatus === 'stale-revalidating'
+                return (
+                  <>
+                    {model && (
+                      <span style={{
+                        fontSize: '0.55rem',
+                        backgroundColor: 'rgba(139, 92, 246, 0.15)',
+                        color: '#8b5cf6',
+                        padding: '1px 6px',
+                        borderRadius: '8px',
+                        fontWeight: 600,
+                      }}>
+                        {model} {screened ?? '?'}/{total ?? '?'}
+                      </span>
+                    )}
+                    {inProgress && (
+                      <span style={{
+                        fontSize: '0.55rem',
+                        backgroundColor: 'rgba(58, 169, 240, 0.15)',
+                        color: '#3aa9f0',
+                        padding: '1px 6px',
+                        borderRadius: '8px',
+                        fontWeight: 600,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '3px',
+                      }}>
+                        <RefreshCw size={9} style={{ animation: 'spin 1.5s linear infinite' }} />
+                        Refreshing analysis…
+                      </span>
+                    )}
+                    {stale && (
+                      <span style={{ fontSize: '0.55rem', color: '#a09060', fontStyle: 'italic' }}>
+                        cache: stale
+                      </span>
+                    )}
+                  </>
+                )
+              })()}
             </p>
           </div>
         </div>

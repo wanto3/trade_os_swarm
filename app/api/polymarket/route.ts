@@ -553,12 +553,17 @@ export async function GET() {
 
   // FRESH: return immediately, no work
   if (cachedResponse && now < cachedResponse.freshExpiry) {
-    return Response.json(cachedResponse.data)
+    return Response.json({
+      ...cachedResponse.data,
+      cacheStatus: 'fresh',
+      analysisInProgress: false,
+    })
   }
 
   // STALE: return last-known data immediately, kick off background refresh
   if (cachedResponse && now < cachedResponse.staleExpiry) {
-    if (!inflightPipeline) {
+    const wasIdle = !inflightPipeline
+    if (wasIdle) {
       // Background refresh — fire and forget. Errors logged but don't propagate.
       runFullPipeline()
         .then((data) => {
@@ -568,6 +573,7 @@ export async function GET() {
             staleExpiry: Date.now() + STALE_TTL,
           }
           inflightPipeline = null
+          console.log('[Pipeline] Background refresh complete')
         })
         .catch((e) => {
           console.warn('[Pipeline] Background refresh failed (stale data still served):', e instanceof Error ? e.message : e)
@@ -575,7 +581,11 @@ export async function GET() {
         })
       inflightPipeline = Promise.resolve()
     }
-    return Response.json({ ...cachedResponse.data, cacheStatus: 'stale-revalidating' })
+    return Response.json({
+      ...cachedResponse.data,
+      cacheStatus: 'stale-revalidating',
+      analysisInProgress: true,  // background refresh running
+    })
   }
 
   // COLD: no cache at all — must wait. If a pipeline is already running,
@@ -749,10 +759,10 @@ async function runFullPipeline(): Promise<any> {
     // DPS-prioritized candidate selection: high-DPS first (politics, esports, box-office,
     // crypto-milestones), medium-DPS to fill, skip low-DPS. Per-category cap (8) ensures
     // diversity so we don't analyze 30 politics markets and zero crypto-milestones.
-    // Batched screening handles 25 markets in one Sonnet call (~30-50s).
-    // Going smaller than 40 to keep the call fast and within rate windows.
-    const MAX_ANALYSIS = 25
-    const CATEGORY_CAP = 6
+    // 40 markets per analysis batch — surfaces more diverse opportunities.
+    // With parallel batches, wall time stays manageable (~40s cold).
+    const MAX_ANALYSIS = 40
+    const CATEGORY_CAP = 8
 
     // DPS info per market (cached in a side-Map keyed by question).
     const dpsInfo = new Map<string, { tier: 'high' | 'medium' | 'low'; category: string }>()
@@ -768,7 +778,7 @@ async function runFullPipeline(): Promise<any> {
     //   Tier 1 (closing in ≤48h): up to T1_MAX, high+medium DPS
     //   Tier 2 (closing in ≤7d):  fill remaining, high+medium DPS, per-cat cap
     //   Tier 3 (closing later):   high DPS only
-    const T1_MAX = 25  // 2-day window — more breathing room than 24h
+    const T1_MAX = 30  // 2-day window — generous slot count
     const T1_DAYS = 2
     const T2_DAYS = 7
 
@@ -1094,20 +1104,23 @@ async function runFullPipeline(): Promise<any> {
       }
     }
 
-    // Dedupe pass 2: bracket variants of the same parent event collapse to
-    // the highest-EV single bracket. E.g. five "Will BTC be above $X on May 5?"
-    // brackets sharing /event/btc-price-may-5 should surface as ONE pick.
-    const byEvent = new Map<string, TradeRecommendation>()
+    // Dedupe pass 2: bracket variants of the same parent event — keep TOP 2
+    // highest-EV brackets per event. Was 1 which over-collapsed (e.g. user
+    // couldn't see both BTC>$78K and BTC>$76K-78K range bets when they have
+    // different theses). 2 gives diversity without spam.
+    const PER_EVENT_LIMIT = 2
+    const eventGroups = new Map<string, TradeRecommendation[]>()
     for (const r of Array.from(byQuestion.values())) {
-      // Extract parent event slug from URL: /event/{parent}/{market} or /event/{slug}
       const m = r.market.url.match(/\/event\/([^/]+)/)
       const eventKey = m ? m[1] : r.market.question
-      const existing = byEvent.get(eventKey)
-      if (!existing || r.expectedValue > existing.expectedValue) {
-        byEvent.set(eventKey, r)
-      }
+      if (!eventGroups.has(eventKey)) eventGroups.set(eventKey, [])
+      eventGroups.get(eventKey)!.push(r)
     }
-    const allOpportunities = Array.from(byEvent.values())
+    const allOpportunities: TradeRecommendation[] = []
+    for (const [, group] of Array.from(eventGroups.entries())) {
+      group.sort((a, b) => b.expectedValue - a.expectedValue)
+      allOpportunities.push(...group.slice(0, PER_EVENT_LIMIT))
+    }
 
     // Hot Right Now: ALL markets closing within 3 days, sorted by volume24hr
     // These are the most active trading opportunities RIGHT NOW — show everything regardless of conviction
@@ -1228,6 +1241,9 @@ async function runFullPipeline(): Promise<any> {
       hotMarkets,
       stats: {
         marketsAnalyzed: rawMarkets.length,
+        // Diagnostic counts so the UI can show "Analyzed N markets, found M opportunities"
+        marketsScreened: selectedForAnalysis.length,
+        screeningModelUsed: screeningTag,
         opportunitiesFound: allOpportunities.length,
         // Count pending (no-date) and up to 14-day markets as closing-soon
         closingSoonCount: allOpportunities.filter(r =>
@@ -1243,7 +1259,8 @@ async function runFullPipeline(): Promise<any> {
         avgConviction: allOpportunities.length > 0
           ? Math.round(allOpportunities.reduce((s, r) => s + r.convictionScore, 0) / allOpportunities.length)
           : null,
-      }
+      },
+      analyzedAt: Date.now(),
     }
 
     // Persist to disk so server restarts can serve the previous analysis
