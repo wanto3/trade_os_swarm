@@ -1081,17 +1081,12 @@ async function runFullPipeline(): Promise<any> {
       return b.expectedValue - a.expectedValue
     })
 
-    // Opportunities filter:
-    //   1. Anything with positive EV (the standard bar) → in
-    //   2. Anything closing in ≤24h that Opus analyzed → in (regardless of EV)
-    //      — user trades these daily; even WATCH-ONLY analysis is valuable info
-    const filteredRecs = recommendations.filter(r => {
-      if (r.expectedValue > 0) return true
-      const isClosingSoon = r.daysToClose <= 1
-      const wasAnalyzed = llmResults.has(r.market.question)
-      if (isClosingSoon && wasAnalyzed) return true
-      return false
-    })
+    // Opportunities filter: ONLY real edges (EV > 0). Was previously letting
+    // closing-soon analyzed picks through with EV=0 to give the user 'something
+    // to look at', but that polluted the main view with WATCH-ONLY entries.
+    // The closing-soon analyzed picks remain available in `closingTodayAnalyzed`
+    // for a separate "Watch list" display.
+    const filteredRecs = recommendations.filter(r => r.expectedValue > 0)
 
     // Dedupe pass 1: both YES and NO recs of the SAME market collapse to the
     // one with higher EV. Was showing every market twice in the opportunities
