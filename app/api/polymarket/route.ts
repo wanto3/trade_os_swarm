@@ -507,6 +507,47 @@ let inflightPipeline: Promise<any> | null = null
 const FRESH_TTL = 5 * 60_000   // 5 min — return without revalidation
 const STALE_TTL = 60 * 60_000  // 1 hour — return stale + background refresh
 
+// Disk-backed cache so server restarts inherit the previous analysis.
+// First dashboard visit after `npm run dev` is instant from disk; pre-warm
+// then refreshes the cache in the background.
+import * as fs from 'fs'
+import * as path from 'path'
+const DISK_CACHE_PATH = path.join(process.cwd(), 'data', 'polymarket-analyzed-cache.json')
+
+function loadDiskCache(): void {
+  try {
+    if (!fs.existsSync(DISK_CACHE_PATH)) return
+    const raw = fs.readFileSync(DISK_CACHE_PATH, 'utf-8')
+    const stored = JSON.parse(raw) as { data: unknown; savedAt: number }
+    if (!stored.data || !stored.savedAt) return
+    const ageMs = Date.now() - stored.savedAt
+    // Treat disk cache as STALE on load — fresh dashboard visit gets it
+    // immediately, instrumentation pre-warm refreshes the in-memory copy.
+    cachedResponse = {
+      data: stored.data,
+      freshExpiry: Date.now(),                 // already expired-fresh
+      staleExpiry: Date.now() + STALE_TTL,     // valid as stale for 1h
+    }
+    const ageMin = (ageMs / 60_000).toFixed(1)
+    console.log(`[Cache] Loaded disk-cached analysis (${ageMin}min old) — first dashboard visit will be instant`)
+  } catch (e) {
+    console.warn('[Cache] Failed to load disk cache:', e instanceof Error ? e.message : e)
+  }
+}
+
+function saveDiskCache(data: unknown): void {
+  try {
+    const dir = path.dirname(DISK_CACHE_PATH)
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(DISK_CACHE_PATH, JSON.stringify({ data, savedAt: Date.now() }))
+  } catch (e) {
+    console.warn('[Cache] Failed to save disk cache:', e instanceof Error ? e.message : e)
+  }
+}
+
+// Hydrate from disk at module load (once per Node process)
+loadDiskCache()
+
 export async function GET() {
   const now = Date.now()
 
@@ -1179,6 +1220,10 @@ async function runFullPipeline(): Promise<any> {
           : null,
       }
     }
+
+    // Persist to disk so server restarts can serve the previous analysis
+    // immediately while the new run completes in the background.
+    saveDiskCache(responseData)
 
     // Return the response data — the SWR layer in GET wraps caching.
     return responseData
