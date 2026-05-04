@@ -805,15 +805,17 @@ async function runFullPipeline(): Promise<any> {
     }
 
     // Price-range filter: focus the analysis budget on the "meaty middle"
-    // (10-90% market price). Near-certain markets at 95%+ or 5%- have no
-    // tradeable upside — even if Opus correctly says "NO is right" on a
-    // market priced at 95% NO, you only get 5% return. The middle is where
-    // mispricing creates real EV. Trader insight from user.
-    const inMeatyMiddle = (r: TradeRecommendation) => r.odds >= 0.10 && r.odds <= 0.90
+    // where mispricing creates real EV. Loosened to 5-95% for closing-soon
+    // markets (≤2d) — short-window markets often have asymmetric pricing at
+    // 92-95% where small edges compound fast since resolution is imminent.
+    // Longer-term markets stay 10-90% (extreme prices over months are rarely
+    // mispriced enough to overcome lockup cost).
+    const inMeatyMiddleClosingSoon = (r: TradeRecommendation) => r.odds >= 0.05 && r.odds <= 0.95
+    const inMeatyMiddleLonger      = (r: TradeRecommendation) => r.odds >= 0.10 && r.odds <= 0.90
 
-    const t1 = dedupeByEvent(recommendations.filter(r => r.daysToClose <= T1_DAYS && inMeatyMiddle(r)))
-    const t2 = dedupeByEvent(recommendations.filter(r => r.daysToClose > T1_DAYS && r.daysToClose <= T2_DAYS && inMeatyMiddle(r)))
-    const t3 = dedupeByEvent(recommendations.filter(r => r.daysToClose > T2_DAYS && inMeatyMiddle(r)))
+    const t1 = dedupeByEvent(recommendations.filter(r => r.daysToClose <= T1_DAYS && inMeatyMiddleClosingSoon(r)))
+    const t2 = dedupeByEvent(recommendations.filter(r => r.daysToClose > T1_DAYS && r.daysToClose <= T2_DAYS && inMeatyMiddleClosingSoon(r)))
+    const t3 = dedupeByEvent(recommendations.filter(r => r.daysToClose > T2_DAYS && inMeatyMiddleLonger(r)))
 
     const selectedForAnalysis: TradeRecommendation[] = []
     const usedQuestions = new Set<string>()
@@ -1090,11 +1092,17 @@ async function runFullPipeline(): Promise<any> {
       return b.expectedValue - a.expectedValue
     })
 
-    // Opportunities filter: ONLY positive-EV picks. User strategy is to stack
-    // many small bets across whatever Opus surfaces, redeploying as bets
-    // resolve. Watch-only / no-edge picks (24h analyzed-but-EV=0) live in
-    // closingTodayAnalyzed if we want to surface them separately later.
-    const filteredRecs = recommendations.filter(r => r.expectedValue > 0)
+    // Opportunities filter:
+    //   1. Positive-EV picks (real edges) → always in
+    //   2. Closing-in-24h analyzed picks → in even at EV=0, so user always
+    //      has visibility into today's analyzed pool. They sort to the bottom
+    //      by EV/day but at least appear when filtering by 24h.
+    const filteredRecs = recommendations.filter(r => {
+      if (r.expectedValue > 0) return true
+      const isClosingSoon = r.daysToClose <= 1
+      const wasAnalyzed = llmResults.has(r.market.question)
+      return isClosingSoon && wasAnalyzed
+    })
 
     // Dedupe pass 1: both YES and NO recs of the SAME market collapse to the
     // one with higher EV. Was showing every market twice in the opportunities
@@ -1107,11 +1115,11 @@ async function runFullPipeline(): Promise<any> {
       }
     }
 
-    // Dedupe pass 2: bracket variants of the same parent event — keep TOP 2
-    // highest-EV brackets per event. Was 1 which over-collapsed (e.g. user
-    // couldn't see both BTC>$78K and BTC>$76K-78K range bets when they have
-    // different theses). 2 gives diversity without spam.
-    const PER_EVENT_LIMIT = 2
+    // Dedupe pass 2: bracket variants of the same parent event — keep TOP 3
+    // highest-EV brackets per event. User wants more closing-today coverage,
+    // and bracket markets often have multiple genuinely different prop bets
+    // (BTC>$76K vs >$78K vs >$80K thresholds, soccer O/U lines, etc.).
+    const PER_EVENT_LIMIT = 3
     const eventGroups = new Map<string, TradeRecommendation[]>()
     for (const r of Array.from(byQuestion.values())) {
       const m = r.market.url.match(/\/event\/([^/]+)/)
