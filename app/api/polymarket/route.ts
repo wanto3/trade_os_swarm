@@ -654,7 +654,7 @@ export async function GET() {
     //   Tier 1 (closing in ≤24h): up to T1_MAX, ALL DPS tiers welcome
     //   Tier 2 (closing in ≤7d):  high or medium DPS only
     //   Tier 3 (closing later):   high DPS only (skip live-sports, weather, etc.)
-    const T1_MAX = 15  // closing-soon dominates analysis budget
+    const T1_MAX = 20  // closing-soon dominates analysis budget — user trades these daily
     const T1_DAYS = 1
     const T2_DAYS = 7
 
@@ -923,13 +923,17 @@ export async function GET() {
       return b.expectedValue - a.expectedValue
     })
 
-    // Return ALL researched opportunities — no artificial conviction cap
-    // Show any opportunity with positive EV after LLM analysis.
-    // Low-edge trades (EV < 5%) will still appear but with "risky" conviction label.
-    // The LLM's confidence and shouldBet flags are the real quality gate.
+    // Opportunities filter:
+    //   1. Anything with positive EV (the standard bar) → in
+    //   2. Anything closing in ≤24h that Opus analyzed → in (regardless of EV)
+    //      — user trades these daily; even WATCH-ONLY analysis is valuable info
+    // The card UI shows conviction/label/EV so the user judges quality.
     const allOpportunities = recommendations.filter(r => {
-      if (r.expectedValue <= 0) return false
-      return true
+      if (r.expectedValue > 0) return true
+      const isClosingSoon = r.daysToClose <= 1
+      const wasAnalyzed = llmResults.has(r.market.question)
+      if (isClosingSoon && wasAnalyzed) return true
+      return false
     })
 
     // Hot Right Now: ALL markets closing within 3 days, sorted by volume24hr
@@ -941,6 +945,18 @@ export async function GET() {
         return days <= 3
       })
       .sort((a, b) => (b.market.volume24hr || 0) - (a.market.volume24hr || 0))
+
+    // Closing-Today Analyzed: every market that (a) closes within 24h AND
+    // (b) was actually run through Opus 4.7. Sorted by EV descending so the
+    // best 24h picks float to top, even if EV < threshold for "opportunities".
+    // Shows the user what Opus thinks of TODAY's markets, period.
+    const closingTodayAnalyzed = recommendations
+      .filter(r => {
+        if (!r.market.endDateIso) return false
+        if (r.daysToClose > 1) return false
+        return llmResults.has(r.market.question)
+      })
+      .sort((a, b) => b.expectedValue - a.expectedValue)
 
     // Top 24hr Picks: markets closing within ~18 hours (same-day resolution), sorted by conviction
     const todayOpportunities = recommendations
@@ -1027,6 +1043,14 @@ export async function GET() {
         r.timeAnalysis?.tier === 'imminent' || r.timeAnalysis?.tier === 'closing-soon' ||
         (r.timeAnalysis?.daysToClose !== undefined && r.timeAnalysis.daysToClose <= 14)
       ),
+      // Closing-Today Analyzed: every ≤24h market that Opus actually analyzed,
+      // sorted by EV. Includes WATCH-ONLY picks so the user sees what Opus
+      // thinks of TODAY's markets even when EV is below the bet threshold.
+      closingTodayAnalyzed: closingTodayAnalyzed.map(rec => ({
+        ...rec,
+        closingDate: rec.market.endDateIso ? new Date(rec.market.endDateIso).getTime() : Date.now() + 365 * 24 * 60 * 60 * 1000,
+        daysToClose: rec.timeAnalysis?.daysToClose ?? 999,
+      })),
       longTailOpportunities: allOpportunities.filter(r => r.longTail !== null),
       hotMarkets,
       stats: {

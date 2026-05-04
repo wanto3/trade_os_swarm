@@ -45,9 +45,14 @@ interface BatchAssessment {
 function buildBatchScreeningPrompt(markets: ScreeningInput[]): string {
   const marketLines = markets
     .map((m, i) => {
-      const days = m.endDate
-        ? Math.max(0, Math.ceil((new Date(m.endDate).getTime() - Date.now()) / 86_400_000))
+      const hours = m.endDate
+        ? Math.max(0, (new Date(m.endDate).getTime() - Date.now()) / 3_600_000)
         : null
+      const timeStr = hours === null
+        ? '(no end date)'
+        : hours <= 24
+          ? `closes in ${hours.toFixed(0)}h ⏰CLOSING-SOON`
+          : `closes in ${Math.ceil(hours / 24)}d`
       const ev = m.evidence
       const evHint =
         ev && ev.signalStrength > 0
@@ -57,7 +62,7 @@ function buildBatchScreeningPrompt(markets: ScreeningInput[]): string {
           : ''
       return `${i + 1}. ID: ${m.marketId} | Q: "${m.question.substring(0, 130)}" | YES: ${(
         m.yesPrice * 100
-      ).toFixed(1)}% | closes in ${days ?? '?'}d${evHint}`
+      ).toFixed(1)}% | ${timeStr}${evHint}`
     })
     .join('\n')
 
@@ -66,19 +71,20 @@ function buildBatchScreeningPrompt(markets: ScreeningInput[]): string {
 MARKETS:
 ${marketLines}
 
+⏰ CLOSING-SOON MARKETS (within 24 hours) deserve EXTRA scrutiny — these are where the user actively trades daily. Look hard for edge:
+  - Has the event ALREADY happened but the market hasn't fully priced it in? (e.g. result confirmed but market still at 80% instead of 99%)
+  - Are there clear public-record facts (polls, news, official announcements, scheduled events) that decisively support one side?
+  - Is the market price stale relative to recent developments?
+  - For sports/coin-flippy events that genuinely are 50/50, return direction="skip" — don't fabricate edge.
+
 For EACH market, output:
 - yourEstimate: YES probability (0.0-1.0). NOT a percentage. Use 0.05 for "5% likely YES", 0.85 for "85% likely YES", etc.
-- direction: "yes" if you think YES is undervalued (bet YES); "no" if YES is overvalued (bet NO); "skip" if within ~10% of market price
+- direction: "yes" if you think YES is undervalued (bet YES); "no" if YES is overvalued (bet NO); "skip" if within ~5% of market price (or ~3% for closing-soon)
 - confidence: "high" only if specific real-world facts strongly disagree with market; "medium" if some signal but not decisive; "low" if speculative
-- reasoning: 1-2 sentences explaining the call
-- shouldBet: true if confidence is high or medium AND |yourEstimate - marketPrice| > 0.05
+- reasoning: 1-2 sentences explaining the call. For closing-soon picks, name the specific fact/event that creates edge.
+- shouldBet: true if confidence is high or medium AND there's a meaningful edge (≥5% normally; ≥2% for closing-soon)
 
-Be calibrated, not paranoid. If the market price is meaningfully off from where you'd put the probability based on real-world facts, mark direction="yes" or "no" with appropriate confidence. Only return direction="skip" when:
-- The market is within 5% of your estimate (no edge)
-- You genuinely don't have any reasoning to apply
-- The question is too speculative to assess
-
-Active assessments help the user spot opportunities. Don't reflexively skip.
+Be calibrated, not paranoid. Active assessments help the user spot opportunities. Don't reflexively skip — but also don't fabricate edges where none exist.
 
 Return a JSON array with EXACTLY this shape, one entry per market in the same order:
 [
@@ -175,7 +181,8 @@ function stripFencesAndParse(raw: string): BatchAssessment[] {
 function applySafetyRules(
   raw: BatchAssessment,
   marketYesPrice: number,
-  evidence: CategoryEvidence | null | undefined
+  evidence: CategoryEvidence | null | undefined,
+  endDate?: string | null
 ): LLMMarketAnalysis {
   // Normalize estimate (handle percentage-format LLM responses)
   let est = raw.yourEstimate
@@ -200,20 +207,22 @@ function applySafetyRules(
 
   let shouldBet = raw.shouldBet === true
 
-  // Relaxed safety rules for screening: we want medium-confidence picks
-  // with real edges to surface (so the user has options to choose from),
-  // not just high-confidence near-certainties. The user makes the final
-  // bet decision based on conviction + EV displayed on the card.
-  //
+  // Relaxed safety rules for screening:
   // - 'low' confidence: still skip (model itself signaled uncertainty)
-  // - signalStrength check: dropped here (batched screening doesn't rely on
-  //   keyword evidence the same way; LLM reasoning carries the weight)
-  // - edge threshold: 3% (was 5%) — catches more real opportunities
+  // - edge threshold: 3% normally, 2% for closing-soon (≤24h) markets where
+  //   small edges matter more because resolution is imminent and slippage
+  //   risk is lower
+  const closingHours = endDate
+    ? Math.max(0, (new Date(endDate).getTime() - Date.now()) / 3_600_000)
+    : 999
+  const isClosingSoon = closingHours <= 24
+  const edgeThreshold = isClosingSoon ? 0.02 : 0.03
+
   if (confidence === 'low') {
     shouldBet = false
     direction = 'skip'
   }
-  if (edgeSize < 0.03) {
+  if (edgeSize < edgeThreshold) {
     shouldBet = false
     direction = 'skip'
   }
@@ -325,7 +334,7 @@ export async function screenMarketsBatch(
       })
       continue
     }
-    results.set(m.marketId, applySafetyRules(a, m.yesPrice, m.evidence))
+    results.set(m.marketId, applySafetyRules(a, m.yesPrice, m.evidence, m.endDate))
   }
 
   return results
