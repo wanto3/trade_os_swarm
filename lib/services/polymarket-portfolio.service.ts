@@ -1,6 +1,7 @@
 import { promises as fs } from 'fs';
 import { join } from 'path';
 import type { TradeRecommendation } from '@/app/api/polymarket/route';
+import * as dpsServiceImport from './dps.service';
 
 export interface PolymarketPosition {
   id: string
@@ -272,11 +273,15 @@ export function createPosition(rec: TradeRecommendation): PolymarketPosition | n
   let dpsCategory: string | undefined
   let dpsTier: 'high' | 'medium' | 'low' | undefined
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { scoreDomainPredictability } = require('./dps.service') as typeof import('./dps.service')
-    const dps = scoreDomainPredictability(rec.market.question)
-    dpsCategory = dps.category
-    dpsTier = dps.tier
+    // Use the imported function (top of file would create a circular dep risk
+    // since this module is itself loaded by route.ts; lazy import via dynamic
+    // require avoids it but the eslint plugin for that rule isn't installed).
+    const dpsModule = dpsServiceImport
+    if (dpsModule) {
+      const dps = dpsModule.scoreDomainPredictability(rec.market.question)
+      dpsCategory = dps.category
+      dpsTier = dps.tier
+    }
   } catch { /* DPS service not available — fall back to legacy category only */ }
 
   const position: PolymarketPosition = {
