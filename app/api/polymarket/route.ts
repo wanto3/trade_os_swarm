@@ -703,12 +703,15 @@ export async function GET() {
     const evidenceMap = await gatherEvidenceBatch(marketsForAnalysis.map(m => m.question))
     console.log(`[Pipeline] Gathered evidence for ${evidenceMap.size} markets`)
 
-    // Stage 2: BATCHED screening — one Groq call analyzes all selected markets.
-    // The model sees them side-by-side and can comparison-rank, returning a
-    // JSON array of per-market assessments. ~5-10s vs ~25-40s sequential.
+    // Stage 2: BATCHED screening — ONE LLM call analyzes all selected markets.
+    // Default: Claude Opus 4.7 via `claude -p` subprocess on Max subscription
+    // (one subprocess for all markets — no parallel rate-limit problems).
+    // Auto-falls back to Groq if claude-code call fails.
+    // Override with SCREENING_MODEL=sonnet|groq env var.
     const marketIds = selectedForAnalysis.map(rec => rec.market.id)
     const screeningInputs = toScreeningInputs(marketsForAnalysis, marketIds, evidenceMap)
-    const screeningResults = await screenMarketsBatch(screeningInputs)
+    const screeningModel = (process.env.SCREENING_MODEL as 'opus' | 'sonnet' | 'groq') || 'opus'
+    const screeningResults = await screenMarketsBatch(screeningInputs, screeningModel)
 
     // Build llmResults keyed by question (downstream code expects this shape).
     // Map marketId → analysis, then question → analysis via selectedForAnalysis.
@@ -718,13 +721,19 @@ export async function GET() {
       if (a) llmResults.set(rec.market.question, a)
     }
     // Build a synthetic edgeResults so downstream loop (DPS tagging) still works.
-    const edgeResults = new Map<string, { analysis: import('@/lib/services/groq-market-analysis').LLMMarketAnalysis; modelUsed: 'screening'; dps: ReturnType<typeof scoreDomainPredictability>; dpsMultiplierApplied: number }>()
+    // Tag every analysis with the screening model name so the UI shows which
+    // brain handled it (OPUS 4.7 / SONNET 4.6 / GROQ 70B).
+    const screeningTag =
+      screeningModel === 'opus' ? 'OPUS 4.7'
+        : screeningModel === 'sonnet' ? 'SONNET 4.6'
+        : 'GROQ 70B'
+    const edgeResults = new Map<string, { analysis: import('@/lib/services/groq-market-analysis').LLMMarketAnalysis; modelUsed: string; dps: ReturnType<typeof scoreDomainPredictability>; dpsMultiplierApplied: number }>()
     for (const rec of selectedForAnalysis) {
       const a = llmResults.get(rec.market.question)
       if (!a) continue
       const dps = scoreDomainPredictability(rec.market.question)
       const mult = dps.tier === 'high' ? 1.0 : dps.tier === 'medium' ? 0.85 : 0.5
-      edgeResults.set(rec.market.question, { analysis: a, modelUsed: 'screening', dps, dpsMultiplierApplied: mult })
+      edgeResults.set(rec.market.question, { analysis: a, modelUsed: screeningTag, dps, dpsMultiplierApplied: mult })
     }
     // Apply DPS multiplier to confidence (cap medium-DPS high-conf to medium)
     for (const r of Array.from(edgeResults.values())) {

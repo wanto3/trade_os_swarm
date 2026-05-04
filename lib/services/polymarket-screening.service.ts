@@ -18,6 +18,7 @@
 
 import type { CategoryEvidence } from './category-research.service'
 import type { LLMMarketAnalysis, MarketForAnalysis } from './groq-market-analysis'
+import { callClaudeCode, type ClaudeModel } from './claude-code-llm.service'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -232,26 +233,71 @@ function applySafetyRules(
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
+export type ScreeningModel = 'opus' | 'sonnet' | 'groq'
+
+const MODEL_LABEL: Record<ScreeningModel, string> = {
+  opus: 'Claude Opus 4.7',
+  sonnet: 'Claude Sonnet 4.6',
+  groq: 'Groq Llama 3.3 70B',
+}
+
 /**
- * Screen all candidate markets in ONE Groq batch call.
+ * Screen all candidate markets in ONE LLM batch call.
  * Returns a Map keyed by marketId → LLMMarketAnalysis (compatible with
  * the existing per-market pipeline so route.ts logic stays the same).
+ *
+ * The model arg picks which engine handles the batch:
+ * - 'opus':   Claude Opus 4.7 via `claude -p` subprocess (Max sub) — strongest
+ *             reasoning, ~15-30s for 30 markets in one call. ONE subprocess
+ *             so no parallel rate-limit problems.
+ * - 'sonnet': Claude Sonnet 4.6 via `claude -p` — faster than Opus, very smart
+ * - 'groq':   Groq Llama 3.3 70B via HTTP API — fastest (~5-10s) but lowest
+ *             quality. Used as automatic fallback if Claude Code call fails.
  */
 export async function screenMarketsBatch(
-  markets: ScreeningInput[]
+  markets: ScreeningInput[],
+  model: ScreeningModel = 'opus'
 ): Promise<Map<string, LLMMarketAnalysis>> {
   const results = new Map<string, LLMMarketAnalysis>()
   if (markets.length === 0) return results
 
-  console.log(`[Screening] Batch-analyzing ${markets.length} markets in one Groq call`)
+  console.log(`[Screening] Batch-analyzing ${markets.length} markets in ONE ${MODEL_LABEL[model]} call`)
   const prompt = buildBatchScreeningPrompt(markets)
 
   let rawResponse: string
   try {
-    rawResponse = await callGroqBatch(prompt)
+    if (model === 'opus' || model === 'sonnet') {
+      const claudeModel: ClaudeModel = model === 'opus' ? 'claude-opus-4-7' : 'claude-sonnet-4-6'
+      // Single subprocess call analyzing all markets at once. NO parallelism
+      // problems — this is exactly the use case `claude -p` is built for.
+      const parsed = await callClaudeCode<unknown>({
+        prompt,
+        model: claudeModel,
+        // Generous timeout — Opus reasoning over 30 markets at once is
+        // expensive but only happens once per dashboard refresh.
+        timeoutMs: 120_000,
+      })
+      // callClaudeCode JSON-parses the model output already.
+      // Re-stringify so stripFencesAndParse can consume the contract.
+      rawResponse = typeof parsed === 'string' ? parsed : JSON.stringify(parsed)
+    } else {
+      rawResponse = await callGroqBatch(prompt)
+    }
   } catch (e) {
-    console.error('[Screening] Batch call failed:', e instanceof Error ? e.message : e)
-    return results
+    console.warn(
+      `[Screening] ${MODEL_LABEL[model]} call failed (${e instanceof Error ? e.message : e}) — falling back to Groq`
+    )
+    if (model !== 'groq') {
+      try {
+        rawResponse = await callGroqBatch(prompt)
+        console.log('[Screening] Groq fallback succeeded')
+      } catch (e2) {
+        console.error('[Screening] Groq fallback also failed:', e2 instanceof Error ? e2.message : e2)
+        return results
+      }
+    } else {
+      return results
+    }
   }
 
   const assessments = stripFencesAndParse(rawResponse)
