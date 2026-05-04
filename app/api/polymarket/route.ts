@@ -498,22 +498,40 @@ function scoreMarket(market: GammaMarket): TradeRecommendation[] {
 // The dashboard auto-refreshes frequently, but LLM analysis takes 30-60s.
 // Without this, each refresh spawns a new LLM pipeline, flooding the rate limit.
 let cachedResponse: { data: any; expiry: number } | null = null
-let pipelineRunning = false
-const RESPONSE_CACHE_TTL = 90_000  // 90 seconds
+// Concurrent-request dedup: when a pipeline is running, store the in-flight
+// promise so any subsequent request awaits the SAME pipeline rather than
+// kicking off a parallel one (which would double LLM calls and trigger
+// rate limits on Groq/Anthropic).
+let inflightPipeline: Promise<any> | null = null
+const RESPONSE_CACHE_TTL = 5 * 60_000  // 5 minutes — longer cache reduces LLM load
 
 export async function GET() {
+  // If we have a fresh cached response, return it immediately
+  if (cachedResponse && cachedResponse.expiry > Date.now()) {
+    return Response.json(cachedResponse.data)
+  }
+
+  // If a pipeline is already in-flight, AWAIT IT — don't kick off a
+  // second parallel LLM call. Subsequent dashboard refreshes during the
+  // initial load all share the same pipeline.
+  if (inflightPipeline) {
+    try {
+      const data = await inflightPipeline
+      return Response.json(data)
+    } catch {
+      // fall through and start a new pipeline if the in-flight one errored
+    }
+  }
+
+  // Start a new pipeline and store the promise so concurrent requests share it.
+  let pipelineResolve: (data: any) => void = () => {}
+  let pipelineReject: (err: unknown) => void = () => {}
+  inflightPipeline = new Promise((resolve, reject) => {
+    pipelineResolve = resolve
+    pipelineReject = reject
+  })
+
   try {
-    // If we have a fresh cached response, return it immediately
-    if (cachedResponse && cachedResponse.expiry > Date.now()) {
-      return Response.json(cachedResponse.data)
-    }
-
-    // If another pipeline is already running, return stale cache or wait
-    if (pipelineRunning && cachedResponse) {
-      return Response.json(cachedResponse.data)
-    }
-
-    pipelineRunning = true
 
     // Lazy resolution check: settle any positions that have closed since last visit.
     // Runs in parallel with market fetch so it doesn't slow the response.
@@ -637,10 +655,10 @@ export async function GET() {
     // DPS-prioritized candidate selection: high-DPS first (politics, esports, box-office,
     // crypto-milestones), medium-DPS to fill, skip low-DPS. Per-category cap (8) ensures
     // diversity so we don't analyze 30 politics markets and zero crypto-milestones.
-    // Batched screening handles 40+ markets in one Opus call. Bigger pool +
-    // looser per-category cap = more diverse opportunities surfaced.
-    const MAX_ANALYSIS = 40
-    const CATEGORY_CAP = 8
+    // Batched screening handles 25 markets in one Sonnet call (~30-50s).
+    // Going smaller than 40 to keep the call fast and within rate windows.
+    const MAX_ANALYSIS = 25
+    const CATEGORY_CAP = 6
 
     // DPS info per market (cached in a side-Map keyed by question).
     const dpsInfo = new Map<string, { tier: 'high' | 'medium' | 'low'; category: string }>()
@@ -757,13 +775,14 @@ export async function GET() {
     console.log(`[Pipeline] Gathered evidence for ${evidenceMap.size} markets`)
 
     // Stage 2: BATCHED screening — ONE LLM call analyzes all selected markets.
-    // Default: Claude Opus 4.7 via `claude -p` subprocess on Max subscription
-    // (one subprocess for all markets — no parallel rate-limit problems).
-    // Auto-falls back to Groq if claude-code call fails.
-    // Override with SCREENING_MODEL=sonnet|groq env var.
+    // Default: Claude Opus 4.7 via `claude -p` subprocess on Max sub.
+    // Slow (~60-120s for 25 markets) but deepest reasoning. Auto-fallback
+    // chain on failure: Opus → Sonnet → Haiku → Groq so we never end up
+    // with 0 results.
+    // Override with SCREENING_MODEL=sonnet | haiku | groq for faster paths.
     const marketIds = selectedForAnalysis.map(rec => rec.market.id)
     const screeningInputs = toScreeningInputs(marketsForAnalysis, marketIds, evidenceMap)
-    const screeningModel = (process.env.SCREENING_MODEL as 'opus' | 'sonnet' | 'groq') || 'opus'
+    const screeningModel = (process.env.SCREENING_MODEL as 'opus' | 'sonnet' | 'haiku' | 'groq') || 'opus'
     const screeningResults = await screenMarketsBatch(screeningInputs, screeningModel)
 
     // Build llmResults keyed by question (downstream code expects this shape).
@@ -779,6 +798,7 @@ export async function GET() {
     const screeningTag =
       screeningModel === 'opus' ? 'OPUS 4.7'
         : screeningModel === 'sonnet' ? 'SONNET 4.6'
+        : screeningModel === 'haiku' ? 'HAIKU 4.5'
         : 'GROQ 70B'
     const edgeResults = new Map<string, { analysis: import('@/lib/services/groq-market-analysis').LLMMarketAnalysis; modelUsed: string; dps: ReturnType<typeof scoreDomainPredictability>; dpsMultiplierApplied: number }>()
     for (const rec of selectedForAnalysis) {
@@ -1079,13 +1099,16 @@ export async function GET() {
       }
     }
 
-    // Cache the response to prevent concurrent pipeline floods
+    // Cache the response and resolve the in-flight promise so any concurrent
+    // requests waiting on this pipeline get the same data.
     cachedResponse = { data: responseData, expiry: Date.now() + RESPONSE_CACHE_TTL }
-    pipelineRunning = false
+    pipelineResolve(responseData)
+    inflightPipeline = null
 
     return Response.json(responseData)
   } catch (error) {
-    pipelineRunning = false
+    pipelineReject(error)
+    inflightPipeline = null
     console.error('Polymarket API error:', error)
     return NextResponse.json(
       { success: false, error: 'Failed to fetch Polymarket data', opportunities: [], hotNowOpportunities: [], todayOpportunities: [], nearCertainOpportunities: [], closingSoonOpportunities: [], longTailOpportunities: [], hotMarkets: [], stats: null },

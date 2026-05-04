@@ -256,11 +256,12 @@ function applySafetyRules(
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
-export type ScreeningModel = 'opus' | 'sonnet' | 'groq'
+export type ScreeningModel = 'opus' | 'sonnet' | 'haiku' | 'groq'
 
 const MODEL_LABEL: Record<ScreeningModel, string> = {
   opus: 'Claude Opus 4.7',
   sonnet: 'Claude Sonnet 4.6',
+  haiku: 'Claude Haiku 4.5',
   groq: 'Groq Llama 3.3 70B',
 }
 
@@ -287,40 +288,51 @@ export async function screenMarketsBatch(
   console.log(`[Screening] Batch-analyzing ${markets.length} markets in ONE ${MODEL_LABEL[model]} call`)
   const prompt = buildBatchScreeningPrompt(markets)
 
-  let rawResponse: string
-  try {
-    if (model === 'opus' || model === 'sonnet') {
-      const claudeModel: ClaudeModel = model === 'opus' ? 'claude-opus-4-7' : 'claude-sonnet-4-6'
-      // Single subprocess call analyzing all markets at once. NO parallelism
-      // problems — this is exactly the use case `claude -p` is built for.
-      const parsed = await callClaudeCode<unknown>({
-        prompt,
-        model: claudeModel,
-        // Generous timeout — Opus reasoning over 30 markets at once is
-        // expensive but only happens once per dashboard refresh.
-        timeoutMs: 120_000,
-      })
-      // callClaudeCode JSON-parses the model output already.
-      // Re-stringify so stripFencesAndParse can consume the contract.
-      rawResponse = typeof parsed === 'string' ? parsed : JSON.stringify(parsed)
-    } else {
-      rawResponse = await callGroqBatch(prompt)
-    }
-  } catch (e) {
-    console.warn(
-      `[Screening] ${MODEL_LABEL[model]} call failed (${e instanceof Error ? e.message : e}) — falling back to Groq`
-    )
-    if (model !== 'groq') {
-      try {
+  // Build fallback chain so we never end up with 0 results from a transient
+  // failure on one provider. Order picked by speed — first success wins.
+  const fallbackChain: ScreeningModel[] =
+    model === 'haiku'  ? ['haiku', 'groq', 'sonnet']
+      : model === 'groq'   ? ['groq', 'haiku', 'sonnet']
+      : model === 'sonnet' ? ['sonnet', 'haiku', 'groq']
+      : ['opus', 'sonnet', 'haiku', 'groq']
+
+  let rawResponse: string | null = null
+  for (const tryModel of fallbackChain) {
+    try {
+      if (tryModel === 'opus' || tryModel === 'sonnet' || tryModel === 'haiku') {
+        const claudeModel: ClaudeModel =
+          tryModel === 'opus' ? 'claude-opus-4-7'
+            : tryModel === 'sonnet' ? 'claude-sonnet-4-6'
+            : 'claude-haiku-4-5'
+        // Haiku is fastest (~10s for batched), Sonnet medium (~30-60s),
+        // Opus slowest (~60-120s). Bump timeout for the slower models.
+        const timeoutMs = tryModel === 'haiku' ? 60_000
+          : tryModel === 'sonnet' ? 180_000
+          : 240_000
+        const parsed = await callClaudeCode<unknown>({
+          prompt,
+          model: claudeModel,
+          timeoutMs,
+        })
+        rawResponse = typeof parsed === 'string' ? parsed : JSON.stringify(parsed)
+      } else {
         rawResponse = await callGroqBatch(prompt)
-        console.log('[Screening] Groq fallback succeeded')
-      } catch (e2) {
-        console.error('[Screening] Groq fallback also failed:', e2 instanceof Error ? e2.message : e2)
-        return results
       }
-    } else {
-      return results
+      if (tryModel !== model) {
+        console.log(`[Screening] ${MODEL_LABEL[tryModel]} fallback succeeded after ${MODEL_LABEL[model]} failed`)
+      }
+      break
+    } catch (e) {
+      console.warn(
+        `[Screening] ${MODEL_LABEL[tryModel]} failed: ${e instanceof Error ? e.message : e}`
+      )
+      // try next in chain
     }
+  }
+
+  if (!rawResponse) {
+    console.error('[Screening] All fallback models failed')
+    return results
   }
 
   const assessments = stripFencesAndParse(rawResponse)
