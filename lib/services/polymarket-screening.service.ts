@@ -227,6 +227,20 @@ function applySafetyRules(
     direction = 'skip'
   }
 
+  // Sanity check: direction must be CONSISTENT with yourEstimate vs market price.
+  // Sometimes the LLM emits direction='no' with yourEstimate > marketPrice (or
+  // vice-versa) — that's logically broken and produces giant negative EVs
+  // downstream when route.ts computes side-aware EV. Force skip in that case.
+  const estVsMarket = est - marketYesPrice
+  if (direction === 'yes' && estVsMarket <= 0) {
+    direction = 'skip'
+    shouldBet = false
+  }
+  if (direction === 'no' && estVsMarket >= 0) {
+    direction = 'skip'
+    shouldBet = false
+  }
+
   return {
     estimatedProbability: est,
     reasoning: (raw.reasoning ?? '').substring(0, 500),
