@@ -289,10 +289,11 @@ export function PolymarketSection() {
   const [lastUpdated, setLastUpdated] = useState<number | null>(null)
   const [sortKey, setSortKey] = useState<SortKey>('fastestProfit')
   const [secondarySort, setSecondarySort] = useState<SortKey | null>(null)
-  // Default to '24h' — user's stated strategy is high-frequency closing-today
-  // bets to compound a small bankroll. Time filter buttons let them widen
-  // to 7d/14d/All when they want longer-term high-EV picks (Powell, Greenland).
-  const [filterKey, setFilterKey] = useState<FilterKey>('24h')
+  // Default 'all' so the EV/day-sorted Fastest Profit ranking can surface
+  // the highest-compounding picks regardless of close date. Powell at
+  // 89% EV closing in 11d (8.1%/day) is currently the best compound pick.
+  // User can click 24h/3d/7d to focus on shorter-window subsets.
+  const [filterKey, setFilterKey] = useState<FilterKey>('all')
   const [kellyMode, setKellyMode] = useState<KellyMode>('quarter')
   const [bankroll, setBankroll] = useState<number>(500)
   const [bankrollInput, setBankrollInput] = useState<string>('500')
@@ -487,8 +488,11 @@ export function PolymarketSection() {
 
     const primarySorter = (a: TradeRecommendation, b: TradeRecommendation) => {
       if (sortKey === 'fastestProfit') {
-        const scoreA = a.safetyScore / Math.max(liveDays(a), 1)
-        const scoreB = b.safetyScore / Math.max(liveDays(b), 1)
+        // EV per day to resolution — what compounds fastest. Powell at 89% EV
+        // closing in 11d (8.1%/day) beats Greenland at 63% EV closing in 241d
+        // (0.26%/day) for a small bankroll trying to grow week-over-week.
+        const scoreA = a.expectedValue / Math.max(liveDays(a), 1)
+        const scoreB = b.expectedValue / Math.max(liveDays(b), 1)
         return scoreB - scoreA
       }
       if (sortKey === 'safety') return b.safetyScore - a.safetyScore
@@ -513,8 +517,8 @@ export function PolymarketSection() {
           if (secondarySort === 'ev') return b.expectedValue - a.expectedValue
           if (secondarySort === 'closing') return liveDays(a) - liveDays(b)
           if (secondarySort === 'fastestProfit') {
-            const scoreA = a.safetyScore / Math.max(liveDays(a), 1)
-            const scoreB = b.safetyScore / Math.max(liveDays(b), 1)
+            const scoreA = a.expectedValue / Math.max(liveDays(a), 1)
+            const scoreB = b.expectedValue / Math.max(liveDays(b), 1)
             return scoreB - scoreA
           }
           return 0
