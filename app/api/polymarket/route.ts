@@ -994,6 +994,15 @@ async function runFullPipeline(): Promise<any> {
       rec.timeAnalysis = timeAnalysis
       rec.confidence = analysis.confidence
 
+      // Recalculate Kelly with the LLM-informed estimate. The original
+      // scoreMarket Kelly used estimatedProb=marketProb (zero bias) so all
+      // pre-LLM Kellys are 0. Now that we have a real estimate, compute Kelly
+      // on the actual edge so the dashboard's bet-size hint is meaningful.
+      if (matchesDirection && rec.expectedValue > 0) {
+        const { kellyFraction } = calculateKellyBet(1000, rec.estimatedProbability, rec.odds)
+        rec.kellyFraction = kellyFraction
+      }
+
       // ── Improved CV Scoring ──
       // Higher base scores so high-confidence trades can reach 90+
       // Evidence bonus rewards trades backed by real web evidence
@@ -1081,18 +1090,11 @@ async function runFullPipeline(): Promise<any> {
       return b.expectedValue - a.expectedValue
     })
 
-    // Opportunities filter:
-    //   1. Real edges (EV > 0) → always in. These are the "tradable" picks.
-    //   2. Closing-in-24h analyzed markets → in even with EV=0, so the user
-    //      always has visibility into today's pool. They show as RISKY/yellow
-    //      and sort to the bottom by EV — won't crowd out real edges, but
-    //      give the user something to click into when they filter by 24h.
-    const filteredRecs = recommendations.filter(r => {
-      if (r.expectedValue > 0) return true
-      const isClosingSoon = r.daysToClose <= 1
-      const wasAnalyzed = llmResults.has(r.market.question)
-      return isClosingSoon && wasAnalyzed
-    })
+    // Opportunities filter: ONLY positive-EV picks. User strategy is to stack
+    // many small bets across whatever Opus surfaces, redeploying as bets
+    // resolve. Watch-only / no-edge picks (24h analyzed-but-EV=0) live in
+    // closingTodayAnalyzed if we want to surface them separately later.
+    const filteredRecs = recommendations.filter(r => r.expectedValue > 0)
 
     // Dedupe pass 1: both YES and NO recs of the SAME market collapse to the
     // one with higher EV. Was showing every market twice in the opportunities
