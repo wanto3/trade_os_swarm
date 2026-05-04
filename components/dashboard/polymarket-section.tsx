@@ -133,6 +133,10 @@ interface Analytics {
   profitByCategory: Record<string, number>
   equityCurve: Array<{ date: string; value: number }>
   evAccuracyTrades: number
+  byConvictionBand?: Array<{ band: string; scoreRange: string; bets: number; wins: number; losses: number; winRate: number; pnl: number }>
+  byDpsTier?: Array<{ tier: string; bets: number; wins: number; losses: number; winRate: number; pnl: number }>
+  sampleSizeNeeded?: number
+  hasSignificantSample?: boolean
 }
 
 interface Portfolio {
@@ -1436,6 +1440,69 @@ POLYMARKET_CLOB_API_SECRET=...`}
                     <span style={{ fontSize: '0.55rem', color: '#484f58' }}>{analytics.equityCurve[0]?.date}</span>
                     <span style={{ fontSize: '0.55rem', color: '#484f58' }}>{analytics.equityCurve[analytics.equityCurve.length - 1]?.date}</span>
                   </div>
+                </div>
+              )}
+
+              {/* ── Algorithm Validation: per-conviction-band hit rate ───────── */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginTop: '1rem' }}>
+                {analytics.byConvictionBand && (
+                  <div style={{ backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '12px', padding: '1rem' }}>
+                    <h4 style={{ fontSize: '0.7rem', fontWeight: 700, color: '#e6edf3', margin: '0 0 0.75rem 0' }}>
+                      Hit Rate by Conviction Band
+                    </h4>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                      {analytics.byConvictionBand.map((b) => {
+                        const color = b.band === 'no-brainer' ? '#f0c674' : b.band === 'high' ? '#3fb950' : b.band === 'consider' ? '#d4ac4f' : '#a09060'
+                        return (
+                          <div key={b.band} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.65rem' }}>
+                            <span style={{ color, fontWeight: 600 }}>{b.band} ({b.scoreRange})</span>
+                            <span style={{ color: '#8b949e' }}>
+                              {b.bets > 0 ? `${b.winRate.toFixed(0)}% (${b.wins}W/${b.losses}L) • $${b.pnl >= 0 ? '+' : ''}${b.pnl.toFixed(2)}` : 'no resolved bets'}
+                            </span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Per-DPS-tier breakdown */}
+                {analytics.byDpsTier && (
+                  <div style={{ backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '12px', padding: '1rem' }}>
+                    <h4 style={{ fontSize: '0.7rem', fontWeight: 700, color: '#e6edf3', margin: '0 0 0.75rem 0' }}>
+                      Hit Rate by DPS Tier
+                    </h4>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                      {analytics.byDpsTier.filter(t => t.bets > 0 || t.tier !== 'unknown').map((t) => {
+                        const color = t.tier === 'high' ? '#3fb950' : t.tier === 'medium' ? '#d4ac4f' : t.tier === 'low' ? '#a09060' : '#6e7681'
+                        return (
+                          <div key={t.tier} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.65rem' }}>
+                            <span style={{ color, fontWeight: 600 }}>{t.tier} DPS</span>
+                            <span style={{ color: '#8b949e' }}>
+                              {t.bets > 0 ? `${t.winRate.toFixed(0)}% (${t.wins}W/${t.losses}L) • $${t.pnl >= 0 ? '+' : ''}${t.pnl.toFixed(2)}` : 'no resolved bets'}
+                            </span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Sample-size warning */}
+              {analytics.sampleSizeNeeded !== undefined && (
+                <div style={{
+                  marginTop: '1rem',
+                  padding: '0.75rem 1rem',
+                  backgroundColor: analytics.hasSignificantSample ? 'rgba(63, 185, 80, 0.1)' : 'rgba(240, 136, 62, 0.1)',
+                  border: `1px solid ${analytics.hasSignificantSample ? 'rgba(63, 185, 80, 0.4)' : 'rgba(240, 136, 62, 0.4)'}`,
+                  borderRadius: '12px',
+                  fontSize: '0.7rem',
+                  color: analytics.hasSignificantSample ? '#3fb950' : '#f0883e',
+                }}>
+                  {analytics.hasSignificantSample
+                    ? `✓ ${analytics.wonTrades + analytics.lostTrades} resolved bets — sample size sufficient for algorithm validation`
+                    : `⚠ Need ${analytics.sampleSizeNeeded - (analytics.wonTrades + analytics.lostTrades)} more resolved bets (currently ${analytics.wonTrades + analytics.lostTrades}/${analytics.sampleSizeNeeded}) before win-rate stats are statistically meaningful. Place paper trades and let them resolve.`}
                 </div>
               )}
             </>

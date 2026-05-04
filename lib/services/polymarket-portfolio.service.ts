@@ -360,6 +360,24 @@ export function resolvePosition(
   return pos
 }
 
+export interface ConvictionBandStats {
+  band: 'no-brainer' | 'high' | 'consider' | 'risky'
+  scoreRange: string
+  bets: number
+  wins: number
+  losses: number
+  winRate: number
+  pnl: number
+}
+export interface DpsTierStats {
+  tier: 'high' | 'medium' | 'low' | 'unknown'
+  bets: number
+  wins: number
+  losses: number
+  winRate: number
+  pnl: number
+}
+
 export function getAnalytics(): {
   totalTrades: number
   wonTrades: number
@@ -374,6 +392,13 @@ export function getAnalytics(): {
   profitByCategory: Record<string, number>
   equityCurve: Array<{ date: string; value: number }>
   evAccuracyTrades: number
+  // ── Algorithm validation ─────────────────────────────────────────────
+  byConvictionBand: ConvictionBandStats[]
+  byDpsTier: DpsTierStats[]
+  /** Resolved trade count required for statistical confidence. */
+  sampleSizeNeeded: number
+  /** True when total resolved >= sampleSizeNeeded. */
+  hasSignificantSample: boolean
 } {
   const resolved = positions.filter(p => p.status !== 'open' && p.pnl !== undefined)
 
@@ -426,6 +451,51 @@ export function getAnalytics(): {
     equityCurve.push({ date, value })
   }
 
+  // ── Per-conviction-band breakdown — does high-conviction actually win more?
+  const bandsConfig: { band: ConvictionBandStats['band']; scoreRange: string; min: number; max: number }[] = [
+    { band: 'no-brainer', scoreRange: '90-100', min: 90, max: 101 },
+    { band: 'high',       scoreRange: '75-89',  min: 75, max: 90 },
+    { band: 'consider',   scoreRange: '55-74',  min: 55, max: 75 },
+    { band: 'risky',      scoreRange: '<55',    min: 0,  max: 55 },
+  ]
+  const byConvictionBand: ConvictionBandStats[] = bandsConfig.map((cfg) => {
+    const inBand = resolved.filter((p) => p.safetyScore >= cfg.min && p.safetyScore < cfg.max)
+    const wins = inBand.filter((p) => p.status === 'won').length
+    const losses = inBand.filter((p) => p.status === 'lost').length
+    const total = wins + losses
+    return {
+      band: cfg.band,
+      scoreRange: cfg.scoreRange,
+      bets: inBand.length,
+      wins,
+      losses,
+      winRate: total > 0 ? (wins / total) * 100 : 0,
+      pnl: inBand.reduce((s, p) => s + (p.pnl ?? 0), 0),
+    }
+  })
+
+  // ── Per-DPS-tier breakdown — does high-DPS actually outperform?
+  const dpsTiers: ('high' | 'medium' | 'low' | 'unknown')[] = ['high', 'medium', 'low', 'unknown']
+  const byDpsTier: DpsTierStats[] = dpsTiers.map((tier) => {
+    const inTier = resolved.filter((p) => (p.dpsTier ?? 'unknown') === tier)
+    const wins = inTier.filter((p) => p.status === 'won').length
+    const losses = inTier.filter((p) => p.status === 'lost').length
+    const total = wins + losses
+    return {
+      tier,
+      bets: inTier.length,
+      wins,
+      losses,
+      winRate: total > 0 ? (wins / total) * 100 : 0,
+      pnl: inTier.reduce((s, p) => s + (p.pnl ?? 0), 0),
+    }
+  })
+
+  // ── Sample size guidance — 20 resolved bets is a reasonable baseline for
+  //    statistical confidence in a binary win/loss outcome.
+  const SAMPLE_SIZE_NEEDED = 20
+  const hasSignificantSample = totalResolved >= SAMPLE_SIZE_NEEDED
+
   return {
     totalTrades: positions.length,
     wonTrades,
@@ -440,6 +510,10 @@ export function getAnalytics(): {
     profitByCategory,
     equityCurve,
     evAccuracyTrades: evAccuracyTrades.length,
+    byConvictionBand,
+    byDpsTier,
+    sampleSizeNeeded: SAMPLE_SIZE_NEEDED,
+    hasSignificantSample,
   }
 }
 
