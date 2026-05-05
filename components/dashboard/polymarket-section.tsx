@@ -152,7 +152,7 @@ interface Portfolio {
 // ── Sort Types ────────────────────────────────────────────────────────────────
 
 type SortKey = 'fastestProfit' | 'winProb' | 'safety' | 'ev' | 'closing' | 'confidence'
-type FilterKey = 'all' | 'high' | 'medium' | 'low' | '24h' | 'today' | '3days' | '7days' | '14days' | '30days' | 'anyEdge'
+type FilterKey = 'all' | 'high' | 'medium' | 'low' | '24h' | 'today' | '3days' | '7days' | '14days' | '30days' | 'anyEdge' | 'safeScalps'
 type KellyMode = 'quarter' | 'half' | 'full'
 type TabKey = 'opportunities' | 'paper-trades' | 'performance' | 'settings'
 
@@ -296,10 +296,10 @@ export function PolymarketSection() {
   // winners that compound at small per-bet returns are sustainable.
   const [sortKey, setSortKey] = useState<SortKey>('winProb')
   const [secondarySort, setSecondarySort] = useState<SortKey | null>(null)
-  // Default '24h' — user's current strategy is testing with small capital
-  // ($4) on short-term closing-today picks. Long-term picks (Greenland,
-  // Powell, etc.) still accessible via the "All" / 7d / 14d filter buttons.
-  const [filterKey, setFilterKey] = useState<FilterKey>('24h')
+  // Default 'safeScalps' — user's chosen strategy: high-win-prob picks where
+  // Opus agrees with the market price, for compounding small ($4) bankroll.
+  // 24h / 7d / 14d / All filters one click away when wanting time-window focus.
+  const [filterKey, setFilterKey] = useState<FilterKey>('safeScalps')
   const [kellyMode, setKellyMode] = useState<KellyMode>('quarter')
   const [bankroll, setBankroll] = useState<number>(500)
   const [bankrollInput, setBankrollInput] = useState<string>('500')
@@ -557,6 +557,16 @@ export function PolymarketSection() {
     if (filterKey === 'medium') return rec.confidence === 'medium'
     if (filterKey === 'low') return rec.confidence === 'low'
     if (filterKey === 'anyEdge') return rec.expectedValue > 0.03 && rec.safetyScore >= 40
+    if (filterKey === 'safeScalps') {
+      // Category A: Opus AGREES with market (small disagreement) AND high win
+      // probability. Reliable wins for compounding small bankroll. The user
+      // bets the favored side at its market price; expected return is small
+      // per win (5-12%) but win rate is 85%+.
+      const winProb = rec.estimatedProbability
+      const marketPrice = rec.odds
+      const spread = Math.abs(winProb - marketPrice)
+      return winProb >= 0.85 && spread <= 0.10
+    }
     // Only show markets with a real end date in time-based filters
     if (!rec.market.endDateIso) return filterKey === 'all'
     if (filterKey === '24h') return liveDays(rec) <= 1
@@ -1025,6 +1035,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexWrap: 'wrap' }}>
               <span style={{ fontSize: '0.6rem', color: '#6e7681', marginRight: '0.25rem' }}>Filter:</span>
               {([
+                { key: 'safeScalps' as FilterKey, label: `🎯 Safe` },
                 { key: '24h' as FilterKey, label: `24h` },
                 { key: 'today' as FilterKey, label: `≤3d` },
                 { key: '7days' as FilterKey, label: `≤7d` },
@@ -1038,9 +1049,27 @@ POLYMARKET_CLOB_API_SECRET=...`}
                   onClick={() => setFilterKey(tab.key)}
                   style={{
                     padding: '3px 8px', fontSize: '0.58rem', fontWeight: 600,
-                    background: filterKey === tab.key ? (tab.key === '24h' ? 'rgba(248,81,73,0.2)' : tab.key === '14days' || tab.key === '7days' ? 'rgba(240,136,62,0.2)' : tab.key === 'today' ? 'rgba(240,136,62,0.15)' : 'rgba(63, 185, 80, 0.15)') : 'transparent',
-                    color: filterKey === tab.key ? (tab.key === '24h' ? '#f85149' : tab.key === '14days' || tab.key === '7days' || tab.key === 'today' ? '#f0883e' : '#3fb950') : '#6e7681',
-                    border: `1px solid ${filterKey === tab.key ? (tab.key === '24h' ? 'rgba(248,81,73,0.35)' : tab.key === '14days' || tab.key === '7days' || tab.key === 'today' ? 'rgba(240,136,62,0.3)' : 'rgba(63, 185, 80, 0.3)') : '#30363d'}`,
+                    background: filterKey === tab.key
+                      ? (tab.key === 'safeScalps' ? 'rgba(63, 185, 80, 0.25)'
+                        : tab.key === '24h' ? 'rgba(248,81,73,0.2)'
+                        : tab.key === '14days' || tab.key === '7days' ? 'rgba(240,136,62,0.2)'
+                        : tab.key === 'today' ? 'rgba(240,136,62,0.15)'
+                        : 'rgba(63, 185, 80, 0.15)')
+                      : 'transparent',
+                    color: filterKey === tab.key
+                      ? (tab.key === 'safeScalps' ? '#3fb950'
+                        : tab.key === '24h' ? '#f85149'
+                        : tab.key === '14days' || tab.key === '7days' || tab.key === 'today' ? '#f0883e'
+                        : '#3fb950')
+                      : '#6e7681',
+                    border: `1px solid ${
+                      filterKey === tab.key
+                        ? (tab.key === 'safeScalps' ? 'rgba(63, 185, 80, 0.45)'
+                          : tab.key === '24h' ? 'rgba(248,81,73,0.35)'
+                          : tab.key === '14days' || tab.key === '7days' || tab.key === 'today' ? 'rgba(240,136,62,0.3)'
+                          : 'rgba(63, 185, 80, 0.3)')
+                        : '#30363d'
+                    }`,
                     borderRadius: '16px', cursor: 'pointer',
                   }}
                 >
