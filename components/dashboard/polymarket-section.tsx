@@ -558,14 +558,14 @@ export function PolymarketSection() {
     if (filterKey === 'low') return rec.confidence === 'low'
     if (filterKey === 'anyEdge') return rec.expectedValue > 0.03 && rec.safetyScore >= 40
     if (filterKey === 'safeScalps') {
-      // Category A: Opus AGREES with market (small disagreement) AND high win
-      // probability. Reliable wins for compounding small bankroll. The user
-      // bets the favored side at its market price; expected return is small
-      // per win (5-12%) but win rate is 85%+.
+      // Category A "real" — Opus must estimate STRICTLY HIGHER win probability
+      // than the market price (otherwise EV = 0 before fees, slight loss after).
+      // Spread capped at 10% so we stay in "safe" territory rather than huge-
+      // edge claims that depend on Opus being right.
       const winProb = rec.estimatedProbability
       const marketPrice = rec.odds
-      const spread = Math.abs(winProb - marketPrice)
-      return winProb >= 0.85 && spread <= 0.10
+      const spread = winProb - marketPrice  // signed: positive means Opus is bullish vs market
+      return winProb >= 0.85 && spread > 0 && spread <= 0.10
     }
     // Only show markets with a real end date in time-based filters
     if (!rec.market.endDateIso) return filterKey === 'all'
