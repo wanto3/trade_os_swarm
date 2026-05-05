@@ -282,7 +282,11 @@ const MODEL_LABEL: Record<ScreeningModel, string> = {
  *
  * Set PARALLEL_BATCHES env var to override the split count (default 2).
  */
-const PARALLEL_BATCHES = Math.max(1, parseInt(process.env.PARALLEL_BATCHES || '3', 10))
+// Default 2 parallel batches (was 3). On Render free-tier, 3 simultaneous
+// claude -p subprocesses contend for CPU and all time out together. Two
+// works reliably; bump back up via PARALLEL_BATCHES env var if you upgrade
+// to a paid Render tier.
+const PARALLEL_BATCHES = Math.max(1, parseInt(process.env.PARALLEL_BATCHES || '2', 10))
 
 // Module-level error trail captured during the most recent screening run.
 // Populated by screenSingleBatch's fallback loop, surfaced by getLastBatchErrors()
@@ -364,10 +368,13 @@ async function screenSingleBatch(
             : tryModel === 'sonnet' ? 'claude-sonnet-4-6'
             : 'claude-haiku-4-5'
         // Haiku is fastest (~10s for batched), Sonnet medium (~30-60s),
-        // Opus slowest (~60-120s). Bump timeout for the slower models.
-        const timeoutMs = tryModel === 'haiku' ? 60_000
-          : tryModel === 'sonnet' ? 180_000
-          : 240_000
+        // Opus slowest (~60-120s on a beefy machine, ~3-5min on Render
+        // free-tier where CPU is throttled and parallel claude -p
+        // invocations contend for resources). Generous timeouts so
+        // we don't kill a call that's making progress.
+        const timeoutMs = tryModel === 'haiku' ? 90_000
+          : tryModel === 'sonnet' ? 240_000
+          : 420_000  // Opus: 7 min upper bound
         const parsed = await callClaudeCode<unknown>({
           prompt,
           model: claudeModel,

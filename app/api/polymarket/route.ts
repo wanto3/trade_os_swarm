@@ -765,9 +765,12 @@ async function runFullPipeline(): Promise<any> {
     // DPS-prioritized candidate selection: high-DPS first (politics, esports, box-office,
     // crypto-milestones), medium-DPS to fill, skip low-DPS. Per-category cap (8) ensures
     // diversity so we don't analyze 30 politics markets and zero crypto-milestones.
-    // 40 markets per analysis batch — surfaces more diverse opportunities.
-    // With parallel batches, wall time stays manageable (~40s cold).
-    const MAX_ANALYSIS = 40
+    // 24 markets per analysis run (down from 40) — Render free-tier CPU
+    // can't reliably finish 40-market Opus calls before timeout. With
+    // PARALLEL_BATCHES=2 default, that's ~12 markets per Opus call which
+    // fits comfortably in the 7-minute timeout. Override via env var if
+    // you need more coverage on a paid tier.
+    const MAX_ANALYSIS = parseInt(process.env.MAX_ANALYSIS || '24', 10)
     const CATEGORY_CAP = 8
 
     // DPS info per market (cached in a side-Map keyed by question).
@@ -784,7 +787,10 @@ async function runFullPipeline(): Promise<any> {
     //   Tier 1 (closing in ≤48h): up to T1_MAX, high+medium DPS
     //   Tier 2 (closing in ≤7d):  fill remaining, high+medium DPS, per-cat cap
     //   Tier 3 (closing later):   high DPS only
-    const T1_MAX = 30  // 2-day window — generous slot count
+    // Tier 1 budget can't exceed total analysis budget. Was 30 (worked when
+    // MAX_ANALYSIS=40); now scales with MAX_ANALYSIS so reducing total budget
+    // doesn't accidentally swallow all of T1.
+    const T1_MAX = Math.min(20, MAX_ANALYSIS)  // 2-day window — generous slot count
     const T1_DAYS = 2
     const T2_DAYS = 7
 
