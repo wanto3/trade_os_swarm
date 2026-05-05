@@ -103,6 +103,7 @@ async function callGroqBatch(prompt: string, retries = 3): Promise<string> {
   const apiKey = process.env.GROQ_API_KEY
   if (!apiKey) throw new Error('GROQ_API_KEY not set')
 
+  let lastError = 'unknown' // capture so "max retries exceeded" carries context
   for (let attempt = 0; attempt < retries; attempt++) {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 45_000) // 45s for big batch
@@ -127,6 +128,8 @@ async function callGroqBatch(prompt: string, retries = 3): Promise<string> {
 
       if (res.status === 429) {
         const waitMs = Math.min(15_000, (attempt + 1) * 4_000)
+        const body = (await res.text()).substring(0, 200)
+        lastError = `429 rate-limited (${body})`
         console.log(`[Screening] Rate limited, waiting ${waitMs}ms (retry ${attempt + 1}/${retries})`)
         await new Promise((r) => setTimeout(r, waitMs))
         continue
@@ -140,14 +143,16 @@ async function callGroqBatch(prompt: string, retries = 3): Promise<string> {
     } catch (e: unknown) {
       clearTimeout(timeout)
       if (e instanceof Error && e.name === 'AbortError') {
+        lastError = `timeout on attempt ${attempt + 1}`
         console.log(`[Screening] Timeout on attempt ${attempt + 1}`)
         continue
       }
+      lastError = e instanceof Error ? e.message : String(e)
       if (attempt === retries - 1) throw e
       await new Promise((r) => setTimeout(r, 2_000))
     }
   }
-  throw new Error('Screening: max retries exceeded')
+  throw new Error(`Screening: max retries exceeded — last error: ${lastError}`)
 }
 
 // ─── Response Parsing ────────────────────────────────────────────────────────
@@ -379,7 +384,7 @@ async function screenSingleBatch(
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       console.warn(`[Screening] ${MODEL_LABEL[tryModel]} failed: ${msg}`)
-      lastBatchErrors.push(`${MODEL_LABEL[tryModel]}: ${msg.substring(0, 200)}`)
+      lastBatchErrors.push(`${MODEL_LABEL[tryModel]}: ${msg.substring(0, 600)}`)
       // try next in chain
     }
   }
