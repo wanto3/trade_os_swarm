@@ -45,6 +45,12 @@ export interface TradeRecommendation {
   longTail: LongTailAnalysis | null
   timeAnalysis: TimeAnalysis
   orderBookSignal?: { imbalance: number; momentum: 'up' | 'down' | 'neutral' } | null
+  // LLM-emitted direction. 'skip' means the model declined to bet (low conf,
+  // edge too small, direction-estimate inconsistent, or LLM dropped this market
+  // from the batch). Tracked separately from expectedValue so the opportunities
+  // filter can exclude skip-picks even when the side prob ≥ 50%, which
+  // previously caused "85% YES, EV=0" cards to leak into the dashboard.
+  llmDirection?: 'yes' | 'no' | 'skip'
 }
 
 // ── New: Conviction & Research Types ────────────────────────────────────────
@@ -995,6 +1001,7 @@ async function runFullPipeline(): Promise<any> {
       rec.reasoning = analysis.reasoning
       rec.timeAnalysis = timeAnalysis
       rec.confidence = analysis.confidence
+      rec.llmDirection = analysis.direction
 
       // Recalculate Kelly with the LLM-informed estimate. The original
       // scoreMarket Kelly used estimatedProb=marketProb (zero bias) so all
@@ -1093,19 +1100,34 @@ async function runFullPipeline(): Promise<any> {
     })
 
     // Opportunities filter — never recommend a side that Opus thinks will
-    // LOSE. Two ways in:
-    //   1. Positive-EV picks (real mispricing edges)
-    //   2. High-win-probability picks (Opus says THIS side will win with
-    //      ≥50% confidence) — for the user's win-rate-over-EV strategy.
+    // LOSE, and never surface picks the LLM explicitly skipped.
+    //   1. Positive-EV picks (real mispricing edges) — must NOT be skip.
+    //   2. High-win-probability picks (Opus says THIS side wins ≥50%) — must
+    //      ALSO not be skip, otherwise we leak "85% YES, EV=0" cards where
+    //      the model actually declined to bet (low confidence, edge below
+    //      threshold, or direction-estimate inconsistent → forced skip).
     // Below 50% = Opus thinks this side loses → exclude regardless of how
-    // close-to-resolution the market is. Was incorrectly letting underdog
-    // sides through (e.g. "bet Nigma Galaxy" when Opus said 6% win prob).
+    // close-to-resolution the market is.
     const filteredRecs = recommendations.filter(r => {
+      // Hard exclude: model explicitly skipped (low conf / tiny edge /
+      // inconsistent / dropped from batch). EV is 0 for these by construction
+      // and surfacing them as "opportunities" is misleading.
+      if (r.llmDirection === 'skip') return false
       if (r.expectedValue > 0) return true
       const wasAnalyzed = llmResults.has(r.market.question)
       const opusBacksThisSide = r.estimatedProbability >= 0.50
       return wasAnalyzed && opusBacksThisSide
     })
+
+    // Audit log: how many analyzed markets ended in 'skip' vs actionable.
+    // Spike here = prompt or model issue (e.g. Opus returning 'low' conf on
+    // everything). Stable low rate = healthy.
+    const skipCount = Array.from(llmResults.values()).filter(a => a.direction === 'skip').length
+    const totalAnalyzed = llmResults.size
+    if (totalAnalyzed > 0) {
+      const skipPct = (skipCount / totalAnalyzed * 100).toFixed(0)
+      console.log(`[Pipeline] LLM skip rate: ${skipCount}/${totalAnalyzed} (${skipPct}%) — high values mean low confidence or tiny edges`)
+    }
 
     // Dedupe pass 1: both YES and NO recs of the SAME market collapse to the
     // one with higher EV. Was showing every market twice in the opportunities
