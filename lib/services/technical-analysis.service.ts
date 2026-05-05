@@ -111,6 +111,29 @@ async function fetchKlines(symbol: string, interval: string, limit = 100): Promi
 async function fetchPriceAndChange(symbol: string): Promise<{ price: number; change24h: number }> {
   const cfg = SYMBOL_MAP[symbol]
   if (!cfg) throw new Error(`Unknown symbol: ${symbol}`)
+
+  // Try Binance first — much higher free-tier rate limits, faster, no auth needed.
+  // Production (Render) shares IPs with other free instances and CoinGecko's
+  // rate limit (~10-30 calls/min) gets exhausted quickly.
+  try {
+    const binanceUrl = `https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}`
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 5_000)
+    const res = await fetch(binanceUrl, { signal: controller.signal })
+    clearTimeout(timeout)
+    if (res.ok) {
+      const data = await res.json() as { lastPrice: string; priceChangePercent: string }
+      return {
+        price: parseFloat(data.lastPrice),
+        change24h: parseFloat(data.priceChangePercent),
+      }
+    }
+    // fall through to CoinGecko on non-200
+  } catch {
+    // Network/timeout — fall through to CoinGecko
+  }
+
+  // Fallback: CoinGecko (rate-limited, but still useful for symbols Binance doesn't list)
   const url = `https://api.coingecko.com/api/v3/simple/price?ids=${cfg.cg}&vs_currencies=usd&include_24hr_change=true`
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 10_000)
