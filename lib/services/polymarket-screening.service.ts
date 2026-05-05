@@ -383,8 +383,19 @@ async function screenSingleBatch(
       break
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
-      console.warn(`[Screening] ${MODEL_LABEL[tryModel]} failed: ${msg}`)
-      lastBatchErrors.push(`${MODEL_LABEL[tryModel]}: ${msg.substring(0, 600)}`)
+      // Redact secrets before logging or surfacing in API response. The
+      // claude -p subprocess can echo the Authorization header in error
+      // payloads (e.g. "API Error: Header '14' has invalid value:
+      // 'Bearer sk-ant-oat01-...'"), and screeningErrors goes to the
+      // public API response. Anything matching common token prefixes
+      // gets stripped to prefix+'***REDACTED***'.
+      const safe = msg
+        .replace(/sk-ant-oat01-[A-Za-z0-9_\-\s]+/g, 'sk-ant-oat01-***REDACTED***')
+        .replace(/sk-ant-api[0-9]+-[A-Za-z0-9_\-\s]+/g, 'sk-ant-api***REDACTED***')
+        .replace(/gsk_[A-Za-z0-9]+/g, 'gsk_***REDACTED***')
+        .replace(/Bearer\s+[A-Za-z0-9_\-\.]+/g, 'Bearer ***REDACTED***')
+      console.warn(`[Screening] ${MODEL_LABEL[tryModel]} failed: ${safe}`)
+      lastBatchErrors.push(`${MODEL_LABEL[tryModel]}: ${safe.substring(0, 600)}`)
       // try next in chain
     }
   }
