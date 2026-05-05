@@ -1275,6 +1275,28 @@ async function runFullPipeline(): Promise<any> {
       })),
       longTailOpportunities: allOpportunities.filter(r => r.longTail !== null),
       hotMarkets,
+      // Debug: raw per-market LLM verdicts. Lets us audit "Opus screened N,
+      // surfaced 0" — see whether direction='skip' (and which subkind: low
+      // confidence, edge<threshold, inconsistent), or whether reasoning
+      // looks fabricated. Intentionally always-on at this stage; remove when
+      // recommendation quality stabilizes. Each entry is small (~10 fields).
+      screenedDebug: selectedForAnalysis.map(rec => {
+        const a = llmResults.get(rec.market.question)
+        const yesPrice = rec.market.outcomePrices?.[0] ?? rec.odds
+        return {
+          question: rec.market.question,
+          yesPrice,
+          daysToClose: rec.timeAnalysis?.daysToClose ?? null,
+          llm: a ? {
+            direction: a.direction,
+            confidence: a.confidence,
+            yourEstimate: a.estimatedProbability,
+            edgeSize: a.edgeSize,
+            shouldBet: a.shouldBet,
+            reasoning: a.reasoning?.substring(0, 200) ?? '',
+          } : null,
+        }
+      }),
       stats: {
         marketsAnalyzed: rawMarkets.length,
         // Diagnostic counts so the UI can show "Analyzed N markets, found M opportunities"
