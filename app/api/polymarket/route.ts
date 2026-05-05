@@ -742,7 +742,7 @@ async function runFullPipeline(): Promise<any> {
     // Phase 2 (per-market deep-dive with Opus) is opt-in via a separate
     // endpoint and runs only on user click. DPS classification + skip
     // for low-DPS domains still applies.
-    const { screenMarketsBatch, toScreeningInputs } = await import('@/lib/services/polymarket-screening.service')
+    const { screenMarketsBatch, toScreeningInputs, getLastBatchErrors } = await import('@/lib/services/polymarket-screening.service')
     const { scoreDomainPredictability, recommendModel } = await import('@/lib/services/dps.service')
     const polymarketResearchModule = await import('@/lib/services/polymarket-research.service')
     const fetchOrderBookImbalance = (polymarketResearchModule as Record<string, unknown>).fetchOrderBookImbalance as ((id: string) => Promise<{ imbalance: number; momentum: 'up' | 'down' | 'neutral' } | null>) | undefined
@@ -1275,6 +1275,11 @@ async function runFullPipeline(): Promise<any> {
       })),
       longTailOpportunities: allOpportunities.filter(r => r.longTail !== null),
       hotMarkets,
+      // Debug: error trail from the most recent screening run. Captures
+      // which fallback models failed and why (auth, timeout, rate limit,
+      // parse failure, etc.). Empty array = healthy. Critical for diagnosing
+      // "0 opportunities" on Render where we can't tail logs cheaply.
+      screeningErrors: getLastBatchErrors(),
       // Debug: raw per-market LLM verdicts. Lets us audit "Opus screened N,
       // surfaced 0" — see whether direction='skip' (and which subkind: low
       // confidence, edge<threshold, inconsistent), or whether reasoning

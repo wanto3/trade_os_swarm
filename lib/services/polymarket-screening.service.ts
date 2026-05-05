@@ -279,10 +279,24 @@ const MODEL_LABEL: Record<ScreeningModel, string> = {
  */
 const PARALLEL_BATCHES = Math.max(1, parseInt(process.env.PARALLEL_BATCHES || '3', 10))
 
+// Module-level error trail captured during the most recent screening run.
+// Populated by screenSingleBatch's fallback loop, surfaced by getLastBatchErrors()
+// so the API route can include it in the debug response. We need this because
+// "all fallbacks failed" silently returns an empty Map — and on Render we can't
+// always tail logs to find out why (claude -p auth, missing GROQ_API_KEY,
+// timeout, etc.).
+let lastBatchErrors: string[] = []
+export function getLastBatchErrors(): string[] {
+  return lastBatchErrors.slice()
+}
+
 export async function screenMarketsBatch(
   markets: ScreeningInput[],
   model: ScreeningModel = 'opus'
 ): Promise<Map<string, LLMMarketAnalysis>> {
+  // Reset the error trail at the start of every screening run so the API
+  // response only shows errors from the most recent attempt.
+  lastBatchErrors = []
   const results = new Map<string, LLMMarketAnalysis>()
   if (markets.length === 0) return results
 
@@ -363,20 +377,27 @@ async function screenSingleBatch(
       }
       break
     } catch (e) {
-      console.warn(
-        `[Screening] ${MODEL_LABEL[tryModel]} failed: ${e instanceof Error ? e.message : e}`
-      )
+      const msg = e instanceof Error ? e.message : String(e)
+      console.warn(`[Screening] ${MODEL_LABEL[tryModel]} failed: ${msg}`)
+      lastBatchErrors.push(`${MODEL_LABEL[tryModel]}: ${msg.substring(0, 200)}`)
       // try next in chain
     }
   }
 
   if (!rawResponse) {
     console.error('[Screening] All fallback models failed')
+    lastBatchErrors.push('ALL_FALLBACKS_FAILED')
     return results
   }
 
   const assessments = stripFencesAndParse(rawResponse)
   console.log(`[Screening] Parsed ${assessments.length} assessments from batch response`)
+  if (assessments.length === 0) {
+    // Got a response from some fallback model but couldn't extract any
+    // assessments. Capture a preview so we can see whether it's prose
+    // wrapping, a refusal, or completely unrelated output.
+    lastBatchErrors.push(`PARSE_EMPTY: rawLen=${rawResponse.length} preview="${rawResponse.substring(0, 200).replace(/\s+/g, ' ')}"`)
+  }
 
   // Index assessments by marketId for lookup
   const byId = new Map<string, BatchAssessment>()
