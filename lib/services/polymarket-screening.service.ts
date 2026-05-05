@@ -322,10 +322,16 @@ async function screenSingleBatch(
   if (markets.length === 0) return results
   const prompt = buildBatchScreeningPrompt(markets)
 
+  // Detect serverless environment — Vercel/Lambda can't spawn `claude -p`
+  // subprocess (no Claude Code binary, no OAuth creds on their machines).
+  // Skip the claude-code path entirely and go straight to Groq HTTP API.
+  const IS_SERVERLESS = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME)
+
   // Build fallback chain so we never end up with 0 results from a transient
   // failure on one provider. Order picked by speed — first success wins.
-  const fallbackChain: ScreeningModel[] =
-    model === 'haiku'  ? ['haiku', 'groq', 'sonnet']
+  const fallbackChain: ScreeningModel[] = IS_SERVERLESS
+    ? ['groq']  // serverless: only Groq HTTP API works
+    : model === 'haiku'  ? ['haiku', 'groq', 'sonnet']
       : model === 'groq'   ? ['groq', 'haiku', 'sonnet']
       : model === 'sonnet' ? ['sonnet', 'haiku', 'groq']
       : ['opus', 'sonnet', 'haiku', 'groq']
