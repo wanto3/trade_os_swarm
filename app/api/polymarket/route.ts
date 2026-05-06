@@ -906,12 +906,27 @@ async function runFullPipeline(): Promise<any> {
       }
     }
 
-    // Pass 1: tier-1 (≤2d) — accept ALL DPS tiers. User trades closing-soon
-    // markets daily AND has documented edge in esports (which the DPS
-    // classifier tags as low-DPS sports). Excluding esports here means
-    // we never give the user a daily 24h shortlist of their best category.
-    // The Watch List on the dashboard surfaces skip-picks too, so the user
-    // sees every analyzed 24h market regardless of Opus's verdict.
+    // Priority pre-pass: include EVERY closing-soon esports market before
+    // doing round-robin. The user has documented edge in esports 24h —
+    // missing one (e.g. Dplus KIA vs KT Rolster) because round-robin
+    // rotation didn't reach esports's queue is a real loss of value. The
+    // Watch List surfaces these even when Opus skips, so the user can apply
+    // their own scene knowledge. Politics also priority because it's
+    // already high-DPS but the user trades it daily too.
+    const PRIORITY_CATS = new Set(['esports', 'politics', 'crypto-milestone'])
+    for (const rec of t1) {
+      if (selectedForAnalysis.length >= T1_MAX) break
+      const dps = dpsInfo.get(rec.market.question)
+      if (!dps || !PRIORITY_CATS.has(dps.category)) continue
+      if (usedQuestions.has(rec.market.question)) continue
+      selectedForAnalysis.push(rec)
+      usedQuestions.add(rec.market.question)
+      categoryFill[dps.category] = (categoryFill[dps.category] || 0) + 1
+      tierFill.t1++
+    }
+
+    // Pass 1: tier-1 (≤2d) — accept ALL DPS tiers. After the priority pass,
+    // round-robin fills remaining T1 budget across other categories.
     roundRobinPick(t1, 't1', () => Math.max(0, T1_MAX - selectedForAnalysis.length),
       () => true)
 
@@ -1222,8 +1237,17 @@ async function runFullPipeline(): Promise<any> {
     const closingTodayAnalyzed = recommendations
       .filter(r => {
         if (!r.market.endDateIso) return false
-        if (r.daysToClose > 1) return false
-        return llmResults.has(r.market.question)
+        if (!llmResults.has(r.market.question)) return false
+        // Always include ≤24h analyzed picks (the user's daily target)
+        if (r.daysToClose <= 1) return true
+        // Also include ≤3d esports/sports analyzed picks so the user can
+        // plan ahead on matches with directional priors (e.g. Karmine vs G2
+        // tomorrow, CS PGL group stage in 3 days). These categories don't
+        // surface as "opportunities" easily because Opus rarely has
+        // citable form data, but the user has scene knowledge to apply.
+        const dps = dpsInfo.get(r.market.question)
+        const isSportLike = dps && (dps.category === 'esports' || dps.category === 'sports' || dps.category === 'live-sports' || dps.category === 'sports-prop')
+        return Boolean(isSportLike) && r.daysToClose <= 3
       })
       .sort((a, b) => b.expectedValue - a.expectedValue)
 
