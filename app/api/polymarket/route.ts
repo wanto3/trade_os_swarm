@@ -783,16 +783,16 @@ async function runFullPipeline(): Promise<any> {
     // DPS-prioritized candidate selection: high-DPS first (politics, esports, box-office,
     // crypto-milestones), medium-DPS to fill, skip low-DPS. Per-category cap (8) ensures
     // diversity so we don't analyze 30 politics markets and zero crypto-milestones.
-    // 45 markets per analysis run. Sized to give:
-    //   - T1 (≤2d closing): ~22 slots (24h target, user trades daily)
-    //   - T2 (2-7d): ~8 slots (medium-term)
-    //   - T3 (>7d): ~15 slots (long-term AI-edge — politics, geopolitics,
-    //     corporate-ma, crypto-milestone — where Opus's base-rate reasoning
-    //     from training data is strongest)
-    // One sequential Opus call on 45 markets runs ~300-350s, comfortably
-    // inside the 7-min timeout. Override MAX_ANALYSIS for more on a paid
-    // tier where parallel batches work.
-    const MAX_ANALYSIS = parseInt(process.env.MAX_ANALYSIS || '45', 10)
+    // 55 markets per analysis run. Sized to give:
+    //   - T1 (≤3d closing): ~36 slots (user's primary trading window —
+    //     "more 24h and ≤3d markets, find edge there")
+    //   - T2 (3-7d): ~8 slots (medium-term)
+    //   - T3 (>7d): ~11 slots (long-term AI-edge picks still surface)
+    // One sequential Opus call on 55 markets runs ~370-430s, safely
+    // inside the 7-min Opus timeout (420s) — actually we just bumped
+    // the Opus timeout to 480s in claude-code-llm.service so this fits
+    // with margin. Override MAX_ANALYSIS for more on a paid tier.
+    const MAX_ANALYSIS = parseInt(process.env.MAX_ANALYSIS || '55', 10)
     // Per-category cap. Was 8 (deliberately low to force diversity), but
     // for closing-soon coverage we'd rather have 12 BTC-bracket safe-scalps
     // than enforce hard diversity that leaves T1 budget unspent.
@@ -812,15 +812,15 @@ async function runFullPipeline(): Promise<any> {
     //   Tier 1 (closing in ≤48h): up to T1_MAX, high+medium DPS
     //   Tier 2 (closing in ≤7d):  fill remaining, high+medium DPS, per-cat cap
     //   Tier 3 (closing later):   high DPS only
-    // Explicit per-tier budgets so closing-soon coverage AND long-term
-    // AI-edge picks both get their share, instead of T2 or T1 swallowing
-    // T3's slots via greedy round-robin.
-    //   T1 = 50%: 24h-2d markets where user trades daily
-    //   T2 =  ~18%: 2-7d medium-term
-    //   T3 =  rest: >7d long-term predictions (Opus's base-rate strength)
-    const T1_MAX = Math.min(MAX_ANALYSIS, Math.max(15, Math.floor(MAX_ANALYSIS * 0.50)))  // ~22 of 45
-    const T2_MAX = Math.max(5, Math.floor(MAX_ANALYSIS * 0.18))                            // ~8  of 45
-    const T1_DAYS = 2
+    // Explicit per-tier budgets — heavily biased to ≤3d closing-soon
+    // (the user's actual trading window) per their request: "explore more
+    // markets for the 24h or 3 days mark and find an edge."
+    //   T1 = 65%: ≤3d markets (T1_DAYS extended from 2 → 3 below)
+    //   T2 = ~15%: 3-7d medium-term
+    //   T3 = rest: >7d long-term AI-edge picks (still surface, just less)
+    const T1_MAX = Math.min(MAX_ANALYSIS, Math.max(20, Math.floor(MAX_ANALYSIS * 0.65)))  // ~36 of 55
+    const T2_MAX = Math.max(5, Math.floor(MAX_ANALYSIS * 0.15))                            // ~8  of 55
+    const T1_DAYS = 3  // user's "24h to 3d" primary trading window
     const T2_DAYS = 7
 
     const sortByFast = (arr: TradeRecommendation[]) =>

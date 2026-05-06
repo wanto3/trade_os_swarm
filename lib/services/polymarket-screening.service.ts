@@ -117,12 +117,16 @@ ${marketLines}
 
   - For genuinely 50/50 coin-flips with no signal either way: return direction="skip" with yourEstimate = the market's yesPrice (DON'T fabricate a number like 0.79 when you actually mean "I don't know").
 
-🎯 DAILY COMPOUND TARGET — the user is compounding $4 toward $100 in 30 days. This requires ~11%/day growth = ONE GOOD TRADE PER DAY at 80% win rate, $1 stake at 70-87% YES with 8-15pt edge. Be especially attentive to this shape:
+🎯 DAILY COMPOUND TARGET — the user is compounding $4 toward $100 in 30 days. This requires ~11%/day growth from picks closing within 24h to 3 DAYS so capital recycles fast enough. Their primary trading window is ≤3d markets, so:
 
-  - Heavy favorites at YES 75-90% closing within 48h, where Opus thinks the real probability is 5-15pts higher (e.g. market 80%, your estimate 88-92%).
+  - HUNT EDGE in EVERY ≤72h market — don't reflexively skip. Every closing-soon market deserves a real read:
+      * Heavy favorites at YES 70-92% closing within 3 days, where you estimate real probability is 5-15pts higher (e.g. market 80%, your estimate 88-92%). Even small confirmed edges (3-5pt) on ≤3d heavy favorites are valuable safe-scalp territory because they cycle fast.
+      * Mid-favorite picks (YES 50-70%) where your estimate diverges 7-15pts from market — these have higher payout multiplier per win.
+      * Recent-event markets (election results, sports outcomes, news triggers) where the resolution may already be locked but the price hasn't fully updated.
   - These should be confidence="high" or "medium" with shouldBet=true.
-  - Reasoning should cite a specific reason for the edge (recent news, base rate, structural advantage).
-  - If you find one, this is the user's daily compounding bet.
+  - Reasoning should cite a specific reason for the edge (recent news, base rate, structural advantage, polling pattern, etc.).
+  - The user has documented edge in esports — for those, give your directional lean even at medium confidence so the user can apply scene knowledge.
+  - DO NOT just default to skip on ≤3d markets — the user explicitly wants you to explore this window aggressively.
 
 🚀 AGGRESSIVE LONGSHOT (Cat B mispricings) — secondary path, higher variance, single big winner can compound a month of growth. ACTIVELY scan for:
 
@@ -436,12 +440,12 @@ async function screenSingleBatch(
             : 'claude-haiku-4-5'
         // Haiku is fastest (~10s for batched), Sonnet medium (~30-60s),
         // Opus slowest (~60-120s on a beefy machine, ~3-5min on Render
-        // free-tier where CPU is throttled and parallel claude -p
-        // invocations contend for resources). Generous timeouts so
-        // we don't kill a call that's making progress.
+        // free-tier). Bumped Opus to 8min to accommodate 55-market
+        // sequential batches (was 45-market max). Sonnet/Haiku timeouts
+        // unchanged — they're fallbacks, not the primary path.
         const timeoutMs = tryModel === 'haiku' ? 90_000
           : tryModel === 'sonnet' ? 240_000
-          : 420_000  // Opus: 7 min upper bound
+          : 480_000  // Opus: 8 min upper bound
         const parsed = await callClaudeCode<unknown>({
           prompt,
           model: claudeModel,
