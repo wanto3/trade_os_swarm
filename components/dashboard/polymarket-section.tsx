@@ -71,6 +71,11 @@ interface ApiResponse {
   hotNowOpportunities: TradeRecommendation[]
   closingSoonOpportunities: TradeRecommendation[]
   longTailOpportunities: TradeRecommendation[]
+  // Every ≤24h market that Opus actually analyzed, regardless of whether
+  // it ended in a bet recommendation. Surfaced as a "Watch List" so users
+  // see what was considered — including skip-direction picks — instead of
+  // a blank tab when high-conviction 24h opportunities are scarce.
+  closingTodayAnalyzed?: TradeRecommendation[]
   hotMarkets: Market[]
   stats: {
     marketsAnalyzed: number
@@ -1292,6 +1297,111 @@ POLYMARKET_CLOB_API_SECRET=...`}
               </div>
             )}
           </div>
+
+          {/* ── Watch List: 24h markets Opus analyzed but didn't bet ──
+              Shown under 24h / ≤3d filters so the user always sees what
+              was considered, even when the high-conviction list is empty.
+              These are direction='skip' picks (low conf or tiny edge) so we
+              label them as "considered, not recommended" to avoid implying
+              they're bets. */}
+          {(filterKey === '24h' || filterKey === 'today') && (() => {
+            const watchRaw = data?.closingTodayAnalyzed ?? []
+            // Dedupe: API returns both YES and NO sides per market; keep one
+            // per question. Also drop any that are already in `filtered`
+            // (those are real opportunities, no need to duplicate).
+            const filteredQuestions = new Set(filtered.map(f => f.market.question))
+            const seen = new Set<string>()
+            const watchList = watchRaw.filter(r => {
+              if (filteredQuestions.has(r.market.question)) return false
+              if (seen.has(r.market.question)) return false
+              seen.add(r.market.question)
+              return true
+            })
+            if (watchList.length === 0) return null
+            return (
+              <div style={{ marginTop: '1rem' }}>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: '0.5rem',
+                  marginBottom: '0.5rem', fontSize: '0.7rem',
+                  color: '#8b949e', textTransform: 'uppercase', letterSpacing: '0.04em',
+                }}>
+                  👀 Watch List — Opus considered but skipped ({watchList.length})
+                </div>
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+                  gap: '0.5rem',
+                }}>
+                  {watchList.map((rec) => {
+                    const liveDaysToClose = liveDays(rec)
+                    return (
+                      <a
+                        key={`watch-${rec.market.id}`}
+                        href={rec.market.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          backgroundColor: '#0d1117',
+                          border: '1px dashed #30363d',
+                          borderRadius: '10px',
+                          padding: '0.6rem 0.75rem',
+                          textDecoration: 'none',
+                          color: '#8b949e',
+                          display: 'flex', flexDirection: 'column', gap: '0.35rem',
+                          fontSize: '0.65rem',
+                        }}
+                      >
+                        <div style={{
+                          display: 'flex', justifyContent: 'space-between',
+                          alignItems: 'center', gap: '0.5rem',
+                        }}>
+                          <span style={{
+                            fontSize: '0.55rem',
+                            color: '#f85149',
+                            backgroundColor: 'rgba(248,81,73,0.12)',
+                            padding: '0.1rem 0.4rem',
+                            borderRadius: '4px',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.04em',
+                            fontWeight: 600,
+                          }}>
+                            {(rec as TradeRecommendation & { llmDirection?: string }).llmDirection === 'skip' ? 'Low conf' : 'Skipped'}
+                          </span>
+                          <span style={{ fontSize: '0.55rem', color: '#6e7681' }}>
+                            {liveDaysToClose <= 1 ? `${Math.max(1, Math.round(liveDaysToClose * 24))}h` : `${liveDaysToClose.toFixed(1)}d`}
+                          </span>
+                        </div>
+                        <div style={{ color: '#c9d1d9', fontSize: '0.75rem', lineHeight: 1.3 }}>
+                          {rec.market.question}
+                        </div>
+                        <div style={{
+                          display: 'flex', justifyContent: 'space-between',
+                          fontSize: '0.55rem', color: '#6e7681',
+                        }}>
+                          <span>Mkt YES: {(rec.odds * 100).toFixed(0)}%</span>
+                          <span>Opus est: {(rec.estimatedProbability * 100).toFixed(0)}%</span>
+                        </div>
+                        {rec.reasoning && (
+                          <div style={{
+                            fontSize: '0.6rem', color: '#6e7681',
+                            fontStyle: 'italic', lineHeight: 1.3,
+                          }}>
+                            {rec.reasoning.length > 110 ? rec.reasoning.substring(0, 110) + '…' : rec.reasoning}
+                          </div>
+                        )}
+                      </a>
+                    )
+                  })}
+                </div>
+                <div style={{
+                  marginTop: '0.5rem', fontSize: '0.6rem',
+                  color: '#6e7681', fontStyle: 'italic',
+                }}>
+                  These markets close soon but Opus flagged low confidence or tiny edge. If you have your own read (e.g. you follow the team / event), use your judgment.
+                </div>
+              </div>
+            )
+          })()}
         </>
       )}
 

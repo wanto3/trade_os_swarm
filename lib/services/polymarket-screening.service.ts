@@ -80,11 +80,14 @@ ${marketLines}
 For EACH market, output:
 - yourEstimate: YES probability (0.0-1.0). NOT a percentage. Use 0.05 for "5% likely YES", 0.85 for "85% likely YES", etc.
 - direction: "yes" if you think YES is undervalued (bet YES); "no" if YES is overvalued (bet NO); "skip" if within ~5% of market price (or ~3% for closing-soon)
-- confidence: "high" only if specific real-world facts strongly disagree with market; "medium" if some signal but not decisive; "low" if speculative
-- reasoning: 1-2 sentences explaining the call. For closing-soon picks, name the specific fact/event that creates edge.
+- confidence — calibrate honestly, not defensively:
+    * "high": specific public-record facts strongly support your direction (named polls, reported result, official announcement, base rate from historical data)
+    * "medium": you have a reasonable directional prior even if not airtight — partial info, comparable historical patterns, sector knowledge from training data, observable trends. THIS IS THE DEFAULT for markets you can reason about even if you can't cite a specific source.
+    * "low": ONLY use when you genuinely have no information about the entities, no prior, and no way to ground an estimate. Two competing teams you've never heard of with no recent context. A coin-flip with no public data either way. If you have ANY prior (e.g. "incumbents usually win these", "market price already implies the consensus is reasonable"), use medium, not low.
+- reasoning: 1-2 sentences explaining the call. For closing-soon picks, name the specific fact/event/prior that creates edge.
 - shouldBet: true if confidence is high or medium AND there's a meaningful edge (≥5% normally; ≥2% for closing-soon)
 
-Be calibrated, not paranoid. Active assessments help the user spot opportunities. Don't reflexively skip — but also don't fabricate edges where none exist.
+Be calibrated, not paranoid. The user is paying for Opus 4.7 specifically because you have broad world knowledge — use it. Don't reflexively skip just because you can't cite a source; if you can reason about it, that's medium confidence. But don't fabricate edges where none exist either.
 
 Return a JSON array with EXACTLY this shape, one entry per market in the same order:
 [
