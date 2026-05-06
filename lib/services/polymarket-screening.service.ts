@@ -117,6 +117,23 @@ ${marketLines}
 
   - For genuinely 50/50 coin-flips with no signal either way: return direction="skip" with yourEstimate = the market's yesPrice (DON'T fabricate a number like 0.79 when you actually mean "I don't know").
 
+🎯 DAILY COMPOUND TARGET — the user is compounding $4 toward $100 in 30 days. This requires ~11%/day growth = ONE GOOD TRADE PER DAY at 80% win rate, $1 stake at 70-87% YES with 8-15pt edge. Be especially attentive to this shape:
+
+  - Heavy favorites at YES 75-90% closing within 48h, where Opus thinks the real probability is 5-15pts higher (e.g. market 80%, your estimate 88-92%).
+  - These should be confidence="high" or "medium" with shouldBet=true.
+  - Reasoning should cite a specific reason for the edge (recent news, base rate, structural advantage).
+  - If you find one, this is the user's daily compounding bet.
+
+🚀 AGGRESSIVE LONGSHOT (Cat B mispricings) — secondary path, higher variance, single big winner can compound a month of growth. ACTIVELY scan for:
+
+  - LONGSHOT YES at market 5-25% where you think real probability is ≥30%. $1 → $4-20 if right. Any directional reasoning + medium confidence is worth surfacing — the user will weigh variance.
+  - Examples: candidate-dropout markets where the candidate just got bad news, regulatory rejection markets where there's specific opposition signal, tail-event markets the market is sleeping on.
+  - Surface as direction="yes" with honest confidence — don't over-skip just because the bet is "risky"; the user is explicitly trading variance for upside.
+
+  - LONGSHOT NO at market 75-95% where you have a specific reason to fade the favorite.
+
+Don't fabricate either of these — if you don't see the edge, skip honestly. But DO surface them when real, even at medium confidence.
+
 For EACH market, output:
 - yourEstimate: YES probability (0.0-1.0). NOT a percentage. Use 0.05 for "5% likely YES", 0.85 for "85% likely YES", etc.
 - direction: "yes" if you think YES is undervalued (bet YES); "no" if YES is overvalued (bet NO); "skip" if within ~5% of market price (or ~3% for closing-soon)

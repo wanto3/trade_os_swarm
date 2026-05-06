@@ -159,7 +159,7 @@ interface Portfolio {
 // ── Sort Types ────────────────────────────────────────────────────────────────
 
 type SortKey = 'fastestProfit' | 'winProb' | 'safety' | 'ev' | 'closing' | 'confidence'
-type FilterKey = 'all' | 'high' | 'medium' | 'low' | '24h' | 'today' | '3days' | '7days' | '14days' | '30days' | 'anyEdge' | 'safeScalps' | 'compound'
+type FilterKey = 'all' | 'high' | 'medium' | 'low' | '24h' | 'today' | '3days' | '7days' | '14days' | '30days' | 'anyEdge' | 'safeScalps' | 'compound' | 'dailyTarget' | 'aggressive'
 type KellyMode = 'quarter' | 'half' | 'full'
 type TabKey = 'opportunities' | 'paper-trades' | 'performance' | 'settings'
 
@@ -308,9 +308,10 @@ export function PolymarketSection() {
   // Default 'safeScalps' — user's chosen strategy: high-win-prob picks where
   // Opus agrees with the market price, for compounding small ($4) bankroll.
   // 24h / 7d / 14d / All filters one click away when wanting time-window focus.
-  // Default filter = 'compound' (fast-cycling picks for $4 bankroll). User
-  // can switch to 'safeScalps', '24h', etc. for other strategies.
-  const [filterKey, setFilterKey] = useState<FilterKey>('compound')
+  // Default filter = 'dailyTarget' — the $4→$100-in-30-days shape: ≤48h
+  // closing, heavy favorite (70-92% YES), Opus medium+ confidence, ≥5pt edge.
+  // Some days zero picks; some days 2-3. The user's primary growth path.
+  const [filterKey, setFilterKey] = useState<FilterKey>('dailyTarget')
   const [kellyMode, setKellyMode] = useState<KellyMode>('quarter')
   const [bankroll, setBankroll] = useState<number>(500)
   const [bankrollInput, setBankrollInput] = useState<string>('500')
@@ -582,6 +583,29 @@ export function PolymarketSection() {
       // Server-tagged compoundable picks: ≤30d resolution, AI Strong, win prob
       // ≥55%, EV >5%. These are the picks that actually let small bankroll grow.
       return Boolean((rec as TradeRecommendation & { compoundable?: boolean }).compoundable)
+    }
+    if (filterKey === 'dailyTarget') {
+      // The "$4 → $100 in 30d" shape: ≤48h closing, market 70-92% (heavy
+      // favorite where 1-day cycle is realistic), Opus says ≥5pt edge,
+      // medium-or-high confidence. ONE such pick per day at 80% win rate
+      // compounds $4 to $100. Some days zero supply; some days 2-3.
+      const days = liveDays(rec)
+      return (
+        days <= 2 &&
+        rec.odds >= 0.70 && rec.odds <= 0.92 &&
+        rec.estimatedProbability - rec.odds >= 0.05 &&
+        rec.confidence !== 'low' &&
+        rec.expectedValue > 0
+      )
+    }
+    if (filterKey === 'aggressive') {
+      // Cat B longshot mispricings — secondary high-variance path. Market
+      // ≤25% YES OR ≥75% NO-favorite, Opus disagrees by ≥15pts. $1 → $4-10
+      // if right. Lose entirely if wrong. Single big winner = month's growth.
+      const recExt = rec as TradeRecommendation & { aiEdge?: string }
+      const longshotYes = rec.outcome === 'Yes' && rec.odds <= 0.25 && rec.estimatedProbability - rec.odds >= 0.15
+      const longshotNo = rec.outcome === 'No' && rec.odds <= 0.25 && rec.estimatedProbability - rec.odds >= 0.15
+      return (longshotYes || longshotNo) && recExt.aiEdge !== 'weak'
     }
     // Only show markets with a real end date in time-based filters
     if (!rec.market.endDateIso) return filterKey === 'all'
@@ -1051,8 +1075,10 @@ POLYMARKET_CLOB_API_SECRET=...`}
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexWrap: 'wrap' }}>
               <span style={{ fontSize: '0.6rem', color: '#6e7681', marginRight: '0.25rem' }}>Filter:</span>
               {([
+                { key: 'dailyTarget' as FilterKey, label: `🎯 Daily $4→$100` },
+                { key: 'aggressive' as FilterKey, label: `🚀 Longshot` },
                 { key: 'compound' as FilterKey, label: `💰 Compound` },
-                { key: 'safeScalps' as FilterKey, label: `🎯 Safe` },
+                { key: 'safeScalps' as FilterKey, label: `🛡️ Safe` },
                 { key: '24h' as FilterKey, label: `24h` },
                 { key: 'today' as FilterKey, label: `≤3d` },
                 { key: '7days' as FilterKey, label: `≤7d` },
@@ -1099,6 +1125,65 @@ POLYMARKET_CLOB_API_SECRET=...`}
               {loading ? '↻ Refreshing...' : `${filtered.length} opportunities`}
             </span>
           </div>
+
+          {/* $4 → $100 daily compound progress banner — shows whether
+              today has actionable supply for the user's primary strategy */}
+          {(() => {
+            const opps = data?.opportunities ?? []
+            const dailyTargets = opps.filter(r => {
+              const days = liveDays(r)
+              return days <= 2 &&
+                r.odds >= 0.70 && r.odds <= 0.92 &&
+                r.estimatedProbability - r.odds >= 0.05 &&
+                r.confidence !== 'low' &&
+                r.expectedValue > 0
+            })
+            const longshots = opps.filter(r => {
+              const recExt = r as TradeRecommendation & { aiEdge?: string }
+              return r.odds <= 0.25 &&
+                r.estimatedProbability - r.odds >= 0.15 &&
+                recExt.aiEdge !== 'weak'
+            })
+            const bankroll = paperPortfolio?.bankroll ?? 4
+            const targetEnd = 100
+            const daysLeft = Math.max(1, Math.ceil((new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
+            const requiredDailyRate = bankroll > 0 ? Math.pow(targetEnd / bankroll, 1 / daysLeft) - 1 : 0
+            const onTrack = dailyTargets.length >= 1 || longshots.length >= 1
+            return (
+              <div style={{
+                backgroundColor: onTrack ? 'rgba(63,185,80,0.07)' : 'rgba(240,192,0,0.06)',
+                border: `1px solid ${onTrack ? '#3fb95044' : '#f0c00044'}`,
+                borderRadius: '10px',
+                padding: '0.65rem 0.85rem',
+                marginBottom: '0.75rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '0.75rem',
+                flexWrap: 'wrap',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}>
+                  <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#e6edf3' }}>
+                    🎯 ${bankroll.toFixed(2)} → $100 in {daysLeft}d
+                  </span>
+                  <span style={{ fontSize: '0.55rem', color: '#8b949e' }}>
+                    needs {(requiredDailyRate * 100).toFixed(1)}%/day
+                  </span>
+                </div>
+                <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.6rem' }}>
+                  <span style={{ color: dailyTargets.length >= 1 ? '#3fb950' : '#f85149' }}>
+                    {dailyTargets.length} daily-compound picks
+                  </span>
+                  <span style={{ color: longshots.length >= 1 ? '#f0c000' : '#6e7681' }}>
+                    {longshots.length} longshot mispricings
+                  </span>
+                  <span style={{ color: onTrack ? '#3fb950' : '#8b949e' }}>
+                    {onTrack ? '✓ supply OK today' : '○ wait or use longshot path'}
+                  </span>
+                </div>
+              </div>
+            )
+          })()}
 
           {/* Trade Cards */}
           <div style={{
@@ -1303,6 +1388,24 @@ POLYMARKET_CLOB_API_SECRET=...`}
                         <span style={{ fontSize: '0.6rem', fontWeight: 600, color: '#3fb950' }}>
                           {potentialWin.toFixed(2)} If Win
                         </span>
+                        {/* Payout multiplier — "$1 → $X" — most useful for longshot
+                            picks where the multiplier is the whole story */}
+                        {rec.odds > 0 && rec.odds < 0.5 && (
+                          <span
+                            title={`$1 stake returns $${(1/rec.odds).toFixed(2)} if this side wins. ${(1/rec.odds).toFixed(1)}x your money.`}
+                            style={{
+                              fontSize: '0.55rem',
+                              fontWeight: 700,
+                              color: '#f0c000',
+                              backgroundColor: 'rgba(240,192,0,0.15)',
+                              padding: '1px 5px',
+                              borderRadius: '3px',
+                              cursor: 'help',
+                            }}
+                          >
+                            {(1 / rec.odds).toFixed(1)}x payout
+                          </span>
+                        )}
                         <span style={{ color: '#30363d', fontSize: '0.6rem' }}>|</span>
                         <span style={{ fontSize: '0.6rem', fontWeight: 600, color: '#f85149' }}>
                           -${kellyBet.toFixed(2)} If Lose
