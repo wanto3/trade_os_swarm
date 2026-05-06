@@ -71,11 +71,17 @@ function buildBatchScreeningPrompt(markets: ScreeningInput[]): string {
 MARKETS:
 ${marketLines}
 
-⏰ CLOSING-SOON MARKETS (within 24 hours) deserve EXTRA scrutiny — these are where the user actively trades daily. Look hard for edge:
+⏰ CLOSING-SOON MARKETS (within 24 hours) — this is the user's primary daily trading pool. Try HARD here:
   - Has the event ALREADY happened but the market hasn't fully priced it in? (e.g. result confirmed but market still at 80% instead of 99%)
   - Are there clear public-record facts (polls, news, official announcements, scheduled events) that decisively support one side?
   - Is the market price stale relative to recent developments?
-  - For sports/coin-flippy events that genuinely are 50/50, return direction="skip" — don't fabricate edge.
+  - For HEAVY favorites (yesPrice ≥0.85 or ≤0.15): your job is mostly to confirm or refute consensus. If nothing odd, agree with the market and bet the favorite for a small reliable edge — these are "safe scalps" the user wants daily.
+  - For ESPORTS / SPORTS markets: the user has a documented edge here from their own follow-the-team knowledge. Even if you can't cite recent stats, give your honest directional lean based on:
+      * recent tournament/season standings if you have priors
+      * historical head-to-head if you know the teams
+      * roster reputation, region strength, format (BO3 vs BO5)
+    Use confidence="medium" if you have any directional prior, "low" only if both teams are completely unfamiliar. Provide reasoning even on skips so the user can apply their own knowledge.
+  - For genuinely 50/50 coin-flips with no signal either way: return direction="skip" with yourEstimate = the market's yesPrice (DON'T fabricate a number like 0.79 when you actually mean "I don't know").
 
 For EACH market, output:
 - yourEstimate: YES probability (0.0-1.0). NOT a percentage. Use 0.05 for "5% likely YES", 0.85 for "85% likely YES", etc.

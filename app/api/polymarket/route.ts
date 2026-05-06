@@ -787,10 +787,12 @@ async function runFullPipeline(): Promise<any> {
     //   Tier 1 (closing in ≤48h): up to T1_MAX, high+medium DPS
     //   Tier 2 (closing in ≤7d):  fill remaining, high+medium DPS, per-cat cap
     //   Tier 3 (closing later):   high DPS only
-    // Tier 1 budget can't exceed total analysis budget. Was 30 (worked when
-    // MAX_ANALYSIS=40); now scales with MAX_ANALYSIS so reducing total budget
-    // doesn't accidentally swallow all of T1.
-    const T1_MAX = Math.min(20, MAX_ANALYSIS)  // 2-day window — generous slot count
+    // T1 (≤2d closing) gets the LION'S share of analysis budget — that's
+    // where the user actually trades. Was 20; bumped so esports + politics
+    // + crypto-milestone closing-soon markets all get analyzed instead of
+    // a handful spilling into T2/T3. Floor at MAX_ANALYSIS so T1 can use
+    // all slots if there are that many T1 candidates (rare but possible).
+    const T1_MAX = Math.min(MAX_ANALYSIS, Math.max(15, Math.floor(MAX_ANALYSIS * 0.75)))
     const T1_DAYS = 2
     const T2_DAYS = 7
 
@@ -883,11 +885,17 @@ async function runFullPipeline(): Promise<any> {
       }
     }
 
-    // Pass 1: tier-1 (≤2d) — high+medium DPS, skip low-DPS noise.
+    // Pass 1: tier-1 (≤2d) — accept ALL DPS tiers. User trades closing-soon
+    // markets daily AND has documented edge in esports (which the DPS
+    // classifier tags as low-DPS sports). Excluding esports here means
+    // we never give the user a daily 24h shortlist of their best category.
+    // The Watch List on the dashboard surfaces skip-picks too, so the user
+    // sees every analyzed 24h market regardless of Opus's verdict.
     roundRobinPick(t1, 't1', () => Math.max(0, T1_MAX - selectedForAnalysis.length),
-      (tier) => tier !== 'low')
+      () => true)
 
-    // Pass 2: tier-2 (≤7d) — high or medium DPS
+    // Pass 2: tier-2 (≤7d) — high or medium DPS (esports here is mostly
+    // long-tail tournament markets; the daily-resolution edge is in T1).
     roundRobinPick(t2, 't2', () => Math.max(0, MAX_ANALYSIS - selectedForAnalysis.length),
       (tier) => tier !== 'low')
 
