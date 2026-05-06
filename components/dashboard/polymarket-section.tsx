@@ -599,7 +599,11 @@ export function PolymarketSection() {
       const edgePts = rec.estimatedProbability - rec.odds
       const dailyRoi = recExt.dailyRoi ?? (rec.expectedValue / Math.max(0.5, days))
       const isShortCycle = days <= 7 && edgePts >= 0.05
-      const isMidHorizonHighEdge = days <= 30 && edgePts >= 0.10 && recExt.aiEdge === 'strong'
+      // Loosened mid-horizon edge from 10pt → 7pt. Live data showed picks
+      // like US-Iran peace 9d at 8.2pt edge / 6.9%/day were just barely
+      // missing the threshold even though they're textbook daily-compound
+      // material. 7pt with AI-Strong is still meaningful edge.
+      const isMidHorizonHighEdge = days <= 30 && edgePts >= 0.07 && recExt.aiEdge === 'strong'
       return (
         rec.confidence !== 'low' &&
         rec.expectedValue > 0 &&
@@ -1159,7 +1163,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
               const edgePts = r.estimatedProbability - r.odds
               const dailyRoi = recExt.dailyRoi ?? (r.expectedValue / Math.max(0.5, days))
               const isShortCycle = days <= 7 && edgePts >= 0.05
-              const isMidHorizonHighEdge = days <= 30 && edgePts >= 0.10 && recExt.aiEdge === 'strong'
+              const isMidHorizonHighEdge = days <= 30 && edgePts >= 0.07 && recExt.aiEdge === 'strong'
               return r.confidence !== 'low' && r.expectedValue > 0 &&
                      dailyRoi >= 0.01 && r.odds >= 0.55 && r.odds <= 0.95 &&
                      (isShortCycle || isMidHorizonHighEdge)
