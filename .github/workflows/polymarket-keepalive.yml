@@ -1,0 +1,69 @@
+name: Polymarket pipeline keep-alive + auto-resolve
+
+# Pings the prod /api/polymarket every 30 minutes (waking-hours bias) so:
+#   1. Render free-tier container doesn't sleep (15-min idle would log out
+#      claude -p OAuth state, slowing the next cold-start).
+#   2. runResolutionOnly() runs server-side on every hit — auto-resolves
+#      any positions whose end-date has passed against Polymarket Gamma
+#      API outcomes. Bankroll + bankrollHistory stay current even when
+#      the user isn't visiting the dashboard.
+#   3. The SWR cache stays fresh so when the user does load the dashboard,
+#      they get instant pre-computed picks instead of waiting for a cold
+#      pipeline run.
+#
+# GitHub Actions cron (free): runs every 30 min on the global Actions
+# infrastructure. No auth needed — /api/polymarket is public.
+#
+# To pause this: edit the schedule below to a future date or disable the
+# workflow in GitHub UI.
+
+on:
+  schedule:
+    # Every 30 minutes, all hours UTC (Polymarket is global, picks roll
+    # over throughout the day). 48 invocations/day × ~20s each = well
+    # under GitHub's 2000-min/month free quota for private repos and
+    # unlimited for public repos.
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}  # also allow manual trigger from Actions UI
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Hit /api/polymarket (warms cache + runs resolution)
+        run: |
+          set -euo pipefail
+          URL="https://trade-os-swarm.onrender.com/api/polymarket"
+          echo "[$(date -u +%FT%TZ)] Pinging $URL"
+          # Generous timeout — fresh pipeline run can take 5-7 min on
+          # Render free-tier with sequential Opus call. Stale-while-
+          # revalidate means we usually return cached data fast and the
+          # fresh run happens in background, but on cold-start the
+          # initial response can take longer.
+          STATUS=$(curl -s -o /tmp/resp.json -w "%{http_code}" \
+            --max-time 480 \
+            -H "Accept: application/json" \
+            -H "User-Agent: github-actions-keepalive" \
+            "$URL")
+          echo "HTTP status: $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            echo "Non-200 response — dumping body:"
+            head -c 2000 /tmp/resp.json || true
+            exit 1
+          fi
+          # Parse + log key fields so the workflow run shows what happened
+          # without exposing market data publicly.
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/resp.json'))
+          stats = d.get('stats', {}) or {}
+          funnel = d.get('funnel', {}) or {}
+          errs = d.get('screeningErrors', []) or []
+          opps = len(d.get('opportunities', []) or [])
+          print(f'cache={d.get(\"cacheStatus\",\"?\")} screened={stats.get(\"marketsScreened\",0)} opps={opps} errs={len(errs)}')
+          print(f'funnel: t1={funnel.get(\"t1Selected\",0)}/{funnel.get(\"t1Universe\",0)} t2={funnel.get(\"t2Selected\",0)}/{funnel.get(\"t2Universe\",0)} t3={funnel.get(\"t3Selected\",0)}/{funnel.get(\"t3Universe\",0)}')
+          if errs:
+              print('Screening errors:')
+              for e in errs[:3]: print('  -', e[:200])
+          "
