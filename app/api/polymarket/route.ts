@@ -528,8 +528,18 @@ function scoreMarket(market: GammaMarket): TradeRecommendation[] {
 // load (which the instrumentation pre-warm already covered on server boot).
 let cachedResponse: { data: any; freshExpiry: number; staleExpiry: number } | null = null
 let inflightPipeline: Promise<any> | null = null
-const FRESH_TTL = 5 * 60_000   // 5 min — return without revalidation
-const STALE_TTL = 60 * 60_000  // 1 hour — return stale + background refresh
+// Cache TTLs tuned to AVOID burning Opus tokens on rapid session refreshes.
+// User explicitly asked: "ensure it only uses Claude Opus Max when we open
+// the dashboard or about to look for opportunities, not running all the
+// time in the background using the subscription."
+//
+// FRESH_TTL = 30 min: a session of 5 quick reloads triggers 1 Opus call,
+//   not 5. Picks within 30 min are still highly relevant for ≤3d markets.
+// STALE_TTL = 4 hours: an idle dashboard for 2-3 hours still serves picks
+//   immediately on return (with background refresh) instead of cold-start.
+//   Beyond 4 hours = cold call, fresh Opus run.
+const FRESH_TTL = 30 * 60_000   // 30 min — return without revalidation
+const STALE_TTL = 4 * 60 * 60_000  // 4 hours — return stale + background refresh
 
 // Disk-backed cache so server restarts inherit the previous analysis.
 // First dashboard visit after `npm run dev` is instant from disk; pre-warm

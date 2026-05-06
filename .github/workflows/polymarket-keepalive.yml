@@ -1,50 +1,50 @@
-name: Polymarket pipeline keep-alive + auto-resolve
+name: Polymarket resolution + keep-alive (Opus-free)
 
-# Pings the prod /api/polymarket every 30 minutes (waking-hours bias) so:
-#   1. Render free-tier container doesn't sleep (15-min idle would log out
-#      claude -p OAuth state, slowing the next cold-start).
-#   2. runResolutionOnly() runs server-side on every hit — auto-resolves
-#      any positions whose end-date has passed against Polymarket Gamma
-#      API outcomes. Bankroll + bankrollHistory stay current even when
-#      the user isn't visiting the dashboard.
-#   3. The SWR cache stays fresh so when the user does load the dashboard,
-#      they get instant pre-computed picks instead of waiting for a cold
-#      pipeline run.
+# Pings the prod /api/polymarket/resolve-only every 2 hours.
 #
-# GitHub Actions cron (free): runs every 30 min on the global Actions
-# infrastructure. No auth needed — /api/polymarket is public.
+# IMPORTANT: this endpoint does NOT trigger the Opus screening pipeline.
+# It only:
+#   1. Polls Polymarket Gamma API for closed markets (free, no LLM).
+#   2. Resolves matching open positions and updates bankroll history.
+#   3. Records the daily-performance snapshot.
+#   4. Returns a small summary.
 #
-# To pause this: edit the schedule below to a future date or disable the
-# workflow in GitHub UI.
+# Why not hit /api/polymarket directly? That endpoint runs the Opus 4.7
+# pipeline (~55-market batch) when cache is stale, burning Max-subscription
+# resources for picks the user already placed. Per user instruction:
+# "only use Claude Opus Max when we open the dashboard or about to look
+# for opportunities, not running all the time in the background."
+#
+# Frequency: every 2 hours. Most prediction markets close at predictable
+# times (election close, sports event end), and resolution typically lands
+# 5-30 min after. 2-hour intervals catch ~99% of resolutions within 2 hours
+# of close — fast enough for a daily-trading flow.
+#
+# To pause: disable the workflow in GitHub UI's Actions tab.
+# To trigger manually: 'Run workflow' button on the same tab.
 
 on:
   schedule:
-    # Every 30 minutes, all hours UTC (Polymarket is global, picks roll
-    # over throughout the day). 48 invocations/day × ~20s each = well
-    # under GitHub's 2000-min/month free quota for private repos and
-    # unlimited for public repos.
-    - cron: "*/30 * * * *"
+    # Every 2 hours UTC (12 invocations/day). Even on Render free-tier the
+    # 15-min idle sleep is a non-issue here because resolution runs are
+    # short (~5-15s) and the dashboard cache stays warm independently.
+    - cron: "0 */2 * * *"
   workflow_dispatch: {}  # also allow manual trigger from Actions UI
 
 jobs:
-  ping:
+  resolve:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 3
     steps:
-      - name: Hit /api/polymarket (warms cache + runs resolution)
+      - name: Hit resolve-only endpoint
         run: |
           set -euo pipefail
-          URL="https://trade-os-swarm.onrender.com/api/polymarket"
+          URL="https://trade-os-swarm.onrender.com/api/polymarket/resolve-only"
           echo "[$(date -u +%FT%TZ)] Pinging $URL"
-          # Generous timeout — fresh pipeline run can take 5-7 min on
-          # Render free-tier with sequential Opus call. Stale-while-
-          # revalidate means we usually return cached data fast and the
-          # fresh run happens in background, but on cold-start the
-          # initial response can take longer.
           STATUS=$(curl -s -o /tmp/resp.json -w "%{http_code}" \
-            --max-time 480 \
+            --max-time 60 \
             -H "Accept: application/json" \
-            -H "User-Agent: github-actions-keepalive" \
+            -H "User-Agent: github-actions-resolution-cron" \
             "$URL")
           echo "HTTP status: $STATUS"
           if [ "$STATUS" != "200" ]; then
@@ -52,18 +52,12 @@ jobs:
             head -c 2000 /tmp/resp.json || true
             exit 1
           fi
-          # Parse + log key fields so the workflow run shows what happened
-          # without exposing market data publicly.
+          # Log resolution summary (no market data leaked)
           python3 -c "
           import json
           d = json.load(open('/tmp/resp.json'))
-          stats = d.get('stats', {}) or {}
-          funnel = d.get('funnel', {}) or {}
-          errs = d.get('screeningErrors', []) or []
-          opps = len(d.get('opportunities', []) or [])
-          print(f'cache={d.get(\"cacheStatus\",\"?\")} screened={stats.get(\"marketsScreened\",0)} opps={opps} errs={len(errs)}')
-          print(f'funnel: t1={funnel.get(\"t1Selected\",0)}/{funnel.get(\"t1Universe\",0)} t2={funnel.get(\"t2Selected\",0)}/{funnel.get(\"t2Universe\",0)} t3={funnel.get(\"t3Selected\",0)}/{funnel.get(\"t3Universe\",0)}')
-          if errs:
-              print('Screening errors:')
-              for e in errs[:3]: print('  -', e[:200])
+          p = d.get('portfolio', {}) or {}
+          print(f'resolved={d.get(\"resolved\",0)} errors={len(d.get(\"errors\",[]))}')
+          print(f'portfolio: bankroll=\${p.get(\"bankroll\",0):.2f} won={p.get(\"wonTrades\",0)} lost={p.get(\"lostTrades\",0)} open={p.get(\"openPositions\",0)}')
+          for e in (d.get('errors') or [])[:3]: print(' ERR:', e[:200])
           "
