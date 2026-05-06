@@ -51,6 +51,15 @@ export interface TradeRecommendation {
   // filter can exclude skip-picks even when the side prob ≥ 50%, which
   // previously caused "85% YES, EV=0" cards to leak into the dashboard.
   llmDirection?: 'yes' | 'no' | 'skip'
+  // Where the AI's base-rate / training-data edge actually lives. Lets the
+  // dashboard show a "trust this pick" indicator: 'strong' = Opus has
+  // historical patterns to ground on (politics, geopolitics, M&A, crypto-
+  // milestone, tech-launch, box-office, creator-economy); 'user' = user has
+  // documented scene knowledge edge that Opus lacks (esports specifically);
+  // 'weak' = limited training-data edge (live sports, prop bets, current
+  // crypto/stock prices); undefined = uncategorized / general.
+  aiEdge?: 'strong' | 'user' | 'weak'
+  aiEdgeReason?: string
 }
 
 // ── New: Conviction & Research Types ────────────────────────────────────────
@@ -1074,6 +1083,30 @@ async function runFullPipeline(): Promise<any> {
       rec.timeAnalysis = timeAnalysis
       rec.confidence = analysis.confidence
       rec.llmDirection = analysis.direction
+
+      // Tag where the AI's edge lives so the UI can show users which picks
+      // are Opus's bread-and-butter vs which need their own knowledge.
+      const dps = dpsInfo.get(rec.market.question)
+      const cat = dps?.category
+      const AI_STRONG_CATS = new Set([
+        'politics', 'geopolitics', 'corporate-ma', 'crypto-milestone',
+        'tech-launch', 'box-office', 'creator-economy',
+      ])
+      const AI_WEAK_CATS = new Set([
+        'live-sports', 'sports-prop', 'crypto-price', 'stock-price',
+        'weather', 'celebrity', 'short-window',
+      ])
+      if (cat === 'esports') {
+        rec.aiEdge = 'user'
+        rec.aiEdgeReason = 'Esports — you have documented edge from following the scene; Opus lacks recent form data'
+      } else if (cat && AI_STRONG_CATS.has(cat)) {
+        rec.aiEdge = 'strong'
+        rec.aiEdgeReason = `Opus 4.7 has strong training-data edge in ${cat} (base-rate reasoning, historical patterns)`
+      } else if (cat && AI_WEAK_CATS.has(cat)) {
+        rec.aiEdge = 'weak'
+        rec.aiEdgeReason = `Limited AI edge in ${cat} — markets often genuine 50/50 or require live data Opus lacks`
+      }
+      // else: leave undefined for 'general' / uncategorized — UI shows no badge
 
       // Recalculate Kelly with the LLM-informed estimate. The original
       // scoreMarket Kelly used estimatedProb=marketProb (zero bias) so all

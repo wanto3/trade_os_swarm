@@ -1145,8 +1145,8 @@ POLYMARKET_CLOB_API_SECRET=...`}
 
                     {/* Card content */}
                     <div style={{ flex: 1, padding: '0.7rem 0.8rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                      {/* Top row: confidence badge + question */}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      {/* Top row: confidence badge + AI-edge tag + question */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                         <span style={{
                           fontSize: '0.55rem',
                           fontWeight: 700,
@@ -1159,6 +1159,35 @@ POLYMARKET_CLOB_API_SECRET=...`}
                         }}>
                           {rec.confidence.toUpperCase()}
                         </span>
+                        {/* AI-edge tag — tells you whether Opus is the right brain
+                            for this category. Hover for the why. */}
+                        {(rec as TradeRecommendation & { aiEdge?: 'strong' | 'user' | 'weak'; aiEdgeReason?: string }).aiEdge && (() => {
+                          const r = rec as TradeRecommendation & { aiEdge?: 'strong' | 'user' | 'weak'; aiEdgeReason?: string }
+                          const edge = r.aiEdge!
+                          const cfg = edge === 'strong'
+                            ? { label: '🤖 AI Strong', color: '#3fb950', bg: 'rgba(63,185,80,0.12)' }
+                            : edge === 'user'
+                              ? { label: '👤 Your Edge', color: '#a371f7', bg: 'rgba(163,113,247,0.12)' }
+                              : { label: '⚠️ Limited Edge', color: '#a09060', bg: 'rgba(160,144,96,0.12)' }
+                          return (
+                            <span
+                              title={r.aiEdgeReason || ''}
+                              style={{
+                                fontSize: '0.5rem',
+                                fontWeight: 700,
+                                color: cfg.color,
+                                backgroundColor: cfg.bg,
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                                flexShrink: 0,
+                                letterSpacing: '0.02em',
+                                cursor: 'help',
+                              }}
+                            >
+                              {cfg.label}
+                            </span>
+                          )
+                        })()}
                         <h3 style={{
                           fontSize: '0.72rem',
                           fontWeight: 600,
@@ -1354,6 +1383,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
                         <div style={{
                           display: 'flex', justifyContent: 'space-between',
                           alignItems: 'center', gap: '0.5rem',
+                          flexWrap: 'wrap',
                         }}>
                           <span style={{
                             fontSize: '0.55rem',
@@ -1367,6 +1397,34 @@ POLYMARKET_CLOB_API_SECRET=...`}
                           }}>
                             {(rec as TradeRecommendation & { llmDirection?: string }).llmDirection === 'skip' ? 'Low conf' : 'Skipped'}
                           </span>
+                          {/* AI-edge tag in Watch List too — esports skips will show
+                              "Your Edge" so user knows their judgment matters here */}
+                          {(rec as TradeRecommendation & { aiEdge?: 'strong' | 'user' | 'weak'; aiEdgeReason?: string }).aiEdge && (() => {
+                            const r = rec as TradeRecommendation & { aiEdge?: 'strong' | 'user' | 'weak'; aiEdgeReason?: string }
+                            const edge = r.aiEdge!
+                            const cfg = edge === 'strong'
+                              ? { label: '🤖 AI', color: '#3fb950', bg: 'rgba(63,185,80,0.12)' }
+                              : edge === 'user'
+                                ? { label: '👤 You', color: '#a371f7', bg: 'rgba(163,113,247,0.12)' }
+                                : { label: '⚠️', color: '#a09060', bg: 'rgba(160,144,96,0.12)' }
+                            return (
+                              <span
+                                title={r.aiEdgeReason || ''}
+                                style={{
+                                  fontSize: '0.5rem',
+                                  fontWeight: 700,
+                                  color: cfg.color,
+                                  backgroundColor: cfg.bg,
+                                  padding: '0.1rem 0.4rem',
+                                  borderRadius: '4px',
+                                  letterSpacing: '0.02em',
+                                  cursor: 'help',
+                                }}
+                              >
+                                {cfg.label}
+                              </span>
+                            )
+                          })()}
                           <span style={{ fontSize: '0.55rem', color: '#6e7681' }}>
                             {liveDaysToClose <= 1 ? `${Math.max(1, Math.round(liveDaysToClose * 24))}h` : `${liveDaysToClose.toFixed(1)}d`}
                           </span>
