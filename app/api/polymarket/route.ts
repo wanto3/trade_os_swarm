@@ -909,10 +909,22 @@ async function runFullPipeline(): Promise<any> {
       `Categories: ${JSON.stringify(categoryFill)}`
     )
 
-    // Build MarketForAnalysis array for LLM stage
+    // Build MarketForAnalysis array for LLM stage.
+    //
+    // CRITICAL: currentPrice MUST be the YES-side (outcome 0) price, NOT
+    // rec.odds (which is the *betting side's* price for whichever rec was
+    // picked). Mismatch was breaking multi-outcome markets:
+    //   "Lakers vs. Thunder" outcomes=[Lakers=0.12, Thunder=0.88]
+    //   Thunder rec → rec.odds=0.88 → screening sent Opus "YES: 88%"
+    //   Opus correctly estimated 0.88 ("favorite wins")
+    //   route.ts assumed Opus estimated YES (outcome 0 = Lakers) and
+    //   flipped the value for Thunder rec → rec.estimatedProbability = 0.12
+    //   → negative EV → clipped to 0 → silently dropped
+    // Result: every multi-outcome 24h market (esports especially) was
+    // always failing to surface, regardless of Opus's actual verdict.
     const marketsForAnalysis = selectedForAnalysis.map(rec => ({
       question: rec.market.question,
-      currentPrice: rec.odds,
+      currentPrice: rec.market.outcomePrices?.[0] ?? rec.odds,
       outcomes: rec.market.outcomes as string[],
       endDate: rec.market.endDateIso,
       volume: rec.market.volumeNum,

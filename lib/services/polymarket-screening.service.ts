@@ -28,6 +28,11 @@ export interface ScreeningInput {
   yesPrice: number
   noPrice: number
   endDate: string | null
+  // Outcome labels for multi-outcome markets — disambiguates which side
+  // YES refers to. Without these, "Lakers vs. Thunder | YES: 12%" leaves
+  // Opus guessing whether YES means Lakers or Thunder. Optional because
+  // simple Yes/No binary markets don't need it.
+  outcomes?: string[]
   evidence?: CategoryEvidence | null
 }
 
@@ -60,9 +65,16 @@ function buildBatchScreeningPrompt(markets: ScreeningInput[]): string {
               ev.bullishFindings[0]?.text ? ` | bull: ${ev.bullishFindings[0].text.substring(0, 80)}` : ''
             }${ev.bearishFindings[0]?.text ? ` | bear: ${ev.bearishFindings[0].text.substring(0, 80)}` : ''}`
           : ''
+      // Outcome label for multi-outcome markets so Opus knows which side
+      // YES represents (e.g. "YES = 'Lakers'" makes the betting frame clear).
+      // Skip for plain Yes/No binary markets — adds no signal there.
+      const isPlainYesNo = !m.outcomes || (m.outcomes[0] === 'Yes' && m.outcomes[1] === 'No')
+      const outcomeNote = !isPlainYesNo && m.outcomes
+        ? ` | YES = "${m.outcomes[0]}" / NO = "${m.outcomes[1] ?? 'other'}"`
+        : ''
       return `${i + 1}. ID: ${m.marketId} | Q: "${m.question.substring(0, 130)}" | YES: ${(
         m.yesPrice * 100
-      ).toFixed(1)}% | ${timeStr}${evHint}`
+      ).toFixed(1)}%${outcomeNote} | ${timeStr}${evHint}`
     })
     .join('\n')
 
@@ -476,6 +488,7 @@ export function toScreeningInputs(
     yesPrice: m.currentPrice,
     noPrice: 1 - m.currentPrice,
     endDate: m.endDate,
+    outcomes: m.outcomes,  // pass-through for multi-outcome disambiguation
     evidence: evidenceMap.get(m.question) ?? null,
   }))
 }
