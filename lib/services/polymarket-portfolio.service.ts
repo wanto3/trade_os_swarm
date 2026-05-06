@@ -57,6 +57,37 @@ export interface PolymarketPortfolio {
    *  $4 → $X over time, not just current bankroll. Capped at 500 entries
    *  for storage sanity. */
   bankrollHistory?: Array<{ ts: number; bankroll: number; totalPnl: number; trigger: 'init' | 'placed' | 'won' | 'lost' | 'invalid' }>
+  /** Daily performance journal — one snapshot per UTC day capturing the
+   *  day's trading activity vs the $4 → $100 target trajectory. Lets the
+   *  user see "on track" or "behind" at a glance over weeks/months,
+   *  separate from the per-event bankrollHistory firehose. */
+  dailyPerformance?: Array<DailySnapshot>
+}
+
+export interface DailySnapshot {
+  date: string                // 'YYYY-MM-DD' UTC
+  startBankroll: number       // bankroll at first activity of the day
+  endBankroll: number         // bankroll at last activity of the day
+  netPnl: number              // sum of resolutions on this day
+  trades: {
+    placed: number            // positions opened today
+    resolved: number          // positions closed today (any outcome)
+    wins: number              // 'won' resolutions today
+    losses: number            // 'lost' resolutions today
+  }
+  /** Hit rate by AI-edge tier on resolutions THAT CLOSED TODAY. Null when
+   *  zero bets resolved in that tier — UI displays "—" instead of 0%. */
+  hitRateByEdge: {
+    strong: number | null
+    user: number | null
+    weak: number | null
+  }
+  /** Target bankroll trajectory: $4 starting → $100 at end of month, log
+   *  interpolation. Lets the UI overlay "where you should be today" on
+   *  the compounding curve. Computed from startingBankroll + daysElapsed. */
+  targetBankroll: number
+  /** True if endBankroll >= targetBankroll. Drives the "on track" badge. */
+  onTrack: boolean
 }
 
 export interface AutoTraderConfig {
@@ -133,6 +164,10 @@ async function initialize(): Promise<void> {
         }]
         await savePortfolioData()
       }
+      // Backfill dailyPerformance with today's entry on first load. Subsequent
+      // ticks from the cron / dashboard will keep it current.
+      if (!portfolio.dailyPerformance) portfolio.dailyPerformance = []
+      recordDailySnapshot()
     } catch {
       await savePortfolioData()
     }
@@ -191,6 +226,98 @@ function calculateKellyBetSize(
   const cappedKelly = Math.min(positiveKelly, 0.15)
   const multiplier = kellyMode === 'full' ? 1 : kellyMode === 'half' ? 0.5 : 0.25
   return bankroll * cappedKelly * multiplier * edgeTrustMultiplier
+}
+
+/** Compounding-target end goal: $4 → $100 by 2026-05-31 23:59 UTC.
+ *  The user's stated end-of-month target. Used for the trajectory line. */
+const TARGET_END_BANKROLL = 100
+const TARGET_END_DATE_UTC = '2026-05-31T23:59:00Z'
+
+/** Compute "where the bankroll SHOULD be today" if we're on a smooth
+ *  log-interpolated path from start → target. Used for the on-track flag
+ *  and the trajectory overlay on the compounding chart. */
+function computeTargetBankroll(): number {
+  const startBankroll = portfolio.startingBankroll || 4
+  const startTs = portfolio.bankrollHistory?.[0]?.ts ?? Date.now()
+  const targetTs = new Date(TARGET_END_DATE_UTC).getTime()
+  const totalDays = Math.max(1, (targetTs - startTs) / (1000 * 60 * 60 * 24))
+  const daysElapsed = Math.max(0, (Date.now() - startTs) / (1000 * 60 * 60 * 24))
+  if (daysElapsed >= totalDays) return TARGET_END_BANKROLL
+  // Log-interpolate: bankroll(t) = start × (target/start)^(t/totalDays)
+  const ratio = TARGET_END_BANKROLL / startBankroll
+  return startBankroll * Math.pow(ratio, daysElapsed / totalDays)
+}
+
+/** Record or update today's daily snapshot. Idempotent — call from
+ *  runResolutionOnly + every placement/resolution; this updates the
+ *  current-day entry in place rather than appending duplicates. */
+function recordDailySnapshot(): void {
+  if (!portfolio.dailyPerformance) portfolio.dailyPerformance = []
+  const today = new Date().toISOString().split('T')[0]  // 'YYYY-MM-DD' UTC
+  const todayMs = Date.UTC(
+    Number(today.slice(0, 4)),
+    Number(today.slice(5, 7)) - 1,
+    Number(today.slice(8, 10)),
+  )
+  const tomorrowMs = todayMs + 24 * 60 * 60 * 1000
+
+  // Bucket today's activity from positions
+  const placedToday = positions.filter(p => p.placedAt >= todayMs && p.placedAt < tomorrowMs)
+  const resolvedToday = positions.filter(p => p.resolvedAt && p.resolvedAt >= todayMs && p.resolvedAt < tomorrowMs)
+  const winsToday = resolvedToday.filter(p => p.status === 'won')
+  const lossesToday = resolvedToday.filter(p => p.status === 'lost')
+  const netPnlToday = resolvedToday.reduce((s, p) => s + (p.pnl ?? 0), 0)
+
+  // Per-AI-edge hit rate on TODAY'S resolutions only
+  const hitRateAt = (edge: 'strong' | 'user' | 'weak'): number | null => {
+    const inTier = resolvedToday.filter(p => p.aiEdge === edge)
+    if (inTier.length === 0) return null
+    const w = inTier.filter(p => p.status === 'won').length
+    return (w / inTier.length) * 100
+  }
+
+  // First-of-day startBankroll: lowest bankrollHistory entry today's date
+  // (or current bankroll if no history today). Falls back gracefully.
+  let startBankroll = portfolio.bankroll
+  if (portfolio.bankrollHistory) {
+    const todayHist = portfolio.bankrollHistory.filter(h => h.ts >= todayMs && h.ts < tomorrowMs)
+    if (todayHist.length > 0) {
+      startBankroll = todayHist[0].bankroll
+    } else {
+      // Use last bankroll BEFORE today as starting point
+      const beforeToday = portfolio.bankrollHistory.filter(h => h.ts < todayMs)
+      if (beforeToday.length > 0) startBankroll = beforeToday[beforeToday.length - 1].bankroll
+    }
+  }
+
+  const targetBankroll = computeTargetBankroll()
+  const snapshot: DailySnapshot = {
+    date: today,
+    startBankroll,
+    endBankroll: portfolio.bankroll,
+    netPnl: netPnlToday,
+    trades: {
+      placed: placedToday.length,
+      resolved: resolvedToday.length,
+      wins: winsToday.length,
+      losses: lossesToday.length,
+    },
+    hitRateByEdge: {
+      strong: hitRateAt('strong'),
+      user: hitRateAt('user'),
+      weak: hitRateAt('weak'),
+    },
+    targetBankroll,
+    onTrack: portfolio.bankroll >= targetBankroll,
+  }
+
+  // Upsert today's entry
+  const existingIdx = portfolio.dailyPerformance.findIndex(d => d.date === today)
+  if (existingIdx >= 0) {
+    portfolio.dailyPerformance[existingIdx] = snapshot
+  } else {
+    portfolio.dailyPerformance.push(snapshot)
+  }
 }
 
 /** Append a bankroll snapshot. Called every time the bankroll changes so
@@ -391,6 +518,7 @@ export function createPosition(rec: TradeRecommendation): PolymarketPosition | n
   config.lastPoll = Date.now()
 
   snapshotBankroll('placed')
+  recordDailySnapshot()
   savePortfolioData()
   saveConfigData()
 
@@ -440,6 +568,7 @@ export function resolvePosition(
   const snapTrigger: 'won' | 'lost' | 'invalid' =
     resolution === 'invalid' ? 'invalid' : (pos.status === 'won' ? 'won' : 'lost')
   snapshotBankroll(snapTrigger)
+  recordDailySnapshot()
   savePortfolioData()
 
   console.log(`[PolymarketPortfolio] Resolved: ${pos.question} | ${resolution} | PnL: $${pos.pnl?.toFixed(2)}`)
@@ -498,6 +627,10 @@ export function getAnalytics(): {
   byAiEdge: AiEdgeStats[]
   /** Bankroll history for the compounding-curve chart. */
   bankrollHistory: Array<{ ts: number; bankroll: number; totalPnl: number; trigger: string }>
+  /** Daily performance journal — UI renders trajectory + on-track signal. */
+  dailyPerformance: DailySnapshot[]
+  /** Where the bankroll SHOULD be today vs target. UI shows delta. */
+  targetBankrollToday: number
   /** Resolved trade count required for statistical confidence. */
   sampleSizeNeeded: number
   /** True when total resolved >= sampleSizeNeeded. */
@@ -639,6 +772,8 @@ export function getAnalytics(): {
     byDpsTier,
     byAiEdge,
     bankrollHistory: portfolio.bankrollHistory ?? [],
+    dailyPerformance: portfolio.dailyPerformance ?? [],
+    targetBankrollToday: computeTargetBankroll(),
     sampleSizeNeeded: SAMPLE_SIZE_NEEDED,
     hasSignificantSample,
   }

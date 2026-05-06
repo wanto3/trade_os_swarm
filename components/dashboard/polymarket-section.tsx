@@ -142,6 +142,17 @@ interface Analytics {
   byDpsTier?: Array<{ tier: string; bets: number; wins: number; losses: number; winRate: number; pnl: number }>
   byAiEdge?: Array<{ edge: string; bets: number; wins: number; losses: number; winRate: number; pnl: number; avgRoi: number }>
   bankrollHistory?: Array<{ ts: number; bankroll: number; totalPnl: number; trigger: string }>
+  dailyPerformance?: Array<{
+    date: string
+    startBankroll: number
+    endBankroll: number
+    netPnl: number
+    trades: { placed: number; resolved: number; wins: number; losses: number }
+    hitRateByEdge: { strong: number | null; user: number | null; weak: number | null }
+    targetBankroll: number
+    onTrack: boolean
+  }>
+  targetBankrollToday?: number
   sampleSizeNeeded?: number
   hasSignificantSample?: boolean
 }
@@ -1209,13 +1220,35 @@ POLYMARKET_CLOB_API_SECRET=...`}
                 gap: '0.75rem',
                 flexWrap: 'wrap',
               }}>
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', flexWrap: 'wrap' }}>
                   <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#e6edf3' }}>
                     🎯 ${bankroll.toFixed(2)} → $100 in {daysLeft}d
                   </span>
                   <span style={{ fontSize: '0.55rem', color: '#8b949e' }}>
                     needs {(requiredDailyRate * 100).toFixed(1)}%/day
                   </span>
+                  {/* Today's daily-progress pill — instant on-track signal */}
+                  {analytics?.targetBankrollToday && analytics.targetBankrollToday > 0 && (() => {
+                    const target = analytics.targetBankrollToday
+                    const lag = bankroll - target
+                    const lagPct = (lag / target) * 100
+                    return (
+                      <span
+                        title={`Target trajectory today: $${target.toFixed(2)}. You're ${lag >= 0 ? 'ahead' : 'behind'} by $${Math.abs(lag).toFixed(2)} (${lagPct >= 0 ? '+' : ''}${lagPct.toFixed(0)}%).`}
+                        style={{
+                          fontSize: '0.55rem',
+                          fontWeight: 700,
+                          color: lag >= 0 ? '#3fb950' : '#f0883e',
+                          backgroundColor: lag >= 0 ? 'rgba(63,185,80,0.12)' : 'rgba(240,136,62,0.12)',
+                          padding: '2px 7px',
+                          borderRadius: '4px',
+                          cursor: 'help',
+                        }}
+                      >
+                        {lag >= 0 ? '✓ AHEAD' : '○ BEHIND'} ${Math.abs(lag).toFixed(2)}
+                      </span>
+                    )
+                  })()}
                 </div>
                 <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
                   <span style={{ color: dailyTargets.length >= 1 ? '#3fb950' : '#f85149' }}>
@@ -1860,6 +1893,133 @@ POLYMARKET_CLOB_API_SECRET=...`}
                   )}
                 </div>
               </div>
+
+              {/* ── Daily Progress Journal — track $4 → $100 over time ──
+                  Shows day-over-day P&L bars + target trajectory overlay so
+                  the user immediately sees "on track / behind / ahead". */}
+              {analytics.dailyPerformance && analytics.dailyPerformance.length >= 1 && (() => {
+                const days = analytics.dailyPerformance!
+                const target = analytics.targetBankrollToday ?? 100
+                const currentBankroll = days[days.length - 1]?.endBankroll ?? paperPortfolio?.bankroll ?? 4
+                const lag = currentBankroll - target
+                const lagPct = target > 0 ? (lag / target) * 100 : 0
+                const trackLabel = lag >= 0 ? 'AHEAD' : 'BEHIND'
+                const trackColor = lag >= 0 ? '#3fb950' : '#f85149'
+
+                // Compute consecutive winning/losing days for streak indicator
+                let streak = 0
+                let streakKind: 'win' | 'loss' | 'none' = 'none'
+                for (let i = days.length - 1; i >= 0; i--) {
+                  const d = days[i]
+                  if (d.netPnl > 0) {
+                    if (streakKind === 'loss') break
+                    streakKind = 'win'; streak++
+                  } else if (d.netPnl < 0) {
+                    if (streakKind === 'win') break
+                    streakKind = 'loss'; streak++
+                  } else if (streakKind === 'none' && d.trades.resolved === 0) {
+                    continue  // skip no-activity days
+                  } else break
+                }
+
+                // Bars: relative to max abs P&L for the period
+                const maxAbsPnl = Math.max(...days.map(d => Math.abs(d.netPnl)), 0.5)
+
+                return (
+                  <div style={{ backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '12px', padding: '1rem', marginBottom: '1rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.6rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                      <h4 style={{ fontSize: '0.7rem', fontWeight: 700, color: '#e6edf3', margin: 0 }}>
+                        📅 Daily Progress · {days.length} day{days.length === 1 ? '' : 's'} tracked
+                      </h4>
+                      <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.55rem' }}>
+                        <span>
+                          Today: <span style={{ color: '#e6edf3', fontWeight: 700 }}>${currentBankroll.toFixed(2)}</span>
+                        </span>
+                        <span>
+                          Target: <span style={{ color: '#8b949e' }}>${target.toFixed(2)}</span>
+                        </span>
+                        <span style={{ color: trackColor, fontWeight: 700 }}>
+                          {trackLabel} {lag >= 0 ? '+' : ''}{lagPct.toFixed(0)}%
+                        </span>
+                        {streak >= 2 && streakKind !== 'none' && (
+                          <span style={{ color: streakKind === 'win' ? '#3fb950' : '#f85149', fontWeight: 700 }}>
+                            {streakKind === 'win' ? '🔥' : '🥶'} {streak}-day {streakKind} streak
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Day-over-day P&L bars (positive = green up; negative = red down) */}
+                    <div style={{ height: '70px', display: 'flex', alignItems: 'center', gap: '2px', position: 'relative' }}>
+                      <div style={{ position: 'absolute', left: 0, right: 0, top: '50%', height: '1px', backgroundColor: '#30363d' }} />
+                      {days.map((d, i) => {
+                        const pnl = d.netPnl
+                        const heightPct = (Math.abs(pnl) / maxAbsPnl) * 50
+                        const color = pnl > 0 ? '#3fb950' : pnl < 0 ? '#f85149' : '#30363d'
+                        return (
+                          <div
+                            key={d.date}
+                            title={`${d.date}: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} (${d.trades.wins}W/${d.trades.losses}L of ${d.trades.resolved} resolved, ${d.trades.placed} placed) · end $${d.endBankroll.toFixed(2)} vs target $${d.targetBankroll.toFixed(2)}`}
+                            style={{
+                              flex: 1,
+                              height: `${Math.max(2, heightPct)}%`,
+                              backgroundColor: color,
+                              alignSelf: pnl >= 0 ? 'flex-end' : 'flex-start',
+                              marginTop: pnl >= 0 ? `${50 - Math.max(2, heightPct)}%` : '50%',
+                              borderRadius: pnl >= 0 ? '2px 2px 0 0' : '0 0 2px 2px',
+                              cursor: 'help',
+                              opacity: 0.6 + (i / days.length) * 0.4,
+                            }}
+                          />
+                        )
+                      })}
+                    </div>
+
+                    {/* Per-day labels (only first / last / today for compactness) */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.3rem', fontSize: '0.5rem', color: '#484f58' }}>
+                      <span>{days[0].date}</span>
+                      {days.length > 4 && (
+                        <span>{days[Math.floor(days.length / 2)].date}</span>
+                      )}
+                      <span>{days[days.length - 1].date}</span>
+                    </div>
+
+                    {/* Today's snapshot detail (most recent entry) */}
+                    {days[days.length - 1] && (() => {
+                      const t = days[days.length - 1]
+                      return (
+                        <div style={{
+                          marginTop: '0.6rem',
+                          padding: '0.5rem',
+                          backgroundColor: '#0d1117',
+                          borderRadius: '6px',
+                          fontSize: '0.55rem',
+                          color: '#8b949e',
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))',
+                          gap: '0.5rem',
+                        }}>
+                          <span>📊 Today ({t.date})</span>
+                          <span>Placed: {t.trades.placed}</span>
+                          <span>Resolved: {t.trades.resolved}</span>
+                          <span style={{ color: t.netPnl >= 0 ? '#3fb950' : '#f85149' }}>
+                            P&L: {t.netPnl >= 0 ? '+' : ''}${t.netPnl.toFixed(2)}
+                          </span>
+                          {t.hitRateByEdge.strong !== null && (
+                            <span style={{ color: '#3fb950' }}>🤖 {t.hitRateByEdge.strong.toFixed(0)}%</span>
+                          )}
+                          {t.hitRateByEdge.user !== null && (
+                            <span style={{ color: '#a371f7' }}>👤 {t.hitRateByEdge.user.toFixed(0)}%</span>
+                          )}
+                          {t.hitRateByEdge.weak !== null && (
+                            <span style={{ color: '#a09060' }}>⚠️ {t.hitRateByEdge.weak.toFixed(0)}%</span>
+                          )}
+                        </div>
+                      )
+                    })()}
+                  </div>
+                )
+              })()}
 
               {/* ── Compounding Curve (live, includes mid-day placement events) ──
                   Different from Equity Curve below: equityCurve is daily
