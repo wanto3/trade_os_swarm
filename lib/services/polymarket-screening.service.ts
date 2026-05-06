@@ -282,11 +282,13 @@ const MODEL_LABEL: Record<ScreeningModel, string> = {
  *
  * Set PARALLEL_BATCHES env var to override the split count (default 2).
  */
-// Default 2 parallel batches (was 3). On Render free-tier, 3 simultaneous
-// claude -p subprocesses contend for CPU and all time out together. Two
-// works reliably; bump back up via PARALLEL_BATCHES env var if you upgrade
-// to a paid Render tier.
-const PARALLEL_BATCHES = Math.max(1, parseInt(process.env.PARALLEL_BATCHES || '2', 10))
+// Default 1 (sequential). On Render free-tier, parallel claude -p
+// subprocesses contend for CPU/RAM AND share the same ~/.claude session
+// state — three concurrent processes all timed out at exactly 240s in
+// production, indicating they were hanging on shared-state contention,
+// not making API progress. Sequential = no contention, predictable
+// finish time. Bump via PARALLEL_BATCHES env var on a paid tier.
+const PARALLEL_BATCHES = Math.max(1, parseInt(process.env.PARALLEL_BATCHES || '1', 10))
 
 // Module-level error trail captured during the most recent screening run.
 // Populated by screenSingleBatch's fallback loop, surfaced by getLastBatchErrors()

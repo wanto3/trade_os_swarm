@@ -41,6 +41,16 @@ export async function callClaudeCode<T = unknown>(opts: ClaudeCodeCallOptions): 
     delete childEnv.CLAUDECODE
     delete childEnv.CLAUDE_CODE_ENTRYPOINT
 
+    // Diagnostic timing: capture phase timestamps so we can see in the
+    // error/log where time goes (spawn cold-start vs API streaming vs
+    // post-output processing). On Render free-tier, the suspicion is that
+    // parallel claude processes contend for CPU/RAM/session-state and hang;
+    // first-stdout-chunk timing distinguishes "hanging at startup" from
+    // "API call slow".
+    const t0 = Date.now()
+    let tFirstStdout = 0
+    let tFirstStderr = 0
+
     const child = spawn('claude', [
       '-p',
       '--model', opts.model,
@@ -53,15 +63,43 @@ export async function callClaudeCode<T = unknown>(opts: ClaudeCodeCallOptions): 
     let stderr = ''
 
     const timer = setTimeout(() => {
+      // Capture diagnostics BEFORE killing — partial stdout/stderr tells us
+      // what phase claude was in. "stdout=0 stderr=0" means it never
+      // produced output (likely hung in startup / OAuth init / lock wait).
+      // "stdout=N stderr=0" means it was streaming but didn't finish.
+      const elapsed = Date.now() - t0
+      const firstOutMs = tFirstStdout ? tFirstStdout - t0 : -1
+      const firstErrMs = tFirstStderr ? tFirstStderr - t0 : -1
+      const stdoutPreview = stdout.substring(0, 300).replace(/\s+/g, ' ')
+      const stderrPreview = stderr.substring(0, 300).replace(/\s+/g, ' ')
       child.kill('SIGTERM')
-      reject(new Error(`claude -p timed out after ${timeoutMs}ms`))
+      reject(new Error(
+        `claude -p timed out after ${timeoutMs}ms ` +
+        `(elapsed=${elapsed}ms firstStdoutMs=${firstOutMs} firstStderrMs=${firstErrMs} ` +
+        `stdoutBytes=${stdout.length} stderrBytes=${stderr.length}) ` +
+        `stdout="${stdoutPreview}" stderr="${stderrPreview}"`
+      ))
     }, timeoutMs)
 
-    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
-    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
+    child.stdout.on('data', (chunk: Buffer) => {
+      if (!tFirstStdout) tFirstStdout = Date.now()
+      stdout += chunk.toString()
+    })
+    child.stderr.on('data', (chunk: Buffer) => {
+      if (!tFirstStderr) tFirstStderr = Date.now()
+      stderr += chunk.toString()
+    })
 
     child.on('close', (code: number) => {
       clearTimeout(timer)
+      const elapsed = Date.now() - t0
+      const firstOutMs = tFirstStdout ? tFirstStdout - t0 : -1
+      // Always log timing summary so we can see in Render logs whether
+      // Opus is genuinely slow vs hanging. cheap, ~80 bytes per call.
+      console.log(
+        `[claude-code] model=${opts.model} elapsed=${elapsed}ms firstOutMs=${firstOutMs} ` +
+        `exit=${code} stdoutBytes=${stdout.length} stderrBytes=${stderr.length}`
+      )
 
       // Non-zero exit: hard failure
       if (code !== 0) {
