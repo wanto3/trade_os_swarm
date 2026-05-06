@@ -312,7 +312,9 @@ export function PolymarketSection() {
   // closing, heavy favorite (70-92% YES), Opus medium+ confidence, ≥5pt edge.
   // Some days zero picks; some days 2-3. The user's primary growth path.
   const [filterKey, setFilterKey] = useState<FilterKey>('dailyTarget')
-  const [kellyMode, setKellyMode] = useState<KellyMode>('quarter')
+  // Half Kelly default — slightly more aggressive sizing for $4 grow phase.
+  // User picks Full or Quarter from the selector if they want to dial up/down.
+  const [kellyMode, setKellyMode] = useState<KellyMode>('half')
   const [bankroll, setBankroll] = useState<number>(500)
   const [bankrollInput, setBankrollInput] = useState<string>('500')
 
@@ -649,7 +651,7 @@ export function PolymarketSection() {
     return `$${v.toFixed(0)}`
   }
 
-  const kellyLabel = kellyMode === 'quarter' ? '¼ Kelly (Ultra-safe)' : kellyMode === 'half' ? '½ Kelly (Safe)' : 'Full Kelly (Aggressive)'
+  const kellyLabel = kellyMode === 'quarter' ? '¼ Kelly (Ultra-safe)' : kellyMode === 'half' ? '½ Kelly (Balanced — recommended)' : 'Full Kelly (Aggressive — bust risk)'
 
   // ── Tabs ────────────────────────────────────────────────────────────────────
 

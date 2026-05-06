@@ -88,10 +88,13 @@ const DEFAULT_PORTFOLIO: PolymarketPortfolio = {
 
 const DEFAULT_CONFIG: AutoTraderConfig = {
   enabled: false,
-  kellyMode: 'quarter',
+  // Half Kelly default — small-capital + AI-edge user wants slightly more
+  // aggressive sizing than ¼ K. Half Kelly is the textbook risk-adjusted
+  // optimum: ~75% of full-Kelly growth rate with much lower variance.
+  kellyMode: 'half',
   confidenceFilter: 'high',
   maxOpenPositions: 5,
-  maxBetSizePercent: 10,
+  maxBetSizePercent: 20,  // was 10 — slightly more aggressive ceiling for $4 grow phase
   startingBankroll: 1000,
   lastPoll: null,
   lastPlacement: null,
@@ -169,16 +172,25 @@ function calculateKellyBetSize(
   bankroll: number,
   estimatedProb: number,
   marketProb: number,
-  kellyMode: 'quarter' | 'half' | 'full'
+  kellyMode: 'quarter' | 'half' | 'full',
+  /** Tier multiplier — bet more when AI is most reliable. Caller passes
+   *  1.5 for AI-Strong + high-confidence picks, 0.75 for AI-weak picks,
+   *  1.0 default. Layered on top of the Kelly mode multiplier. */
+  edgeTrustMultiplier = 1.0,
 ): number {
   const decimalOdds = (1 / marketProb) - 1
   if (decimalOdds <= 0 || estimatedProb <= 0) return 0
   const q = 1 - estimatedProb
   const kelly = (decimalOdds * estimatedProb - q) / decimalOdds
   const positiveKelly = Math.max(0, kelly)
-  const cappedKelly = Math.min(positiveKelly, 0.10)
+  // Internal cap raised 10% → 15%. Half Kelly on a 25-30% raw Kelly pick
+  // (typical AI-Strong) at the old 10% cap was capping too low to deploy
+  // meaningfully as bankroll grows. 15% lets the half-Kelly default
+  // actually bite at $20-50 bankroll while staying below full Kelly's
+  // bust-risk territory.
+  const cappedKelly = Math.min(positiveKelly, 0.15)
   const multiplier = kellyMode === 'full' ? 1 : kellyMode === 'half' ? 0.5 : 0.25
-  return bankroll * cappedKelly * multiplier
+  return bankroll * cappedKelly * multiplier * edgeTrustMultiplier
 }
 
 /** Append a bankroll snapshot. Called every time the bankroll changes so
@@ -272,12 +284,22 @@ export function createPosition(rec: TradeRecommendation): PolymarketPosition | n
   // imminent placement at its own layer if needed.
 
   // Apply Kelly sizing — uses estimatedProbability/marketImpliedProb that are
-  // already side-correct (set by route.ts based on rec.outcome).
+  // already side-correct (set by route.ts based on rec.outcome). The edge-trust
+  // multiplier sizes UP on AI-Strong + high-confidence picks (where Opus is
+  // most reliable) and sizes DOWN on AI-weak picks (coin-flippy categories).
+  const recAi = (rec as TradeRecommendation & { aiEdge?: 'strong' | 'user' | 'weak' }).aiEdge
+  let edgeTrustMultiplier = 1.0
+  if (recAi === 'strong' && rec.confidence === 'high') edgeTrustMultiplier = 1.5
+  else if (recAi === 'strong' && rec.confidence === 'medium') edgeTrustMultiplier = 1.2
+  else if (recAi === 'weak') edgeTrustMultiplier = 0.6
+  // 'user' (esports) stays at 1.0 — user judgment determines actual edge
+
   const rawBet = calculateKellyBetSize(
     portfolio.bankroll,
     rec.estimatedProbability,
     rec.marketImpliedProb,
-    config.kellyMode
+    config.kellyMode,
+    edgeTrustMultiplier,
   )
 
   // Cap at max bet size % of bankroll
