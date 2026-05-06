@@ -23,6 +23,15 @@ export interface PolymarketPosition {
   dpsCategory?: string
   /** DPS tier at time of placement. */
   dpsTier?: 'high' | 'medium' | 'low'
+  /** AI-edge tier at placement: 'strong' | 'user' | 'weak'. The learning loop's
+   *  most important grouping — if 'strong' picks hit 90% but 'weak' hits 50%,
+   *  we know to trust Opus only on its bread-and-butter categories. */
+  aiEdge?: 'strong' | 'user' | 'weak'
+  /** Daily-ROI estimate at placement (EV / daysToClose). Lets the analytics
+   *  compare predicted vs actual return rates per category. */
+  dailyRoiAtPlacement?: number
+  /** Days-to-close at placement — used to compute actual realized hold time. */
+  daysToCloseAtPlacement?: number
   /** Snapshot of LLM reasoning at placement time — for post-hoc analysis. */
   reasoningAtPlacement?: string
   placedAt: number
@@ -43,6 +52,11 @@ export interface PolymarketPortfolio {
   lostTrades: number
   positions: PolymarketPosition[]
   lastUpdate: number
+  /** Bankroll history: a snapshot is appended on every position placement
+   *  and resolution. Powers the compounding-curve chart so the user can SEE
+   *  $4 → $X over time, not just current bankroll. Capped at 500 entries
+   *  for storage sanity. */
+  bankrollHistory?: Array<{ ts: number; bankroll: number; totalPnl: number; trigger: 'init' | 'placed' | 'won' | 'lost' | 'invalid' }>
 }
 
 export interface AutoTraderConfig {
@@ -105,6 +119,17 @@ async function initialize(): Promise<void> {
       const portfolioData = await fs.readFile(PORTFOLIO_FILE, 'utf-8')
       portfolio = JSON.parse(portfolioData)
       positions = portfolio.positions
+      // Backfill: if bankrollHistory is missing (older portfolio file), seed it
+      // with an init snapshot so the curve starts somewhere instead of empty.
+      if (!portfolio.bankrollHistory || portfolio.bankrollHistory.length === 0) {
+        portfolio.bankrollHistory = [{
+          ts: Date.now(),
+          bankroll: portfolio.bankroll,
+          totalPnl: portfolio.totalPnl,
+          trigger: 'init',
+        }]
+        await savePortfolioData()
+      }
     } catch {
       await savePortfolioData()
     }
@@ -154,6 +179,23 @@ function calculateKellyBetSize(
   const cappedKelly = Math.min(positiveKelly, 0.10)
   const multiplier = kellyMode === 'full' ? 1 : kellyMode === 'half' ? 0.5 : 0.25
   return bankroll * cappedKelly * multiplier
+}
+
+/** Append a bankroll snapshot. Called every time the bankroll changes so
+ *  the compounding curve UI can render $4 → $X over time. Caps at 500
+ *  entries (≈ years of trading at this volume) to bound storage. */
+function snapshotBankroll(trigger: 'init' | 'placed' | 'won' | 'lost' | 'invalid'): void {
+  if (!portfolio.bankrollHistory) portfolio.bankrollHistory = []
+  portfolio.bankrollHistory.push({
+    ts: Date.now(),
+    bankroll: portfolio.bankroll,
+    totalPnl: portfolio.totalPnl,
+    trigger,
+  })
+  // Keep history bounded
+  if (portfolio.bankrollHistory.length > 500) {
+    portfolio.bankrollHistory = portfolio.bankrollHistory.slice(-500)
+  }
 }
 
 function classifyCategory(question: string): PolymarketPosition['category'] {
@@ -284,6 +326,14 @@ export function createPosition(rec: TradeRecommendation): PolymarketPosition | n
     }
   } catch { /* DPS service not available — fall back to legacy category only */ }
 
+  // Capture aiEdge + dailyRoi at placement time. These are the learning-loop
+  // groupings — when this position resolves, we'll know whether the AI
+  // edge tier predicted the outcome correctly.
+  const recExt = rec as TradeRecommendation & {
+    aiEdge?: 'strong' | 'user' | 'weak'
+    dailyRoi?: number
+  }
+
   const position: PolymarketPosition = {
     id: `pm-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
     marketId: rec.market.id,
@@ -302,6 +352,9 @@ export function createPosition(rec: TradeRecommendation): PolymarketPosition | n
     category: classifyCategory(rec.market.question),
     dpsCategory,
     dpsTier,
+    aiEdge: recExt.aiEdge,
+    dailyRoiAtPlacement: recExt.dailyRoi,
+    daysToCloseAtPlacement: rec.daysToClose,
     reasoningAtPlacement: rec.reasoning?.substring(0, 500),
     placedAt: Date.now(),
     status: 'open',
@@ -315,6 +368,7 @@ export function createPosition(rec: TradeRecommendation): PolymarketPosition | n
   config.lastPlacement = Date.now()
   config.lastPoll = Date.now()
 
+  snapshotBankroll('placed')
   savePortfolioData()
   saveConfigData()
 
@@ -359,6 +413,11 @@ export function resolvePosition(
     .reduce((sum, p) => sum + p.pnl!, 0)
   portfolio.lastUpdate = Date.now()
 
+  // Snapshot trigger reflects the resolution outcome so the chart can color
+  // win events green and loss events red.
+  const snapTrigger: 'won' | 'lost' | 'invalid' =
+    resolution === 'invalid' ? 'invalid' : (pos.status === 'won' ? 'won' : 'lost')
+  snapshotBankroll(snapTrigger)
   savePortfolioData()
 
   console.log(`[PolymarketPortfolio] Resolved: ${pos.question} | ${resolution} | PnL: $${pos.pnl?.toFixed(2)}`)
@@ -382,6 +441,19 @@ export interface DpsTierStats {
   winRate: number
   pnl: number
 }
+/** Per-AI-edge-tier breakdown — the most actionable learning loop cut.
+ *  If 'strong' picks (politics, geopolitics, M&A) hit 90%+, we know to
+ *  trust Opus there. If 'weak' picks (sports props, coin flips) hit ≤55%,
+ *  we should exclude them entirely. 'user' (esports) cuts our judgment. */
+export interface AiEdgeStats {
+  edge: 'strong' | 'user' | 'weak' | 'untagged'
+  bets: number
+  wins: number
+  losses: number
+  winRate: number
+  pnl: number
+  avgRoi: number   // average % return per bet (pnl/cost)
+}
 
 export function getAnalytics(): {
   totalTrades: number
@@ -400,6 +472,10 @@ export function getAnalytics(): {
   // ── Algorithm validation ─────────────────────────────────────────────
   byConvictionBand: ConvictionBandStats[]
   byDpsTier: DpsTierStats[]
+  /** AI-edge tier breakdown — the most actionable learning cut. */
+  byAiEdge: AiEdgeStats[]
+  /** Bankroll history for the compounding-curve chart. */
+  bankrollHistory: Array<{ ts: number; bankroll: number; totalPnl: number; trigger: string }>
   /** Resolved trade count required for statistical confidence. */
   sampleSizeNeeded: number
   /** True when total resolved >= sampleSizeNeeded. */
@@ -496,6 +572,28 @@ export function getAnalytics(): {
     }
   })
 
+  // ── Per-AI-edge-tier breakdown — the highest-leverage learning cut.
+  //    Tells us whether to trust Opus (strong), defer to user (esports),
+  //    or just stop placing bets in a category (weak).
+  const aiEdgeTiers: ('strong' | 'user' | 'weak' | 'untagged')[] = ['strong', 'user', 'weak', 'untagged']
+  const byAiEdge: AiEdgeStats[] = aiEdgeTiers.map((edge) => {
+    const inTier = resolved.filter((p) => (p.aiEdge ?? 'untagged') === edge)
+    const wins = inTier.filter((p) => p.status === 'won').length
+    const losses = inTier.filter((p) => p.status === 'lost').length
+    const total = wins + losses
+    const pnl = inTier.reduce((s, p) => s + (p.pnl ?? 0), 0)
+    const totalCost = inTier.reduce((s, p) => s + p.cost, 0)
+    return {
+      edge,
+      bets: inTier.length,
+      wins,
+      losses,
+      winRate: total > 0 ? (wins / total) * 100 : 0,
+      pnl,
+      avgRoi: totalCost > 0 ? (pnl / totalCost) * 100 : 0,
+    }
+  })
+
   // ── Sample size guidance — 20 resolved bets is a reasonable baseline for
   //    statistical confidence in a binary win/loss outcome.
   const SAMPLE_SIZE_NEEDED = 20
@@ -517,6 +615,8 @@ export function getAnalytics(): {
     evAccuracyTrades: evAccuracyTrades.length,
     byConvictionBand,
     byDpsTier,
+    byAiEdge,
+    bankrollHistory: portfolio.bankrollHistory ?? [],
     sampleSizeNeeded: SAMPLE_SIZE_NEEDED,
     hasSignificantSample,
   }
