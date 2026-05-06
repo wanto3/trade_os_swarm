@@ -587,17 +587,25 @@ export function PolymarketSection() {
       return Boolean((rec as TradeRecommendation & { compoundable?: boolean }).compoundable)
     }
     if (filterKey === 'dailyTarget') {
-      // The "$4 → $100 in 30d" shape: ≤48h closing, market 70-92% (heavy
-      // favorite where 1-day cycle is realistic), Opus says ≥5pt edge,
-      // medium-or-high confidence. ONE such pick per day at 80% win rate
-      // compounds $4 to $100. Some days zero supply; some days 2-3.
+      // "$4 → $100" daily-compound shape, widened to capture two paths:
+      //   A. True daily (≤7d closing) with ≥5pt edge — fast cycling
+      //   B. Mid-horizon (≤30d) AI-Strong with ≥10pt edge — slower but
+      //      high enough EV that a single cycle is materially worth it
+      //      (e.g. US-Iran peace NO 25d at +54% EV = 2.16%/day equivalent)
+      // The dailyRoi >= 1%/day threshold filters both honestly: anything
+      // below that won't compound to $100 in any reasonable timeframe.
       const days = liveDays(rec)
+      const recExt = rec as TradeRecommendation & { aiEdge?: string; dailyRoi?: number }
+      const edgePts = rec.estimatedProbability - rec.odds
+      const dailyRoi = recExt.dailyRoi ?? (rec.expectedValue / Math.max(0.5, days))
+      const isShortCycle = days <= 7 && edgePts >= 0.05
+      const isMidHorizonHighEdge = days <= 30 && edgePts >= 0.10 && recExt.aiEdge === 'strong'
       return (
-        days <= 2 &&
-        rec.odds >= 0.70 && rec.odds <= 0.92 &&
-        rec.estimatedProbability - rec.odds >= 0.05 &&
         rec.confidence !== 'low' &&
-        rec.expectedValue > 0
+        rec.expectedValue > 0 &&
+        dailyRoi >= 0.01 &&  // ≥1%/day daily-ROI floor
+        rec.odds >= 0.55 && rec.odds <= 0.95 &&
+        (isShortCycle || isMidHorizonHighEdge)
       )
     }
     if (filterKey === 'aggressive') {
@@ -1129,16 +1137,21 @@ POLYMARKET_CLOB_API_SECRET=...`}
           </div>
 
           {/* $4 → $100 daily compound progress banner — shows whether
-              today has actionable supply for the user's primary strategy */}
+              today has actionable supply for the user's primary strategy.
+              Daily-target count matches the dailyTarget filter chip exactly:
+              short-cycle ≤7d/≥5pt edge OR mid-horizon ≤30d/≥10pt edge AI-Strong. */}
           {(() => {
             const opps = data?.opportunities ?? []
             const dailyTargets = opps.filter(r => {
               const days = liveDays(r)
-              return days <= 2 &&
-                r.odds >= 0.70 && r.odds <= 0.92 &&
-                r.estimatedProbability - r.odds >= 0.05 &&
-                r.confidence !== 'low' &&
-                r.expectedValue > 0
+              const recExt = r as TradeRecommendation & { aiEdge?: string; dailyRoi?: number }
+              const edgePts = r.estimatedProbability - r.odds
+              const dailyRoi = recExt.dailyRoi ?? (r.expectedValue / Math.max(0.5, days))
+              const isShortCycle = days <= 7 && edgePts >= 0.05
+              const isMidHorizonHighEdge = days <= 30 && edgePts >= 0.10 && recExt.aiEdge === 'strong'
+              return r.confidence !== 'low' && r.expectedValue > 0 &&
+                     dailyRoi >= 0.01 && r.odds >= 0.55 && r.odds <= 0.95 &&
+                     (isShortCycle || isMidHorizonHighEdge)
             })
             const longshots = opps.filter(r => {
               const recExt = r as TradeRecommendation & { aiEdge?: string }
@@ -1151,6 +1164,23 @@ POLYMARKET_CLOB_API_SECRET=...`}
             const daysLeft = Math.max(1, Math.ceil((new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
             const requiredDailyRate = bankroll > 0 ? Math.pow(targetEnd / bankroll, 1 / daysLeft) - 1 : 0
             const onTrack = dailyTargets.length >= 1 || longshots.length >= 1
+            // Top picks for one-click deployment: highest daily-ROI from
+            // daily-target lane, capped at 4 (matches $4 bankroll → $1/pick).
+            const topPicks = [...dailyTargets].sort((a, b) => {
+              const aRoi = (a as TradeRecommendation & { dailyRoi?: number }).dailyRoi ?? a.expectedValue / Math.max(1, liveDays(a))
+              const bRoi = (b as TradeRecommendation & { dailyRoi?: number }).dailyRoi ?? b.expectedValue / Math.max(1, liveDays(b))
+              return bRoi - aRoi
+            }).slice(0, 4)
+            const alreadyPlacedIds = new Set(openPositions.map(p => p.marketId))
+            const placeable = topPicks.filter(p => !alreadyPlacedIds.has(p.market.id))
+            const placeAllTop = async () => {
+              for (const rec of placeable) {
+                // Sequential placement so each Kelly recalc uses the updated
+                // bankroll (placing 4 picks with stale $4 bankroll would
+                // over-allocate). placeTrade is async — await each.
+                await placeTrade(rec)
+              }
+            }
             return (
               <div style={{
                 backgroundColor: onTrack ? 'rgba(63,185,80,0.07)' : 'rgba(240,192,0,0.06)',
@@ -1172,7 +1202,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
                     needs {(requiredDailyRate * 100).toFixed(1)}%/day
                   </span>
                 </div>
-                <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.6rem' }}>
+                <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
                   <span style={{ color: dailyTargets.length >= 1 ? '#3fb950' : '#f85149' }}>
                     {dailyTargets.length} daily-compound picks
                   </span>
@@ -1182,6 +1212,24 @@ POLYMARKET_CLOB_API_SECRET=...`}
                   <span style={{ color: onTrack ? '#3fb950' : '#8b949e' }}>
                     {onTrack ? '✓ supply OK today' : '○ wait or use longshot path'}
                   </span>
+                  {placeable.length >= 1 && (
+                    <button
+                      onClick={placeAllTop}
+                      title={`Place paper trades on top ${placeable.length} daily-compound picks (skips already-placed). Sized via Half Kelly + tier-trust multiplier.`}
+                      style={{
+                        background: 'linear-gradient(135deg, #f0c000, #e09000)',
+                        border: 'none',
+                        borderRadius: '6px',
+                        padding: '0.35rem 0.75rem',
+                        fontSize: '0.65rem',
+                        fontWeight: 700,
+                        color: '#0d1117',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      ⚡ Place top {placeable.length}
+                    </button>
+                  )}
                 </div>
               </div>
             )
@@ -1506,14 +1554,30 @@ POLYMARKET_CLOB_API_SECRET=...`}
               return true
             })
             if (watchList.length === 0) return null
+            // Count by AI-edge tier so the user sees the breakdown at a glance:
+            // "3 👤 your edge / 2 🤖 AI / 5 ⚠️ weak"
+            const edgeCounts = { strong: 0, user: 0, weak: 0, untagged: 0 }
+            for (const r of watchList) {
+              const e = (r as TradeRecommendation & { aiEdge?: string }).aiEdge ?? 'untagged'
+              if (e === 'strong') edgeCounts.strong++
+              else if (e === 'user') edgeCounts.user++
+              else if (e === 'weak') edgeCounts.weak++
+              else edgeCounts.untagged++
+            }
             return (
               <div style={{ marginTop: '1rem' }}>
                 <div style={{
-                  display: 'flex', alignItems: 'center', gap: '0.5rem',
+                  display: 'flex', alignItems: 'center', gap: '0.75rem',
                   marginBottom: '0.5rem', fontSize: '0.7rem',
                   color: '#8b949e', textTransform: 'uppercase', letterSpacing: '0.04em',
+                  flexWrap: 'wrap',
                 }}>
-                  👀 Watch List — Opus considered but skipped ({watchList.length})
+                  <span>👀 Watch List — Opus considered but skipped ({watchList.length})</span>
+                  <span style={{ display: 'flex', gap: '0.4rem', textTransform: 'none', letterSpacing: 'normal', fontSize: '0.6rem' }}>
+                    {edgeCounts.user > 0 && <span style={{ color: '#a371f7' }}>👤 {edgeCounts.user}</span>}
+                    {edgeCounts.strong > 0 && <span style={{ color: '#3fb950' }}>🤖 {edgeCounts.strong}</span>}
+                    {edgeCounts.weak > 0 && <span style={{ color: '#a09060' }}>⚠️ {edgeCounts.weak}</span>}
+                  </span>
                 </div>
                 <div style={{
                   display: 'grid',

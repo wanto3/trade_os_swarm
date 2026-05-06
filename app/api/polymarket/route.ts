@@ -1119,13 +1119,21 @@ async function runFullPipeline(): Promise<any> {
 
       // Compounding economics: daily-ROI matters more than absolute EV when
       // bankroll is small and capital can't sit in a 2-year longshot.
-      const days = Math.max(0.5, rec.daysToClose || 0.5)
-      rec.dailyRoi = rec.expectedValue / days
-      rec.compoundable =
-        rec.daysToClose <= 30 &&
-        rec.expectedValue > 0.05 &&
-        rec.estimatedProbability >= 0.55 &&
-        rec.aiEdge === 'strong'
+      // Guard against open-ended markets (no end date / sentinel 999) that
+      // were getting tagged compoundable=true with fake astronomical
+      // daily-ROI because Math.max(0.5, undefined) divided EV by 0.5.
+      const hasRealEndDate = Boolean(rec.market.endDateIso) && rec.daysToClose > 0 && rec.daysToClose < 800
+      if (hasRealEndDate) {
+        rec.dailyRoi = rec.expectedValue / rec.daysToClose
+        rec.compoundable =
+          rec.daysToClose <= 30 &&
+          rec.expectedValue > 0.05 &&
+          rec.estimatedProbability >= 0.55 &&
+          rec.aiEdge === 'strong'
+      } else {
+        rec.dailyRoi = 0  // no real horizon → no compounding velocity
+        rec.compoundable = false
+      }
 
       // Recalculate Kelly with the LLM-informed estimate. The original
       // scoreMarket Kelly used estimatedProb=marketProb (zero bias) so all
