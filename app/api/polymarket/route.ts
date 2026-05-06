@@ -765,12 +765,16 @@ async function runFullPipeline(): Promise<any> {
     // DPS-prioritized candidate selection: high-DPS first (politics, esports, box-office,
     // crypto-milestones), medium-DPS to fill, skip low-DPS. Per-category cap (8) ensures
     // diversity so we don't analyze 30 politics markets and zero crypto-milestones.
-    // 30 markets per analysis run. With sequential Opus and bracket
-    // markets preserved in T1, the natural 24h universe contains 25-35
-    // unique closing-soon questions — we want most of them analyzed.
-    // 30 markets in one Opus call runs ~200-280s, comfortable inside
-    // the 7-min timeout. Override MAX_ANALYSIS env var if needed.
-    const MAX_ANALYSIS = parseInt(process.env.MAX_ANALYSIS || '30', 10)
+    // 45 markets per analysis run. Sized to give:
+    //   - T1 (≤2d closing): ~22 slots (24h target, user trades daily)
+    //   - T2 (2-7d): ~8 slots (medium-term)
+    //   - T3 (>7d): ~15 slots (long-term AI-edge — politics, geopolitics,
+    //     corporate-ma, crypto-milestone — where Opus's base-rate reasoning
+    //     from training data is strongest)
+    // One sequential Opus call on 45 markets runs ~300-350s, comfortably
+    // inside the 7-min timeout. Override MAX_ANALYSIS for more on a paid
+    // tier where parallel batches work.
+    const MAX_ANALYSIS = parseInt(process.env.MAX_ANALYSIS || '45', 10)
     // Per-category cap. Was 8 (deliberately low to force diversity), but
     // for closing-soon coverage we'd rather have 12 BTC-bracket safe-scalps
     // than enforce hard diversity that leaves T1 budget unspent.
@@ -790,12 +794,14 @@ async function runFullPipeline(): Promise<any> {
     //   Tier 1 (closing in ≤48h): up to T1_MAX, high+medium DPS
     //   Tier 2 (closing in ≤7d):  fill remaining, high+medium DPS, per-cat cap
     //   Tier 3 (closing later):   high DPS only
-    // T1 (≤2d closing) gets the LION'S share of analysis budget — that's
-    // where the user actually trades. Was 20; bumped so esports + politics
-    // + crypto-milestone closing-soon markets all get analyzed instead of
-    // a handful spilling into T2/T3. Floor at MAX_ANALYSIS so T1 can use
-    // all slots if there are that many T1 candidates (rare but possible).
-    const T1_MAX = Math.min(MAX_ANALYSIS, Math.max(15, Math.floor(MAX_ANALYSIS * 0.75)))
+    // Explicit per-tier budgets so closing-soon coverage AND long-term
+    // AI-edge picks both get their share, instead of T2 or T1 swallowing
+    // T3's slots via greedy round-robin.
+    //   T1 = 50%: 24h-2d markets where user trades daily
+    //   T2 =  ~18%: 2-7d medium-term
+    //   T3 =  rest: >7d long-term predictions (Opus's base-rate strength)
+    const T1_MAX = Math.min(MAX_ANALYSIS, Math.max(15, Math.floor(MAX_ANALYSIS * 0.50)))  // ~22 of 45
+    const T2_MAX = Math.max(5, Math.floor(MAX_ANALYSIS * 0.18))                            // ~8  of 45
     const T1_DAYS = 2
     const T2_DAYS = 7
 
@@ -926,16 +932,20 @@ async function runFullPipeline(): Promise<any> {
     }
 
     // Pass 1: tier-1 (≤2d) — accept ALL DPS tiers. After the priority pass,
-    // round-robin fills remaining T1 budget across other categories.
-    roundRobinPick(t1, 't1', () => Math.max(0, T1_MAX - selectedForAnalysis.length),
+    // round-robin fills remaining T1 budget. Capped at T1_MAX so T2/T3
+    // get guaranteed slots.
+    roundRobinPick(t1, 't1', () => Math.max(0, T1_MAX - tierFill.t1),
       () => true)
 
-    // Pass 2: tier-2 (≤7d) — high or medium DPS (esports here is mostly
-    // long-tail tournament markets; the daily-resolution edge is in T1).
-    roundRobinPick(t2, 't2', () => Math.max(0, MAX_ANALYSIS - selectedForAnalysis.length),
+    // Pass 2: tier-2 (≤7d) — high or medium DPS. Capped at T2_MAX so T3
+    // long-term AI-edge picks aren't crowded out.
+    roundRobinPick(t2, 't2', () => Math.max(0, T2_MAX - tierFill.t2),
       (tier) => tier !== 'low')
 
-    // Pass 3: tier-3 (longer-term) — high DPS only
+    // Pass 3: tier-3 (longer-term, >7d) — high DPS only. Gets all remaining
+    // budget. This is where Opus's training-data edge shines — base-rate
+    // reasoning on rare-event markets ("Will X be arrested by Y", "Will X
+    // IPO by Z", "Will X happen by Q") that surface as +40-70% EV picks.
     roundRobinPick(t3, 't3', () => Math.max(0, MAX_ANALYSIS - selectedForAnalysis.length),
       (tier) => tier === 'high')
 
@@ -1351,19 +1361,23 @@ async function runFullPipeline(): Promise<any> {
       // parse failure, etc.). Empty array = healthy. Critical for diagnosing
       // "0 opportunities" on Render where we can't tail logs cheaply.
       screeningErrors: getLastBatchErrors(),
-      // Debug: market-selection funnel. Shows where 24h coverage gets
-      // lost — if t1Universe=32 but t1Selected=6, the selector is leaving
-      // budget on the table. Numbers are post-dedupe.
+      // Debug: market-selection funnel. Shows per-tier budget allocation
+      // and how much of each universe was actually picked. Healthy run:
+      // t1Selected≈t1Budget (closing-soon fully used), t3Selected≈t3Budget
+      // (long-term AI-edge fully used). Mismatch = either supply too low
+      // or selector skipping eligible candidates.
       funnel: {
         recsTotal: recommendations.length,
         t1Universe: t1.length,           // ≤2d markets eligible (post dedupe)
         t2Universe: t2.length,           // 2-7d markets eligible
-        t3Universe: t3.length,           // >7d markets eligible
+        t3Universe: t3.length,           // >7d markets eligible (high-DPS only)
         t1Selected: tierFill.t1,
         t2Selected: tierFill.t2,
         t3Selected: tierFill.t3,
         budgetTotal: MAX_ANALYSIS,
         t1Budget: T1_MAX,
+        t2Budget: T2_MAX,
+        t3Budget: MAX_ANALYSIS - T1_MAX - T2_MAX,  // remaining (~15 of 45)
       },
       // Debug: raw per-market LLM verdicts. Lets us audit "Opus screened N,
       // surfaced 0" — see whether direction='skip' (and which subkind: low
