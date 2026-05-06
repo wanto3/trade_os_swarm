@@ -528,19 +528,19 @@ function scoreMarket(market: GammaMarket): TradeRecommendation[] {
 // load (which the instrumentation pre-warm already covered on server boot).
 let cachedResponse: { data: any; freshExpiry: number; staleExpiry: number } | null = null
 let inflightPipeline: Promise<any> | null = null
-// Cache TTLs tuned to a "scheduled-refresh" pattern: cron pipeline cron
-// fires every 12h (2 Opus calls/day, predictable subscription budget),
-// FRESH window covers the entire 12h gap so user visits in between
-// always get instant cached picks without triggering ANY background
-// Opus refresh.
+// Cache TTLs tuned to "minimal idle, fresh on visit" — user's stated
+// preference: idle days should burn ~1 Opus call (just the morning cron);
+// active trading days where they visit several times should refresh fresh
+// picks naturally on each visit beyond the 1-hour quick-reload window.
 //
-// FRESH_TTL = 12h: covers the full cron interval. User can visit any
-//   time and never trigger a fresh Opus call.
-// STALE_TTL = 24h: fallback if cron fails for some reason — still serves
-//   stale data instantly (with background refresh) for up to a day.
-//   Beyond 24h = cold call (genuine fresh run, ~5-7 min wait).
-const FRESH_TTL = 12 * 60 * 60_000   // 12 hours
-const STALE_TTL = 24 * 60 * 60_000   // 24 hours
+// FRESH_TTL = 1 hour: groups quick session reloads (no waste) but lets
+//   spaced-out visits get fresh picks via stale-revalidate.
+// STALE_TTL = 8 hours: visits within 8h of last refresh always render
+//   instantly (with background refresh kicking off). Beyond 8h = cold-
+//   start, but with 1x/day cron at 6am UTC this only happens if cron
+//   fails or user is up at unusual hours.
+const FRESH_TTL = 60 * 60_000           // 1 hour
+const STALE_TTL = 8 * 60 * 60_000       // 8 hours
 
 // Disk-backed cache so server restarts inherit the previous analysis.
 // First dashboard visit after `npm run dev` is instant from disk; pre-warm

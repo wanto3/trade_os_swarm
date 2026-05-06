@@ -1,35 +1,33 @@
-name: Polymarket — resolution every 2h + Opus refresh every 12h
+name: Polymarket — resolution every 2h + Opus refresh 1x/day
 
-# Two-loop architecture matching the user's subscription budget:
+# User's chosen subscription budget pattern:
+#   "Idle day 1-2 cron job only. When we visit then more is fine."
 #
-#   • Resolution-only loop (every 2h): hits /api/polymarket/resolve-only.
-#     Polls Polymarket Gamma API (free, no LLM). Closes resolved positions.
-#     Updates bankroll history. Keeps Render container warm.
+# Translates to:
+#   - Resolution-only loop (every 2h, free, no Opus): polls Polymarket
+#     Gamma API to close resolved positions, updates bankroll history,
+#     keeps Render container warm. Zero LLM cost.
+#   - Opus refresh loop (1x/day at 06:00 UTC): pre-warms the SWR cache
+#     so the first morning dashboard visit is instant. Also runs the
+#     resolution pass as a free side-effect.
 #
-#   • Opus refresh loop (every 12h, 2x/day): hits /api/polymarket. Runs
-#     the full Opus 4.7 screening pipeline (~55-market batch). Refreshes
-#     the SWR cache so user dashboard visits always serve instantly with
-#     picks ≤12h old. Exactly 2 Opus calls/day, predictable subscription
-#     budget.
-#
-# Combined effect:
-#   - User visits dashboard → instant load, picks already fresh from
-#     latest 12h cron run.
-#   - Open positions auto-resolve every 2h while user is offline.
-#   - Total Opus calls: ~2/day (down from ~48 in the old "every 30min hits
-#     /api/polymarket" pattern).
+# Combined with FRESH_TTL=1h and STALE_TTL=8h in the API:
+#   - Idle day: 1 Opus call (the 6am cron).
+#   - Active day with multiple visits: 1-4 Opus calls — cron + each
+#     spaced-out visit triggers a stale-revalidate background refresh.
+#   - Heavy reload spam in a single session: 1-2 (FRESH gate dominates).
 #
 # To pause: disable the workflow in GitHub UI's Actions tab.
 # To trigger manually: 'Run workflow' button on the same tab.
 
 on:
   schedule:
-    # Resolve-only: every 2 hours (12 invocations/day, ~5-15s each).
+    # Resolve-only: every 2 hours UTC (12 hits/day, ~5-15s each).
     - cron: "0 */2 * * *"
-    # Opus refresh: every 12 hours (2 invocations/day at 06:00 and 18:00 UTC).
-    # Aligned to roughly bracket waking hours globally — first run early
-    # morning Asia/EU, second early evening Americas. User can adjust.
-    - cron: "0 6,18 * * *"
+    # Opus refresh: 1x/day at 06:00 UTC (1 hit/day, ~5-7 min).
+    # Picked early-morning UTC so the first daily dashboard visit
+    # (whatever the user's TZ) lands on warm cache.
+    - cron: "0 6 * * *"
   workflow_dispatch: {}  # also allow manual trigger from Actions UI
 
 jobs:
@@ -40,20 +38,20 @@ jobs:
       - name: Determine which loop to run
         id: which
         run: |
-          # Match the cron schedule that triggered this run. GitHub Actions
-          # exposes the schedule via $GITHUB_EVENT_PATH event.schedule.
-          # Hour-of-day check is the cheapest way to differentiate.
+          # The 06:00 UTC slot is the Opus refresh. All others are resolve-only.
+          # Note: when both crons coincide (06:00 hour), GitHub fires both
+          # schedules in the same workflow run; we route based on hour.
           HOUR=$(date -u +%H)
-          if [ "$HOUR" = "06" ] || [ "$HOUR" = "18" ]; then
+          if [ "$HOUR" = "06" ]; then
             echo "kind=opus" >> $GITHUB_OUTPUT
             echo "url=https://trade-os-swarm.onrender.com/api/polymarket" >> $GITHUB_OUTPUT
             echo "timeout=540" >> $GITHUB_OUTPUT
-            echo "[$(date -u +%FT%TZ)] OPUS REFRESH cycle (12h cadence)"
+            echo "[$(date -u +%FT%TZ)] OPUS REFRESH (1x/day)"
           else
             echo "kind=resolve" >> $GITHUB_OUTPUT
             echo "url=https://trade-os-swarm.onrender.com/api/polymarket/resolve-only" >> $GITHUB_OUTPUT
             echo "timeout=60" >> $GITHUB_OUTPUT
-            echo "[$(date -u +%FT%TZ)] RESOLVE-ONLY cycle (2h cadence)"
+            echo "[$(date -u +%FT%TZ)] RESOLVE-ONLY (2h cadence)"
           fi
 
       - name: Hit endpoint
