@@ -153,6 +153,8 @@ interface Analytics {
     onTrack: boolean
   }>
   targetBankrollToday?: number
+  targetEndBankroll?: number
+  daysToTargetEnd?: number
   sampleSizeNeeded?: number
   hasSignificantSample?: boolean
 }
@@ -1186,9 +1188,13 @@ POLYMARKET_CLOB_API_SECRET=...`}
                 recExt.aiEdge !== 'weak'
             })
             const bankroll = paperPortfolio?.bankroll ?? 4
-            const targetEnd = 100
-            const daysLeft = Math.max(1, Math.ceil((new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
-            const requiredDailyRate = bankroll > 0 ? Math.pow(targetEnd / bankroll, 1 / daysLeft) - 1 : 0
+            // End-state target = startingBankroll × 25 (server-computed).
+            // Falls back gracefully if analytics hasn't loaded yet.
+            const targetEnd = analytics?.targetEndBankroll ?? Math.max(100, bankroll * 25)
+            const daysLeft = analytics?.daysToTargetEnd ?? Math.max(1, Math.ceil((new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
+            const requiredDailyRate = bankroll > 0 && targetEnd > bankroll
+              ? Math.pow(targetEnd / bankroll, 1 / daysLeft) - 1
+              : 0  // already past target → no required growth
             const onTrack = dailyTargets.length >= 1 || longshots.length >= 1
             // Top picks for one-click deployment: highest daily-ROI from
             // daily-target lane, capped at 4 (matches $4 bankroll → $1/pick).
@@ -1222,7 +1228,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
               }}>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', flexWrap: 'wrap' }}>
                   <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#e6edf3' }}>
-                    🎯 ${bankroll.toFixed(2)} → $100 in {daysLeft}d
+                    🎯 ${bankroll.toFixed(2)} → ${targetEnd >= 1000 ? `${(targetEnd / 1000).toFixed(1)}k` : targetEnd.toFixed(0)} in {daysLeft}d
                   </span>
                   <span style={{ fontSize: '0.55rem', color: '#8b949e' }}>
                     needs {(requiredDailyRate * 100).toFixed(1)}%/day

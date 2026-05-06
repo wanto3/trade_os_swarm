@@ -228,23 +228,38 @@ function calculateKellyBetSize(
   return bankroll * cappedKelly * multiplier * edgeTrustMultiplier
 }
 
-/** Compounding-target end goal: $4 → $100 by 2026-05-31 23:59 UTC.
- *  The user's stated end-of-month target. Used for the trajectory line. */
-const TARGET_END_BANKROLL = 100
+/** Compounding-target multiplier: grow the bankroll by this factor by
+ *  TARGET_END_DATE_UTC. User's stated $4 → $100 = 25× growth, applied
+ *  uniformly so any starting bankroll has a sensible target:
+ *   $4 start  → $100 target
+ *   $10 start → $250 target
+ *   $1000 start → $25,000 target
+ *  This avoids the broken "shrink $1000 → $100" trajectory that came
+ *  from a hardcoded $100 absolute target. */
+const TARGET_MULTIPLIER = 25
 const TARGET_END_DATE_UTC = '2026-05-31T23:59:00Z'
 
+/** End-state target bankroll (start × multiplier). Used for trajectory
+ *  + UI labels. */
+function targetEndBankroll(): number {
+  const start = portfolio.startingBankroll || 4
+  return start * TARGET_MULTIPLIER
+}
+
 /** Compute "where the bankroll SHOULD be today" if we're on a smooth
- *  log-interpolated path from start → target. Used for the on-track flag
- *  and the trajectory overlay on the compounding chart. */
+ *  log-interpolated GROWTH path from start → start×TARGET_MULTIPLIER.
+ *  Always ascending — the on-track flag means "growing fast enough."
+ *  Used for the daily progress trajectory. */
 function computeTargetBankroll(): number {
   const startBankroll = portfolio.startingBankroll || 4
+  const targetEnd = targetEndBankroll()
   const startTs = portfolio.bankrollHistory?.[0]?.ts ?? Date.now()
   const targetTs = new Date(TARGET_END_DATE_UTC).getTime()
   const totalDays = Math.max(1, (targetTs - startTs) / (1000 * 60 * 60 * 24))
   const daysElapsed = Math.max(0, (Date.now() - startTs) / (1000 * 60 * 60 * 24))
-  if (daysElapsed >= totalDays) return TARGET_END_BANKROLL
+  if (daysElapsed >= totalDays) return targetEnd
   // Log-interpolate: bankroll(t) = start × (target/start)^(t/totalDays)
-  const ratio = TARGET_END_BANKROLL / startBankroll
+  const ratio = targetEnd / startBankroll
   return startBankroll * Math.pow(ratio, daysElapsed / totalDays)
 }
 
@@ -631,6 +646,10 @@ export function getAnalytics(): {
   dailyPerformance: DailySnapshot[]
   /** Where the bankroll SHOULD be today vs target. UI shows delta. */
   targetBankrollToday: number
+  /** End-state target bankroll: startingBankroll × TARGET_MULTIPLIER. */
+  targetEndBankroll: number
+  /** Days remaining to TARGET_END_DATE_UTC (clipped to 0). */
+  daysToTargetEnd: number
   /** Resolved trade count required for statistical confidence. */
   sampleSizeNeeded: number
   /** True when total resolved >= sampleSizeNeeded. */
@@ -774,6 +793,11 @@ export function getAnalytics(): {
     bankrollHistory: portfolio.bankrollHistory ?? [],
     dailyPerformance: portfolio.dailyPerformance ?? [],
     targetBankrollToday: computeTargetBankroll(),
+    targetEndBankroll: targetEndBankroll(),
+    daysToTargetEnd: Math.max(
+      0,
+      Math.ceil((new Date(TARGET_END_DATE_UTC).getTime() - Date.now()) / (1000 * 60 * 60 * 24)),
+    ),
     sampleSizeNeeded: SAMPLE_SIZE_NEEDED,
     hasSignificantSample,
   }
