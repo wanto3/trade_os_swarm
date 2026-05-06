@@ -142,7 +142,7 @@ For EACH market, output:
     * "medium": you have a reasonable directional prior even if not airtight — partial info, comparable historical patterns, sector knowledge from training data, observable trends. THIS IS THE DEFAULT for markets you can reason about even if you can't cite a specific source.
     * "low": ONLY use when you genuinely have no information about the entities, no prior, and no way to ground an estimate. Two competing teams you've never heard of with no recent context. A coin-flip with no public data either way. If you have ANY prior (e.g. "incumbents usually win these", "market price already implies the consensus is reasonable"), use medium, not low.
 - reasoning: 1-2 sentences explaining the call. For closing-soon picks, name the specific fact/event/prior that creates edge.
-- shouldBet: true if confidence is high or medium AND there's a meaningful edge (≥5% normally; ≥2% for closing-soon)
+- shouldBet: true if confidence is high or medium AND there's a meaningful edge (≥5% normally; ≥2% for closing-soon; ≥1% for Cat A heavy-favorite confirmations at yesPrice ≥0.85 closing within 48h — these are safe-scalp territory where small confirmed edges are structurally valuable to a small-bankroll trader compounding daily).
 
 Be calibrated, not paranoid. The user is paying for Opus 4.7 specifically because you have broad world knowledge — use it. Don't reflexively skip just because you can't cite a source; if you can reason about it, that's medium confidence. But don't fabricate edges where none exist either.
 
@@ -274,14 +274,19 @@ function applySafetyRules(
 
   // Relaxed safety rules for screening:
   // - 'low' confidence: still skip (model itself signaled uncertainty)
-  // - edge threshold: 3% normally, 2% for closing-soon (≤24h) markets where
-  //   small edges matter more because resolution is imminent and slippage
-  //   risk is lower
+  // - edge threshold scales with horizon AND market price band:
+  //   * 3% normally
+  //   * 2% for closing-soon (≤24h) — fast resolution = lower slippage risk
+  //   * 1% for Cat A safe-scalps (≤48h AND yesPrice ≥0.85 OR ≤0.15) —
+  //     these are heavy-favorite confirmations where 1-2pt confirmed edges
+  //     compound reliably for a $4-bankroll user. Was blocking these
+  //     entirely before.
   const closingHours = endDate
     ? Math.max(0, (new Date(endDate).getTime() - Date.now()) / 3_600_000)
     : 999
   const isClosingSoon = closingHours <= 24
-  const edgeThreshold = isClosingSoon ? 0.02 : 0.03
+  const isCatASafeScalp = closingHours <= 48 && (marketYesPrice >= 0.85 || marketYesPrice <= 0.15)
+  const edgeThreshold = isCatASafeScalp ? 0.01 : isClosingSoon ? 0.02 : 0.03
 
   if (confidence === 'low') {
     shouldBet = false
