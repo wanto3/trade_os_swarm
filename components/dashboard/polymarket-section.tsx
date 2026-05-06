@@ -140,6 +140,8 @@ interface Analytics {
   evAccuracyTrades: number
   byConvictionBand?: Array<{ band: string; scoreRange: string; bets: number; wins: number; losses: number; winRate: number; pnl: number }>
   byDpsTier?: Array<{ tier: string; bets: number; wins: number; losses: number; winRate: number; pnl: number }>
+  byAiEdge?: Array<{ edge: string; bets: number; wins: number; losses: number; winRate: number; pnl: number; avgRoi: number }>
+  bankrollHistory?: Array<{ ts: number; bankroll: number; totalPnl: number; trigger: string }>
   sampleSizeNeeded?: number
   hasSignificantSample?: boolean
 }
@@ -1675,6 +1677,58 @@ POLYMARKET_CLOB_API_SECRET=...`}
                 </div>
               </div>
 
+              {/* ── Compounding Curve (live, includes mid-day placement events) ──
+                  Different from Equity Curve below: equityCurve is daily
+                  resolution-only snapshots; this is every bankroll change
+                  including placement (cost outflow) so the user sees the full
+                  $4 → $X journey, including capital tied up vs released. */}
+              {analytics.bankrollHistory && analytics.bankrollHistory.length > 1 && (() => {
+                const hist = analytics.bankrollHistory
+                const min = Math.min(...hist.map(p => p.bankroll))
+                const max = Math.max(...hist.map(p => p.bankroll))
+                const range = max - min || 1
+                const first = hist[0]
+                const last = hist[hist.length - 1]
+                const totalGrowthPct = first.bankroll > 0 ? ((last.bankroll - first.bankroll) / first.bankroll) * 100 : 0
+                const days = (last.ts - first.ts) / (1000 * 60 * 60 * 24)
+                const dailyGrowth = days > 0.5 ? Math.pow(1 + totalGrowthPct / 100, 1 / days) - 1 : 0
+                return (
+                  <div style={{ backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '12px', padding: '1rem', marginBottom: '1rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.75rem' }}>
+                      <h4 style={{ fontSize: '0.7rem', fontWeight: 700, color: '#e6edf3', margin: 0 }}>💰 Compounding Curve</h4>
+                      <span style={{ fontSize: '0.55rem', color: totalGrowthPct >= 0 ? '#3fb950' : '#f85149', fontWeight: 700 }}>
+                        ${first.bankroll.toFixed(2)} → ${last.bankroll.toFixed(2)} ({totalGrowthPct >= 0 ? '+' : ''}{totalGrowthPct.toFixed(1)}% / {(dailyGrowth * 100).toFixed(2)}%/day)
+                      </span>
+                    </div>
+                    <div style={{ height: '60px', display: 'flex', alignItems: 'flex-end', gap: '1px' }}>
+                      {hist.map((p, i) => {
+                        const height = ((p.bankroll - min) / range) * 100
+                        const color = p.trigger === 'won' ? '#3fb950'
+                          : p.trigger === 'lost' ? '#f85149'
+                          : p.trigger === 'placed' ? '#58a6ff'
+                          : '#8b949e'
+                        return (
+                          <div
+                            key={i}
+                            title={`${new Date(p.ts).toLocaleDateString()} ${p.trigger}: $${p.bankroll.toFixed(2)}`}
+                            style={{
+                              flex: 1, height: `${Math.max(4, height)}%`,
+                              backgroundColor: color,
+                              borderRadius: '2px 2px 0 0',
+                              opacity: 0.7 + (i / hist.length) * 0.3,
+                            }}
+                          />
+                        )
+                      })}
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.25rem', fontSize: '0.55rem', color: '#484f58' }}>
+                      <span>start</span>
+                      <span>now ({hist.length} events)</span>
+                    </div>
+                  </div>
+                )
+              })()}
+
               {/* Equity Curve */}
               {analytics.equityCurve.length > 1 && (
                 <div style={{ backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '12px', padding: '1rem' }}>
@@ -1698,6 +1752,70 @@ POLYMARKET_CLOB_API_SECRET=...`}
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.25rem' }}>
                     <span style={{ fontSize: '0.55rem', color: '#484f58' }}>{analytics.equityCurve[0]?.date}</span>
                     <span style={{ fontSize: '0.55rem', color: '#484f58' }}>{analytics.equityCurve[analytics.equityCurve.length - 1]?.date}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Algorithm Validation: per-AI-edge hit rate ──
+                  Most actionable cut: tells us where Opus is reliable.
+                  - 'strong' should aim for ≥85% win rate after 20 bets
+                  - 'user' (esports) tracks user-judgment accuracy
+                  - 'weak' should be ≤60% — if so, exclude from future bets */}
+              {analytics.byAiEdge && analytics.byAiEdge.some(t => t.bets > 0) && (
+                <div style={{ backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '12px', padding: '1rem', marginBottom: '1rem' }}>
+                  <h4 style={{ fontSize: '0.7rem', fontWeight: 700, color: '#e6edf3', margin: '0 0 0.75rem 0' }}>
+                    AI-Edge Tier Hit Rate <span style={{ color: '#8b949e', fontWeight: 400 }}>(where Opus actually wins)</span>
+                  </h4>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '0.5rem' }}>
+                    {analytics.byAiEdge.map(t => {
+                      const cfg = t.edge === 'strong'
+                        ? { icon: '🤖', label: 'AI Strong', color: '#3fb950' }
+                        : t.edge === 'user'
+                          ? { icon: '👤', label: 'Your Edge', color: '#a371f7' }
+                          : t.edge === 'weak'
+                            ? { icon: '⚠️', label: 'Limited', color: '#a09060' }
+                            : { icon: '·', label: 'Untagged', color: '#8b949e' }
+                      const hitRateColor = t.bets === 0 ? '#484f58'
+                        : t.winRate >= 75 ? '#3fb950'
+                        : t.winRate >= 55 ? '#f0c000'
+                        : '#f85149'
+                      return (
+                        <div key={t.edge} style={{
+                          padding: '0.6rem 0.5rem',
+                          backgroundColor: '#0d1117',
+                          borderRadius: '8px',
+                          border: `1px solid ${cfg.color}33`,
+                        }}>
+                          <div style={{ fontSize: '0.55rem', color: cfg.color, fontWeight: 700, marginBottom: '0.3rem' }}>
+                            {cfg.icon} {cfg.label}
+                          </div>
+                          <div style={{ fontSize: '1.1rem', fontWeight: 700, color: hitRateColor, lineHeight: 1 }}>
+                            {t.bets > 0 ? `${t.winRate.toFixed(0)}%` : '—'}
+                          </div>
+                          <div style={{ fontSize: '0.5rem', color: '#8b949e', marginTop: '0.25rem' }}>
+                            {t.wins}W / {t.losses}L / {t.bets} total
+                          </div>
+                          <div style={{ fontSize: '0.5rem', color: t.pnl >= 0 ? '#3fb950' : '#f85149', marginTop: '0.15rem' }}>
+                            ${t.pnl >= 0 ? '+' : ''}{t.pnl.toFixed(2)} ({t.avgRoi >= 0 ? '+' : ''}{t.avgRoi.toFixed(1)}% ROI)
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <div style={{ fontSize: '0.55rem', color: '#6e7681', marginTop: '0.5rem', fontStyle: 'italic' }}>
+                    {(() => {
+                      const total = analytics.byAiEdge.reduce((s, t) => s + t.bets, 0)
+                      const need = analytics.sampleSizeNeeded || 20
+                      if (total < need) {
+                        return `Need ${need - total} more resolved bets for statistical confidence (${total}/${need}). Place picks across all tiers to validate.`
+                      }
+                      const strong = analytics.byAiEdge.find(t => t.edge === 'strong')
+                      if (strong && strong.bets >= 5) {
+                        if (strong.winRate >= 85) return `🤖 AI Strong validated — ${strong.winRate.toFixed(0)}% hit rate. Consider larger bets in strong-tier picks.`
+                        if (strong.winRate < 60) return `🤖 AI Strong underperforming (${strong.winRate.toFixed(0)}%). Investigate prompt or category tagging.`
+                      }
+                      return `Sample valid. Tune Kelly fraction up where hit rate ≥85%; exclude tiers ≤55%.`
+                    })()}
                   </div>
                 </div>
               )}
