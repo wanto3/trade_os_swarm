@@ -15,12 +15,22 @@ interface CategorySignal {
 }
 
 const HIGH_DPS_SIGNALS: CategorySignal[] = [
-  // Politics / elections / legislation — polls and news create dense signal
-  { pattern: /\b(election|primary|senator|congress|president(ial)?|governor|legislat|impeach|nominee|nomination|veto|signed into law|supreme court|fed (rate|chair|decision)|tariff|sanction|resign(s|ed|ation)?|step\s?down|cabinet (pick|nominee)|confirmed by senate|approval rating|filibuster)\b/i, category: 'politics', score: 85 },
+  // Politics / elections / legislation / political-legal — polls, news,
+  // base rates create dense signal. Includes "arrested/indicted/charges"
+  // because political/celebrity legal markets ("Will Newsom be arrested
+  // before 2027?", "Will Homan be indicted?") are textbook AI base-rate
+  // territory — sitting officials almost never get arrested in any given
+  // year, and Opus knows that distribution.
+  { pattern: /\b(election|primary|senator|congress|president(ial)?|governor|mayor(al)?|legislat|impeach|nominee|nomination|veto|signed into law|supreme court|fed (rate|chair|decision)|tariff|sanction|resign(s|ed|ation)?|step\s?down|cabinet (pick|nominee)|confirmed by senate|approval rating|filibuster|arrested? before|indicted|criminal charges|prosecut(ed|ion)|out as (president|chair|fed|governor|secretary|director))\b/i, category: 'politics', score: 85 },
   // Geopolitical events with paper trails (treaties, NATO, ceasefires, summits)
   { pattern: /\b(ceasefire|peace deal|treaty signed|nato (membership|accession)|join (nato|eu)|sanction(s)? against|summit|g7 (meeting|summit)|g20 (meeting|summit)|un security council|withdraw from)\b/i, category: 'geopolitics', score: 78 },
-  // Esports — match histories, meta, bracket structure
-  { pattern: /\b(esports|league of legends|lol worlds|dota|csgo|cs2|counter-strike|valorant|overwatch|fortnite|starcraft|rocket league|t1|g2|fnatic|cloud9|tsm|gen\.?g|edward gaming|the international|major championship|iem|blast premier)\b/i, category: 'esports', score: 80 },
+  // Esports — match histories, meta, bracket structure. Polymarket prefixes
+  // most matches with "LoL:" / "CS:" / "Valorant:" so we anchor on those
+  // explicitly. Also covers all major league acronyms (LCK/LEC/LPL/LCS/VCT)
+  // and BO3/BO5 format markers — previously LoL Dplus KIA vs KT Rolster
+  // (LCK match) wasn't matching and got tagged as 'general', losing its
+  // priority slot.
+  { pattern: /\b(esports|league of legends|lol\s*[:\s]|lol worlds|dota\s*\d?|csgo|cs2|counter-strike|valorant|overwatch|fortnite|starcraft|rocket league|t1|g2|fnatic|cloud9|tsm|gen\.?g|edward gaming|the international|major championship|iem|blast premier|lck|lec|lpl|lcs|vct|rlcs|esl pro league|bo[35](\s+|\)))\b/i, category: 'esports', score: 80 },
   // Box office / streaming / awards — opening weekend data is dense
   { pattern: /\b(box office|opening weekend|gross over|gross more than|domestic gross|worldwide gross|netflix top 10|streaming chart|rotten tomatoes|metacritic score|oscar|academy award|emmy|grammy|best picture|best actor|best actress|album of the year|song of the year)\b/i, category: 'box-office', score: 78 },
   // Crypto on-chain milestones (NOT price predictions, which are noise)
