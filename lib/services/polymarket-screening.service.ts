@@ -88,11 +88,33 @@ ${marketLines}
   - Are there clear public-record facts (polls, news, official announcements, scheduled events) that decisively support one side?
   - Is the market price stale relative to recent developments?
   - For HEAVY favorites (yesPrice ≥0.85 or ≤0.15): your job is mostly to confirm or refute consensus. If nothing odd, agree with the market and bet the favorite for a small reliable edge — these are "safe scalps" the user wants daily.
-  - For ESPORTS / SPORTS markets: the user has a documented edge here from their own follow-the-team knowledge. Even if you can't cite recent stats, give your honest directional lean based on:
-      * recent tournament/season standings if you have priors
-      * historical head-to-head if you know the teams
-      * roster reputation, region strength, format (BO3 vs BO5)
-    Use confidence="medium" if you have any directional prior, "low" only if both teams are completely unfamiliar. Provide reasoning even on skips so the user can apply their own knowledge.
+
+  - SPORTS NATURE matters — calibrate by domain, not as a single category:
+      * NBA / NFL / MLB / NHL / Soccer / major-league team sports:
+          → Outcomes between similarly-skilled teams ARE genuinely close to 50/50.
+          → Only call YES/NO direction when there's a real competence gap (one
+            team is much stronger, key player out, dominant home record, etc.).
+          → If teams are evenly matched, the market price near 50% is FAIR —
+            return skip with yourEstimate ≈ market price.
+          → Heavy favorites (>80%) — confirm or flag a specific reason to fade.
+
+      * ESPORTS (Valorant, LoL, CS, Dota, OW, etc.):
+          → NOT coin-flip nature even when prices look balanced. Team identity,
+            current-meta fit, roster form, region strength, and format (BO3/BO5)
+            create real edge that the market often underprices.
+          → The user has DOCUMENTED EDGE in esports 24h markets — don't reflexively
+            skip these. If you have ANY prior — even "this team has strong
+            international results", "this region is currently dominant", "the
+            favored team's IGL is reliable in clutch" — give your directional
+            lean with confidence="medium" and reasoning the user can verify.
+          → "low" confidence is only for genuinely-unknown teams in BOTH seats.
+          → Always include reasoning even on skips so the user can apply their
+            own follow-the-scene knowledge.
+
+      * Other markets (politics, geopolitics, corporate, crypto-milestone):
+          → Use the standard rubric — "medium" is the default if you have any
+            grounding, "high" for citable facts, "low" for genuinely unknown.
+
   - For genuinely 50/50 coin-flips with no signal either way: return direction="skip" with yourEstimate = the market's yesPrice (DON'T fabricate a number like 0.79 when you actually mean "I don't know").
 
 For EACH market, output:
