@@ -765,13 +765,16 @@ async function runFullPipeline(): Promise<any> {
     // DPS-prioritized candidate selection: high-DPS first (politics, esports, box-office,
     // crypto-milestones), medium-DPS to fill, skip low-DPS. Per-category cap (8) ensures
     // diversity so we don't analyze 30 politics markets and zero crypto-milestones.
-    // 22 markets per analysis run. One sequential Opus call on Render
-    // free-tier handles 15 markets in ~90-150s; 22 fits in ~150-220s,
-    // well inside the 7-min timeout, and gives more closing-soon coverage
-    // (the user's primary target). 15 was over-conservative — we burned
-    // budget on long-tail markets and starved 24h candidates.
-    const MAX_ANALYSIS = parseInt(process.env.MAX_ANALYSIS || '22', 10)
-    const CATEGORY_CAP = 8
+    // 30 markets per analysis run. With sequential Opus and bracket
+    // markets preserved in T1, the natural 24h universe contains 25-35
+    // unique closing-soon questions — we want most of them analyzed.
+    // 30 markets in one Opus call runs ~200-280s, comfortable inside
+    // the 7-min timeout. Override MAX_ANALYSIS env var if needed.
+    const MAX_ANALYSIS = parseInt(process.env.MAX_ANALYSIS || '30', 10)
+    // Per-category cap. Was 8 (deliberately low to force diversity), but
+    // for closing-soon coverage we'd rather have 12 BTC-bracket safe-scalps
+    // than enforce hard diversity that leaves T1 budget unspent.
+    const CATEGORY_CAP = 12
 
     // DPS info per market (cached in a side-Map keyed by question).
     const dpsInfo = new Map<string, { tier: 'high' | 'medium' | 'low'; category: string }>()
@@ -827,7 +830,25 @@ async function runFullPipeline(): Promise<any> {
     const inMeatyMiddleClosingSoon = (r: TradeRecommendation) => r.odds >= 0.05 && r.odds <= 0.95
     const inMeatyMiddleLonger      = (r: TradeRecommendation) => r.odds >= 0.10 && r.odds <= 0.90
 
-    const t1 = dedupeByEvent(recommendations.filter(r => r.daysToClose <= T1_DAYS && inMeatyMiddleClosingSoon(r)))
+    // T1 (≤2d closing): preserve bracket variants. BTC price has ~10
+    // sub-brackets per event (>$72K, >$76K, >$80K, …) that are individually
+    // tradable safe-scalps; collapsing via dedupeByEvent kept only one and
+    // dropped the rest. For analysis BUDGET we want all of them; the
+    // downstream eventGroups limit (3 per parent) caps UI display.
+    // Still collapse YES+NO recs of the same market via question-dedup so
+    // we don't waste a slot analyzing both sides of a binary market —
+    // route.ts side-aware logic handles that downstream.
+    const dedupeByQuestion = (arr: TradeRecommendation[]): TradeRecommendation[] => {
+      const seen = new Set<string>()
+      const out: TradeRecommendation[] = []
+      for (const r of sortByFast(arr)) {
+        if (seen.has(r.market.question)) continue
+        seen.add(r.market.question)
+        out.push(r)
+      }
+      return out
+    }
+    const t1 = dedupeByQuestion(recommendations.filter(r => r.daysToClose <= T1_DAYS && inMeatyMiddleClosingSoon(r)))
     const t2 = dedupeByEvent(recommendations.filter(r => r.daysToClose > T1_DAYS && r.daysToClose <= T2_DAYS && inMeatyMiddleClosingSoon(r)))
     const t3 = dedupeByEvent(recommendations.filter(r => r.daysToClose > T2_DAYS && inMeatyMiddleLonger(r)))
 
@@ -1306,6 +1327,20 @@ async function runFullPipeline(): Promise<any> {
       // parse failure, etc.). Empty array = healthy. Critical for diagnosing
       // "0 opportunities" on Render where we can't tail logs cheaply.
       screeningErrors: getLastBatchErrors(),
+      // Debug: market-selection funnel. Shows where 24h coverage gets
+      // lost — if t1Universe=32 but t1Selected=6, the selector is leaving
+      // budget on the table. Numbers are post-dedupe.
+      funnel: {
+        recsTotal: recommendations.length,
+        t1Universe: t1.length,           // ≤2d markets eligible (post dedupe)
+        t2Universe: t2.length,           // 2-7d markets eligible
+        t3Universe: t3.length,           // >7d markets eligible
+        t1Selected: tierFill.t1,
+        t2Selected: tierFill.t2,
+        t3Selected: tierFill.t3,
+        budgetTotal: MAX_ANALYSIS,
+        t1Budget: T1_MAX,
+      },
       // Debug: raw per-market LLM verdicts. Lets us audit "Opus screened N,
       // surfaced 0" — see whether direction='skip' (and which subkind: low
       // confidence, edge<threshold, inconsistent), or whether reasoning
