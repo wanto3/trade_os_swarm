@@ -541,6 +541,56 @@ export function createPosition(rec: TradeRecommendation): PolymarketPosition | n
   return position
 }
 
+/** Cancel an OPEN position — refunds the cost back to bankroll and removes
+ *  the position entirely (does NOT mark it as won/lost — pretend it never
+ *  happened). Designed for "I clicked Place by accident" recovery. Returns
+ *  the canceled position or null if not found / already resolved.
+ *
+ *  Side effects mirror createPosition's bookkeeping in reverse so the
+ *  bankrollHistory + dailyPerformance charts stay coherent. */
+export function cancelPosition(positionId: string): PolymarketPosition | null {
+  const idx = positions.findIndex(p => p.id === positionId)
+  if (idx < 0) return null
+  const pos = positions[idx]
+  if (pos.status !== 'open') {
+    // Already resolved — can't cancel after the fact, that would mess
+    // with realized PnL accounting. Use resetPortfolio for a full wipe.
+    console.log(`[PolymarketPortfolio] Cannot cancel ${positionId}: status=${pos.status}`)
+    return null
+  }
+  // Remove from positions array + refund stake to bankroll
+  positions.splice(idx, 1)
+  portfolio.bankroll += pos.cost
+  portfolio.totalTrades = positions.length
+  portfolio.lastUpdate = Date.now()
+  // Append a snapshot tagged 'invalid' so the curve shows the refund as a
+  // bankroll-restoration event (same trigger we already use for void
+  // markets — semantically equivalent: stake came back, no PnL).
+  snapshotBankroll('invalid')
+  recordDailySnapshot()
+  savePortfolioData()
+  console.log(`[PolymarketPortfolio] Canceled: ${pos.question.substring(0, 60)} | refunded $${pos.cost.toFixed(2)}`)
+  return pos
+}
+
+/** Manually edit the bankroll. Use cases:
+ *   - User typo'd starting bankroll (was $1000 default, wants $4)
+ *   - User reconciling against an external source
+ *  Snapshots an 'init' event so the curve shows the adjustment. */
+export function setBankroll(newBankroll: number, alsoSetStarting = false): PolymarketPortfolio {
+  if (!isFinite(newBankroll) || newBankroll < 0) {
+    throw new Error(`Invalid bankroll value: ${newBankroll}`)
+  }
+  portfolio.bankroll = newBankroll
+  if (alsoSetStarting) portfolio.startingBankroll = newBankroll
+  portfolio.lastUpdate = Date.now()
+  snapshotBankroll('init')
+  recordDailySnapshot()
+  savePortfolioData()
+  console.log(`[PolymarketPortfolio] Bankroll manually set to $${newBankroll.toFixed(2)}${alsoSetStarting ? ' (also reset starting)' : ''}`)
+  return portfolio
+}
+
 export function resolvePosition(
   positionId: string,
   resolution: 'yes' | 'no' | 'invalid'

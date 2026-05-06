@@ -1755,22 +1755,70 @@ POLYMARKET_CLOB_API_SECRET=...`}
             </div>
           ) : (
             <>
-              {/* Portfolio summary */}
+              {/* Portfolio summary + edit bankroll button */}
               {paperPortfolio && (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.75rem', marginBottom: '1rem' }}>
-                  {[
-                    { label: 'Bankroll', value: `$${paperPortfolio.bankroll.toFixed(2)}`, sub: `Started: $${paperPortfolio.startingBankroll}`, color: '#3fb950' },
-                    { label: 'Total P&L', value: paperPortfolio.totalPnl >= 0 ? `+$${paperPortfolio.totalPnl.toFixed(2)}` : `-$${Math.abs(paperPortfolio.totalPnl).toFixed(2)}`, sub: `${paperPortfolio.totalTrades} trades`, color: paperPortfolio.totalPnl >= 0 ? '#3fb950' : '#f85149' },
-                    { label: 'Open Positions', value: `${openPositions.length}`, sub: `Max: ${autoConfig?.maxOpenPositions || 5}`, color: '#58a6ff' },
-                    { label: 'Kelly Mode', value: autoConfig?.kellyMode === 'quarter' ? '¼ Kelly' : autoConfig?.kellyMode === 'half' ? '½ Kelly' : 'Full', sub: `Max bet: ${autoConfig?.maxBetSizePercent || 10}%`, color: '#8b5cf6' },
-                  ].map((stat, i) => (
-                    <div key={i} style={{ backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '12px', padding: '0.75rem 1rem' }}>
-                      <div style={{ fontSize: '0.9rem', fontWeight: 700, color: stat.color }}>{stat.value}</div>
-                      <div style={{ fontSize: '0.6rem', color: '#6e7681' }}>{stat.label}</div>
-                      <div style={{ fontSize: '0.55rem', color: '#484f58' }}>{stat.sub}</div>
-                    </div>
-                  ))}
-                </div>
+                <>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.75rem', marginBottom: '0.5rem' }}>
+                    {[
+                      { label: 'Bankroll', value: `$${paperPortfolio.bankroll.toFixed(2)}`, sub: `Started: $${paperPortfolio.startingBankroll}`, color: '#3fb950' },
+                      { label: 'Total P&L', value: paperPortfolio.totalPnl >= 0 ? `+$${paperPortfolio.totalPnl.toFixed(2)}` : `-$${Math.abs(paperPortfolio.totalPnl).toFixed(2)}`, sub: `${paperPortfolio.totalTrades} trades`, color: paperPortfolio.totalPnl >= 0 ? '#3fb950' : '#f85149' },
+                      { label: 'Open Positions', value: `${openPositions.length}`, sub: `Max: ${autoConfig?.maxOpenPositions || 5}`, color: '#58a6ff' },
+                      { label: 'Kelly Mode', value: autoConfig?.kellyMode === 'quarter' ? '¼ Kelly' : autoConfig?.kellyMode === 'half' ? '½ Kelly' : 'Full', sub: `Max bet: ${autoConfig?.maxBetSizePercent || 10}%`, color: '#8b5cf6' },
+                    ].map((stat, i) => (
+                      <div key={i} style={{ backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '12px', padding: '0.75rem 1rem' }}>
+                        <div style={{ fontSize: '0.9rem', fontWeight: 700, color: stat.color }}>{stat.value}</div>
+                        <div style={{ fontSize: '0.6rem', color: '#6e7681' }}>{stat.label}</div>
+                        <div style={{ fontSize: '0.55rem', color: '#484f58' }}>{stat.sub}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {/* Edit-bankroll quick action — for typo'd starting balance or
+                      reconciling against external truth. Asks for both the new
+                      value AND whether to also reset starting (so target trajectory
+                      recomputes). */}
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginBottom: '1rem' }}>
+                    <button
+                      onClick={async () => {
+                        const newVal = window.prompt(
+                          `Edit bankroll. Current: $${paperPortfolio.bankroll.toFixed(2)} (started: $${paperPortfolio.startingBankroll}).\n\nEnter new bankroll value:`,
+                          paperPortfolio.bankroll.toFixed(2),
+                        )
+                        if (newVal === null) return
+                        const parsed = parseFloat(newVal)
+                        if (!isFinite(parsed) || parsed < 0) {
+                          alert('Invalid value — must be a non-negative number')
+                          return
+                        }
+                        const alsoSetStarting = window.confirm(
+                          `Set new bankroll to $${parsed.toFixed(2)}.\n\nAlso reset STARTING bankroll to this value?\n\nClick OK to also reset starting (recomputes the $X → $${(parsed * 25).toFixed(0)} trajectory).\nClick Cancel to keep starting as-is (just adjust current bankroll).`,
+                        )
+                        try {
+                          const res = await fetch('/api/polymarket/positions', {
+                            method: 'PATCH',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ bankroll: parsed, alsoSetStarting }),
+                          })
+                          const json = await res.json()
+                          if (json.success) {
+                            loadPaperData()
+                            alert(`Bankroll updated to $${parsed.toFixed(2)}${alsoSetStarting ? ' (starting reset too)' : ''}`)
+                          } else {
+                            alert(`Failed: ${json.error}`)
+                          }
+                        } catch (e) {
+                          alert(`Network error: ${e}`)
+                        }
+                      }}
+                      style={{
+                        fontSize: '0.6rem', padding: '0.35rem 0.7rem',
+                        background: 'transparent', border: '1px solid #30363d',
+                        borderRadius: '6px', color: '#8b949e', cursor: 'pointer',
+                      }}
+                    >
+                      ✎ Edit bankroll
+                    </button>
+                  </div>
+                </>
               )}
 
               {/* Positions table */}
@@ -1778,7 +1826,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead>
                     <tr style={{ borderBottom: '1px solid #21262d' }}>
-                      {['Market', 'Outcome', 'Status', 'Cost', 'P&L', 'Hold Time', 'Category', 'Safety'].map((h, i) => (
+                      {['Market', 'Outcome', 'Status', 'Cost', 'P&L', 'Hold Time', 'Category', 'Safety', ''].map((h, i) => (
                         <th key={i} style={{ padding: '8px 12px', textAlign: 'left', fontSize: '0.6rem', fontWeight: 700, color: '#6e7681', textTransform: 'uppercase' }}>{h}</th>
                       ))}
                     </tr>
@@ -1786,6 +1834,26 @@ POLYMARKET_CLOB_API_SECRET=...`}
                   <tbody>
                     {[...paperPositions].sort((a, b) => b.placedAt - a.placedAt).map(pos => {
                       const daysHeld = Math.floor((Date.now() - pos.placedAt) / (1000 * 60 * 60 * 24))
+                      const cancelPosition = async () => {
+                        // Confirm before refunding — prevents fat-finger mistakes.
+                        const ok = window.confirm(
+                          `Cancel this paper position?\n\n${pos.question.substring(0, 100)}\n\nStake: $${pos.cost.toFixed(2)} on ${pos.outcome}\nThis will REFUND $${pos.cost.toFixed(2)} to your bankroll and remove the position entirely (no win/loss recorded).\n\nUse this only for accidental placements — resolved positions cannot be canceled.`,
+                        )
+                        if (!ok) return
+                        try {
+                          const res = await fetch(`/api/polymarket/positions?id=${encodeURIComponent(pos.id)}`, {
+                            method: 'DELETE',
+                          })
+                          const json = await res.json()
+                          if (json.success) {
+                            loadPaperData()
+                          } else {
+                            alert(`Failed to cancel: ${json.error}`)
+                          }
+                        } catch (e) {
+                          alert(`Network error: ${e}`)
+                        }
+                      }
                       return (
                         <tr key={pos.id} style={{ borderBottom: '1px solid #21262d' }}>
                           <td style={{ padding: '8px 12px', maxWidth: '200px' }}>
@@ -1804,6 +1872,23 @@ POLYMARKET_CLOB_API_SECRET=...`}
                           <td style={{ padding: '8px 12px', fontSize: '0.65rem', color: '#6e7681' }}>{daysHeld}d</td>
                           <td style={{ padding: '8px 12px' }}><CategoryBadge cat={pos.category} /></td>
                           <td style={{ padding: '8px 12px', fontSize: '0.65rem', fontWeight: 700, color: pos.safetyScore >= 70 ? '#3fb950' : pos.safetyScore >= 55 ? '#f0883e' : '#8b949e' }}>{pos.safetyScore}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right' }}>
+                            {pos.status === 'open' ? (
+                              <button
+                                onClick={cancelPosition}
+                                title='Refund stake and remove this position. Use for accidental placements.'
+                                style={{
+                                  fontSize: '0.55rem', padding: '0.2rem 0.5rem',
+                                  background: 'transparent', border: '1px solid #f85149aa',
+                                  borderRadius: '4px', color: '#f85149', cursor: 'pointer',
+                                }}
+                              >
+                                ✕ Cancel
+                              </button>
+                            ) : (
+                              <span style={{ fontSize: '0.55rem', color: '#484f58' }}>resolved</span>
+                            )}
+                          </td>
                         </tr>
                       )
                     })}
