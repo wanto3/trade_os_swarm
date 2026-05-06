@@ -630,7 +630,18 @@ export function PolymarketSection() {
 
   const getKellyBet = (rec: TradeRecommendation) => {
     const divisor = kellyMode === 'quarter' ? 4 : kellyMode === 'half' ? 2 : 1
-    return bankroll * rec.kellyFraction / divisor
+    // Match server-side tier-trust multiplier in calculateKellyBetSize so the
+    // displayed bet matches what gets placed. AI-Strong+high → 1.5×,
+    // AI-Strong+medium → 1.2×, AI-weak → 0.6×, else 1.0×.
+    const recExt = rec as TradeRecommendation & { aiEdge?: 'strong' | 'user' | 'weak' }
+    let tierMul = 1.0
+    if (recExt.aiEdge === 'strong' && rec.confidence === 'high') tierMul = 1.5
+    else if (recExt.aiEdge === 'strong' && rec.confidence === 'medium') tierMul = 1.2
+    else if (recExt.aiEdge === 'weak') tierMul = 0.6
+    // Server caps raw Kelly at 15%; mirror so a high-edge pick doesn't appear
+    // bigger on the card than what actually places.
+    const cappedFraction = Math.min(rec.kellyFraction, 0.15)
+    return bankroll * cappedFraction * tierMul / divisor
   }
 
   const totalKellyBet = filtered.reduce((sum, r) => sum + getKellyBet(r), 0)
