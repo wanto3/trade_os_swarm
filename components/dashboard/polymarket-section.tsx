@@ -157,7 +157,7 @@ interface Portfolio {
 // ── Sort Types ────────────────────────────────────────────────────────────────
 
 type SortKey = 'fastestProfit' | 'winProb' | 'safety' | 'ev' | 'closing' | 'confidence'
-type FilterKey = 'all' | 'high' | 'medium' | 'low' | '24h' | 'today' | '3days' | '7days' | '14days' | '30days' | 'anyEdge' | 'safeScalps'
+type FilterKey = 'all' | 'high' | 'medium' | 'low' | '24h' | 'today' | '3days' | '7days' | '14days' | '30days' | 'anyEdge' | 'safeScalps' | 'compound'
 type KellyMode = 'quarter' | 'half' | 'full'
 type TabKey = 'opportunities' | 'paper-trades' | 'performance' | 'settings'
 
@@ -296,15 +296,19 @@ export function PolymarketSection() {
   const [loading, setLoading] = useState(true)
   const [walletData, setWalletData] = useState<{ positions: number; trades: number; balanceUSD: number; gnosisUSDC: number; polygonUSDT: number; totalUSD: number } | null>(null)
   const [lastUpdated, setLastUpdated] = useState<number | null>(null)
-  // Default to 'winProb' (Sure Wins): user prioritizes WIN RATE over EV.
+  // Default sort = 'fastestProfit' (compounding velocity, EV/day). With $4
+  // small capital, daily-ROI matters more than absolute EV — locking $1 for
+  // 999 days at +60% EV is much worse than 25 days at +20% EV.
   // High-mispriced bets that lose still drain bankroll; high-confidence
   // winners that compound at small per-bet returns are sustainable.
-  const [sortKey, setSortKey] = useState<SortKey>('winProb')
+  const [sortKey, setSortKey] = useState<SortKey>('fastestProfit')
   const [secondarySort, setSecondarySort] = useState<SortKey | null>(null)
   // Default 'safeScalps' — user's chosen strategy: high-win-prob picks where
   // Opus agrees with the market price, for compounding small ($4) bankroll.
   // 24h / 7d / 14d / All filters one click away when wanting time-window focus.
-  const [filterKey, setFilterKey] = useState<FilterKey>('safeScalps')
+  // Default filter = 'compound' (fast-cycling picks for $4 bankroll). User
+  // can switch to 'safeScalps', '24h', etc. for other strategies.
+  const [filterKey, setFilterKey] = useState<FilterKey>('compound')
   const [kellyMode, setKellyMode] = useState<KellyMode>('quarter')
   const [bankroll, setBankroll] = useState<number>(500)
   const [bankrollInput, setBankrollInput] = useState<string>('500')
@@ -571,6 +575,11 @@ export function PolymarketSection() {
       const marketPrice = rec.odds
       const spread = winProb - marketPrice  // signed: positive means Opus is bullish vs market
       return winProb >= 0.85 && spread > 0 && spread <= 0.10
+    }
+    if (filterKey === 'compound') {
+      // Server-tagged compoundable picks: ≤30d resolution, AI Strong, win prob
+      // ≥55%, EV >5%. These are the picks that actually let small bankroll grow.
+      return Boolean((rec as TradeRecommendation & { compoundable?: boolean }).compoundable)
     }
     // Only show markets with a real end date in time-based filters
     if (!rec.market.endDateIso) return filterKey === 'all'
@@ -1040,6 +1049,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexWrap: 'wrap' }}>
               <span style={{ fontSize: '0.6rem', color: '#6e7681', marginRight: '0.25rem' }}>Filter:</span>
               {([
+                { key: 'compound' as FilterKey, label: `💰 Compound` },
                 { key: 'safeScalps' as FilterKey, label: `🎯 Safe` },
                 { key: '24h' as FilterKey, label: `24h` },
                 { key: 'today' as FilterKey, label: `≤3d` },
@@ -1145,7 +1155,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
 
                     {/* Card content */}
                     <div style={{ flex: 1, padding: '0.7rem 0.8rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                      {/* Top row: confidence badge + AI-edge tag + question */}
+                      {/* Top row: conviction + AI-edge + Compoundable tags + question */}
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                         <span style={{
                           fontSize: '0.55rem',
@@ -1159,6 +1169,30 @@ POLYMARKET_CLOB_API_SECRET=...`}
                         }}>
                           {rec.confidence.toUpperCase()}
                         </span>
+                        {/* Compoundable tag — fast-cycling capital, key for $4 bankroll */}
+                        {(rec as TradeRecommendation & { compoundable?: boolean; dailyRoi?: number }).compoundable && (() => {
+                          const r = rec as TradeRecommendation & { dailyRoi?: number }
+                          const dailyPct = ((r.dailyRoi || 0) * 100).toFixed(1)
+                          return (
+                            <span
+                              title={`Capital recycles in ${rec.daysToClose} days at ~${dailyPct}%/day. Fast-compounding pick — ideal for small bankroll.`}
+                              style={{
+                                fontSize: '0.5rem',
+                                fontWeight: 700,
+                                color: '#f0c000',
+                                backgroundColor: 'rgba(240,192,0,0.15)',
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                                flexShrink: 0,
+                                letterSpacing: '0.02em',
+                                cursor: 'help',
+                                border: '1px solid rgba(240,192,0,0.3)',
+                              }}
+                            >
+                              💰 Compound {dailyPct}%/d
+                            </span>
+                          )
+                        })()}
                         {/* AI-edge tag — tells you whether Opus is the right brain
                             for this category. Hover for the why. */}
                         {(rec as TradeRecommendation & { aiEdge?: 'strong' | 'user' | 'weak'; aiEdgeReason?: string }).aiEdge && (() => {
@@ -1188,6 +1222,24 @@ POLYMARKET_CLOB_API_SECRET=...`}
                             </span>
                           )
                         })()}
+                        {/* Long-lock warning — capital tied up for >30 days */}
+                        {rec.daysToClose > 30 && (
+                          <span
+                            title={`Capital locked for ${rec.daysToClose} days. EV is good but daily-ROI is low — only deploy if you have spare bankroll after fast picks.`}
+                            style={{
+                              fontSize: '0.5rem',
+                              fontWeight: 700,
+                              color: '#f85149',
+                              backgroundColor: 'rgba(248,81,73,0.10)',
+                              padding: '2px 6px',
+                              borderRadius: '4px',
+                              flexShrink: 0,
+                              cursor: 'help',
+                            }}
+                          >
+                            🔒 {rec.daysToClose > 365 ? `${Math.round(rec.daysToClose/365)}y lock` : `${rec.daysToClose}d lock`}
+                          </span>
+                        )}
                         <h3 style={{
                           fontSize: '0.72rem',
                           fontWeight: 600,

@@ -60,6 +60,15 @@ export interface TradeRecommendation {
   // crypto/stock prices); undefined = uncategorized / general.
   aiEdge?: 'strong' | 'user' | 'weak'
   aiEdgeReason?: string
+  // Compounding economics for the user's small-capital scenario.
+  // dailyRoi = expectedValue / daysToClose — measures how fast capital
+  // recycles. With $4 starting capital, locking $1 for 999 days at +60% EV
+  // (=0.06%/day) is much worse than locking $1 for 25 days at +20% EV
+  // (=0.8%/day) even though absolute EV is lower.
+  // compoundable: short-horizon AI-trustworthy picks where capital cycles
+  // fast enough that a small bankroll can actually grow.
+  dailyRoi?: number
+  compoundable?: boolean
 }
 
 // ── New: Conviction & Research Types ────────────────────────────────────────
@@ -1107,6 +1116,16 @@ async function runFullPipeline(): Promise<any> {
         rec.aiEdgeReason = `Limited AI edge in ${cat} — markets often genuine 50/50 or require live data Opus lacks`
       }
       // else: leave undefined for 'general' / uncategorized — UI shows no badge
+
+      // Compounding economics: daily-ROI matters more than absolute EV when
+      // bankroll is small and capital can't sit in a 2-year longshot.
+      const days = Math.max(0.5, rec.daysToClose || 0.5)
+      rec.dailyRoi = rec.expectedValue / days
+      rec.compoundable =
+        rec.daysToClose <= 30 &&
+        rec.expectedValue > 0.05 &&
+        rec.estimatedProbability >= 0.55 &&
+        rec.aiEdge === 'strong'
 
       // Recalculate Kelly with the LLM-informed estimate. The original
       // scoreMarket Kelly used estimatedProb=marketProb (zero bias) so all
