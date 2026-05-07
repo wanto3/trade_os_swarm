@@ -392,25 +392,44 @@ function extractTimestampsFromDescription(description: string): { time: string; 
   return timestamps.slice(0, 15)
 }
 
-async function fetchLatestVideos(): Promise<any[]> {
+async function fetchLatestVideos(): Promise<{ items: any[]; error?: string }> {
   if (!YOUTUBE_API_KEY) {
-    console.warn('[Influencer] YOUTUBE_API_KEY not set')
-    return []
+    return { items: [], error: 'YOUTUBE_API_KEY env var not set on server' }
   }
   // First get the uploads playlist ID for the channel
   const channelRes = await fetch(
     `https://www.googleapis.com/youtube/v3/channels?part=contentDetails&id=${CHANNEL_ID}&key=${YOUTUBE_API_KEY}`
   )
-  if (!channelRes.ok) return []
+  if (!channelRes.ok) {
+    const body = (await channelRes.text()).slice(0, 300)
+    // Redact the API key from the body in case Google echoes it back
+    const safe = body.replace(YOUTUBE_API_KEY, '***REDACTED***')
+    return {
+      items: [],
+      error: `YouTube channels API ${channelRes.status}: ${safe}`,
+    }
+  }
   const channelData = await channelRes.json()
   const uploadsId = channelData.items?.[0]?.contentDetails?.relatedPlaylists?.uploads
-  if (!uploadsId) return []
+  if (!uploadsId) {
+    return {
+      items: [],
+      error: `YouTube channel ${CHANNEL_ID} returned no uploads playlist (channelData=${JSON.stringify(channelData).slice(0, 200)})`,
+    }
+  }
 
   // Fetch latest videos from uploads playlist
   const playlistRes = await fetch(
     `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails,status&maxResults=5&playlistId=${uploadsId}&key=${YOUTUBE_API_KEY}`
   )
-  if (!playlistRes.ok) return []
+  if (!playlistRes.ok) {
+    const body = (await playlistRes.text()).slice(0, 300)
+    const safe = body.replace(YOUTUBE_API_KEY, '***REDACTED***')
+    return {
+      items: [],
+      error: `YouTube playlistItems API ${playlistRes.status}: ${safe}`,
+    }
+  }
   const playlistData = await playlistRes.json()
 
   // Filter to only public videos and get their full details
@@ -421,7 +440,12 @@ async function fetchLatestVideos(): Promise<any[]> {
 
   // Get video IDs and fetch statistics
   const videoIds = publicItems.map((item: any) => item.snippet.resourceId?.videoId).filter(Boolean)
-  if (videoIds.length === 0) return []
+  if (videoIds.length === 0) {
+    return {
+      items: [],
+      error: `Playlist returned ${playlistData.items?.length || 0} items, none with public video IDs`,
+    }
+  }
 
   const statsRes = await fetch(
     `https://www.googleapis.com/youtube/v3/videos?part=statistics&id=${videoIds.join(',')}&key=${YOUTUBE_API_KEY}`
@@ -429,22 +453,34 @@ async function fetchLatestVideos(): Promise<any[]> {
   const statsData = statsRes.ok ? await statsRes.json() : { items: [] }
   const statsMap = new Map((statsData.items || []).map((item: any) => [item.id, item.statistics]))
 
-  return publicItems.map((item: any) => {
-    const videoId = item.snippet.resourceId?.videoId
-    return {
-      snippet: item.snippet,
-      statistics: statsMap.get(videoId) || {},
-      videoId,
-    }
-  })
+  return {
+    items: publicItems.map((item: any) => {
+      const videoId = item.snippet.resourceId?.videoId
+      return {
+        snippet: item.snippet,
+        statistics: statsMap.get(videoId) || {},
+        videoId,
+      }
+    }),
+  }
 }
 
 export async function GET() {
   try {
-    const videos = await fetchLatestVideos()
-    if (videos.length === 0) {
-      return NextResponse.json({ success: false, error: 'Could not fetch channel videos (check YOUTUBE_API_KEY)' })
+    const fetchResult = await fetchLatestVideos()
+    if (fetchResult.items.length === 0) {
+      // Surface the ACTUAL failure reason — was vague "check YOUTUBE_API_KEY"
+      // before, which masked things like quota exhaustion, restricted keys,
+      // wrong channel ID, etc.
+      const reason = fetchResult.error || 'Unknown reason — fetchLatestVideos returned 0 items with no error'
+      console.warn('[Influencer]', reason)
+      return NextResponse.json({
+        success: false,
+        error: reason,
+        hint: 'Common causes: (1) YOUTUBE_API_KEY env var missing/wrong on Render. (2) Key has HTTP referer restrictions blocking server-side use — switch to "None" or "IP addresses". (3) YouTube Data API v3 not enabled on your Google Cloud project. (4) Daily quota exhausted (10k units/day on free tier).',
+      })
     }
+    const videos = fetchResult.items
 
     // Build batch input — extract timestamps + view counts in parallel.
     const batchInput: VideoForAnalysis[] = videos.map(({ snippet, statistics, videoId }) => ({
