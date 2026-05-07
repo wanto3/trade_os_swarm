@@ -1,7 +1,55 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { RefreshCw, MessageSquare, Trash2, Send } from 'lucide-react'
+import { RefreshCw, MessageSquare, Trash2, Send, Bookmark } from 'lucide-react'
+
+/**
+ * Build a bookmarklet that scrapes the currently-visible Discord messages
+ * from the user's logged-in browser session and POSTs them to our API.
+ *
+ * Why: Discord's API blocks user-account reads (selfbot ToS violation, can
+ * get account banned). But scraping the DOM in the user's own browser
+ * session is virtually undetectable — no API calls, no automation
+ * fingerprint. One click while viewing a channel = fresh analysis.
+ *
+ * The JS is intentionally compact + self-contained. Discord's CSS classes
+ * are hashed (e.g. "username_a8d4ef") but the prefix is stable, so we use
+ * partial-match selectors (`[class*="username_"]`) that survive their
+ * occasional updates. If Discord ever rewrites their DOM significantly
+ * we update this template; bookmarklet users would re-drag a fresh copy.
+ *
+ * @param apiUrl Absolute URL of the /api/discord-influencer endpoint —
+ *               baked into the bookmarklet so it works regardless of
+ *               where the dashboard is hosted.
+ */
+function buildBookmarklet(apiUrl: string): string {
+  const code = `(async()=>{try{
+const msgs=document.querySelectorAll('[id^="chat-messages-"]');
+if(!msgs.length){alert('Trader OS: No Discord messages found. Make sure you are viewing a channel and have scrolled the messages you want analyzed into view.');return;}
+const lines=[];let lastAuthor='';
+for(const m of msgs){
+const a=m.querySelector('[class*="username_"]')||m.querySelector('h3 [class*="username_"]');
+const author=a?a.textContent.trim():lastAuthor;if(author)lastAuthor=author;
+const t=m.querySelector('time');
+const time=t?(t.getAttribute('datetime')||t.textContent.trim()):'';
+const c=m.querySelector('[class*="messageContent_"]');
+const content=c?c.textContent.trim():'';
+if(content){lines.push((time?'['+time+'] ':'')+author+': '+content);}}
+if(!lines.length){alert('Trader OS: Could not extract messages. Try scrolling, then click again.');return;}
+const text=lines.join('\\n');
+const tEl=document.createElement('div');
+tEl.style.cssText='position:fixed;bottom:24px;right:24px;background:#161b22;color:#e6edf3;padding:12px 18px;border-radius:8px;border:1px solid #30363d;font-size:13px;z-index:99999;font-family:Inter,system-ui,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,0.5);';
+tEl.textContent='Trader OS: analyzing '+lines.length+' messages...';document.body.appendChild(tEl);
+const r=await fetch(${JSON.stringify(apiUrl)},{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
+const j=await r.json();
+tEl.textContent=j.success?('Trader OS: '+lines.length+' messages analyzed. Open dashboard to view.'):('Trader OS error: '+(j.error||'unknown').slice(0,150));
+tEl.style.background=j.success?'#0a3a1f':'#3a0a0a';
+setTimeout(()=>tEl.remove(),5000);
+}catch(e){alert('Trader OS bookmarklet error: '+e.message);}})();`
+  // Strip newlines + extra whitespace for tighter URL
+  const minified = code.replace(/\n\s*/g, '').replace(/\s+/g, ' ')
+  return `javascript:${encodeURIComponent(minified)}`
+}
 
 interface TradingAnalysis {
   signal: 'BUY' | 'HOLD' | 'SHORT' | 'NEUTRAL'
@@ -64,7 +112,19 @@ export default function DiscordInsights() {
   const [pasting, setPasting] = useState(false)
   const [pasteText, setPasteText] = useState('')
   const [pasteOpen, setPasteOpen] = useState(false)
+  const [bookmarkletOpen, setBookmarkletOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [bookmarklet, setBookmarklet] = useState<string>('')
+
+  // Build the bookmarklet with the current origin baked in — works against
+  // localhost during dev and against the deployed URL in prod without manual
+  // editing.
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const apiUrl = `${window.location.origin}/api/discord-influencer`
+      setBookmarklet(buildBookmarklet(apiUrl))
+    }
+  }, [])
 
   const fetchData = useCallback(async (forceRefresh = false) => {
     setLoading(true)
@@ -168,7 +228,22 @@ export default function DiscordInsights() {
             </span>
           )}
           <button
-            onClick={() => setPasteOpen(o => !o)}
+            onClick={() => { setBookmarkletOpen(o => !o); setPasteOpen(false) }}
+            title='Set up the Trader OS browser bookmarklet — one-click scrape from any Discord channel you can view'
+            style={{
+              background: bookmarkletOpen ? 'rgba(240,192,0,0.15)' : 'none',
+              border: `1px solid ${bookmarkletOpen ? 'rgba(240,192,0,0.4)' : '#30363d'}`,
+              borderRadius: '7px', cursor: 'pointer',
+              color: bookmarkletOpen ? '#f0c000' : '#6e7681',
+              fontSize: '0.55rem', fontWeight: 700,
+              padding: '5px 10px',
+              display: 'inline-flex', alignItems: 'center', gap: '4px',
+            }}
+          >
+            <Bookmark size={10} /> Bookmarklet
+          </button>
+          <button
+            onClick={() => { setPasteOpen(o => !o); setBookmarkletOpen(false) }}
             title='Paste Discord messages to analyze'
             style={{
               background: pasteOpen ? 'rgba(88,101,242,0.15)' : 'none',
@@ -197,6 +272,82 @@ export default function DiscordInsights() {
           </button>
         </div>
       </div>
+
+      {/* Bookmarklet setup panel */}
+      {bookmarkletOpen && (
+        <div style={{ padding: '0.75rem 0.9rem', borderBottom: '1px solid rgba(42,42,74,0.6)', backgroundColor: 'rgba(240,192,0,0.04)' }}>
+          <div style={{ fontSize: '0.65rem', color: '#e6edf3', fontWeight: 700, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Bookmark size={12} color='#f0c000' /> One-click Discord scraper bookmarklet
+          </div>
+          <div style={{ fontSize: '0.6rem', color: '#8b949e', lineHeight: 1.5, marginBottom: '0.6rem' }}>
+            Drag the orange button below into your browser&apos;s bookmarks bar. Then while viewing any Discord channel
+            (Adalyn&apos;s or any other), click the bookmark — it scrapes the visible messages from your logged-in browser
+            session and sends them here for analysis. Zero copy-paste; runs only when you click.
+          </div>
+
+          {/* The draggable bookmarklet anchor */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.6rem' }}>
+            <a
+              href={bookmarklet || '#'}
+              draggable
+              onClick={e => e.preventDefault()}
+              title='Drag me to your bookmarks bar'
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: '6px',
+                background: 'linear-gradient(135deg, #f0c000, #e09000)',
+                color: '#0d1117',
+                padding: '8px 14px',
+                borderRadius: '6px',
+                fontSize: '0.7rem', fontWeight: 700,
+                textDecoration: 'none',
+                cursor: 'grab',
+                userSelect: 'none',
+                boxShadow: '0 2px 8px rgba(240,192,0,0.3)',
+              }}
+            >
+              <Bookmark size={12} /> Send Discord to Trader OS
+            </a>
+            <span style={{ fontSize: '0.55rem', color: '#6e7681', fontStyle: 'italic' }}>
+              ← drag this to your bookmarks bar
+            </span>
+            <button
+              onClick={async () => {
+                if (!bookmarklet) return
+                try {
+                  await navigator.clipboard.writeText(bookmarklet)
+                  alert('Bookmarklet code copied. If drag-and-drop doesn\'t work, manually create a bookmark and paste this as the URL.')
+                } catch {
+                  alert('Could not copy to clipboard. Right-click the orange button → Copy link address instead.')
+                }
+              }}
+              style={{
+                fontSize: '0.55rem', padding: '6px 10px',
+                background: 'transparent', border: '1px solid #30363d',
+                borderRadius: '6px', color: '#8b949e', cursor: 'pointer',
+              }}
+            >
+              📋 Copy code
+            </button>
+          </div>
+
+          {/* Setup steps */}
+          <div style={{ fontSize: '0.58rem', color: '#8b949e', lineHeight: 1.6, paddingLeft: '4px' }}>
+            <strong style={{ color: '#c9d1d9' }}>Setup (one time):</strong>
+            <div>1. If your browser&apos;s bookmarks bar is hidden, show it (Cmd/Ctrl+Shift+B in most browsers).</div>
+            <div>2. Drag the orange button above into your bookmarks bar. Or click <strong>📋 Copy code</strong> and create a bookmark manually with that as the URL.</div>
+            <div>3. Open Discord in browser → navigate to Adalyn&apos;s trading channel → scroll the messages you want analyzed into view (last 30-50 typically).</div>
+            <div>4. Click the <strong>Send Discord to Trader OS</strong> bookmark. A toast appears in the corner: &quot;analyzing N messages…&quot; → success.</div>
+            <div>5. Open this dashboard → Discord Influencer card → fresh batch appears with structured analysis.</div>
+          </div>
+
+          <div style={{ marginTop: '0.6rem', padding: '0.5rem', backgroundColor: 'rgba(240,192,0,0.05)', borderLeft: '2px solid rgba(240,192,0,0.4)', fontSize: '0.55rem', color: '#8b949e', lineHeight: 1.5 }}>
+            <strong style={{ color: '#f0c000' }}>Why this is safe:</strong> the bookmarklet runs ONLY when you click it. It reads
+            messages already rendered in your browser (no API calls, no automation timing patterns) and sends them to your own
+            server. From Discord&apos;s perspective you&apos;re just scrolling — no detection footprint. Doesn&apos;t modify Discord&apos;s UI, can&apos;t
+            send messages, and you can remove the bookmark any time.
+          </div>
+        </div>
+      )}
 
       {/* Paste textarea */}
       {pasteOpen && (

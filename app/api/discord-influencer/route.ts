@@ -243,6 +243,20 @@ async function fetchLatestDiscordMessages(): Promise<{ messages: DiscordMessage[
 
 export const dynamic = 'force-dynamic'
 
+// CORS for the browser-bookmarklet flow. The bookmarklet runs in the user's
+// Discord tab (origin: discord.com) and POSTs scraped messages here. Allow
+// credentials=false since we don't need cookies for paste-mode.
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Max-Age': '86400',
+}
+
+export async function OPTIONS() {
+  return new Response(null, { status: 204, headers: CORS_HEADERS })
+}
+
 /** GET: returns the latest analyzed batches. If bot mode is configured AND
  *  ?refresh=1 is set, also pulls fresh messages and analyzes them. */
 export async function GET(request: NextRequest) {
@@ -330,9 +344,9 @@ export async function POST(request: NextRequest) {
       success: true,
       batch,
       totalBatches: store.batches.length,
-    })
+    }, { headers: CORS_HEADERS })
   } catch (err) {
-    return NextResponse.json({ success: false, error: String(err) }, { status: 500 })
+    return NextResponse.json({ success: false, error: String(err) }, { status: 500, headers: CORS_HEADERS })
   }
 }
 
