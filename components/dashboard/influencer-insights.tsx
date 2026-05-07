@@ -437,13 +437,17 @@ export default function InfluencerInsights() {
   const [lastFetched, setLastFetched] = useState<number>(0)
   const [predictionsOpen, setPredictionsOpen] = useState(true)
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (forceRefresh = false) => {
     setLoading(true)
     setError(null)
     try {
+      // ?refresh=1 bypasses the 1h server-side cache. First-load uses cache
+      // when available (instant); explicit refresh button click forces a
+      // fresh YouTube fetch + LLM re-analysis.
+      const ytUrl = forceRefresh ? '/api/influencer?refresh=1' : '/api/influencer'
       // Fetch YouTube and Instagram in parallel — each is independent
       const [ytRes, igRes] = await Promise.allSettled([
-        fetch('/api/influencer', { cache: 'no-store' }),
+        fetch(ytUrl, { cache: 'no-store' }),
         fetch('/api/instagram', { cache: 'no-store' }),
       ])
 
@@ -526,9 +530,9 @@ export default function InfluencerInsights() {
             </div>
           )}
           <button
-            onClick={fetchData}
+            onClick={() => fetchData(true)}
             disabled={loading}
-            title="Refresh"
+            title="Force refresh — bypasses cache and re-analyzes latest videos with Sonnet 4.6 (~30-60s)"
             style={{
               background: loading ? 'rgba(63,185,80,0.08)' : 'none',
               border: `1px solid ${loading ? 'rgba(63,185,80,0.3)' : '#30363d'}`,
@@ -715,7 +719,7 @@ export default function InfluencerInsights() {
             <div style={{ fontSize: '0.68rem', color: '#f85149' }}>
               {error || 'Failed to load influencer insights'}
             </div>
-            <button onClick={fetchData} style={{
+            <button onClick={() => fetchData(true)} style={{
               background: 'rgba(63,185,80,0.1)', border: '1px solid rgba(63,185,80,0.3)',
               borderRadius: '6px', padding: '5px 12px', cursor: 'pointer',
               color: '#3fb950', fontSize: '0.58rem', fontWeight: 600,

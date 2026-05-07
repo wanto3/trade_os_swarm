@@ -1,10 +1,18 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { callClaudeCode, ClaudeCodeRateLimitError } from '@/lib/services/claude-code-llm.service'
 
 const CHANNEL_ID = 'UCsT-PrX_ZgxXngz7kZsKJTw'
 const CHANNEL_HANDLE = 'ElcaroTrade'
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || ''
 const GROQ_API_KEY = process.env.GROQ_API_KEY || ''
+
+// In-memory cache (per-process). YouTube videos + LLM analysis are expensive
+// (~30-60s per uncached call) and the data doesn't change often — new videos
+// drop a few times a week. 1h TTL is plenty for a daily-trading flow, and
+// the dashboard's explicit ?refresh=1 query param bypasses the cache when
+// the user wants the latest videos right now.
+let cachedAnalysis: { data: unknown; ts: number } | null = null
+const CACHE_TTL_MS = 60 * 60_000  // 1 hour
 
 interface TradingAnalysis {
   signal: 'BUY' | 'HOLD' | 'SHORT' | 'NEUTRAL'
@@ -65,17 +73,18 @@ Return ONLY a valid JSON ARRAY (no markdown, no code fences) with EXACTLY ${vide
   "watchMinutes": [{"minute": "2:36", "topic": "2024 Predictions"}, ...]
 }
 
-Rules:
-- signal: BUY if bullish with clear entries, SHORT if bearish with clear exits, HOLD if mixed/unclear, NEUTRAL if no trading content
-- confidence: "high" if multiple specific price levels and dates are mentioned, "medium" if vague directional thesis, "low" if mostly narrative
-- summary: Direct about what the influencer recommends — specific actions, not generic statements
-- keyInsights: 3-5 most important claims with actual numbers (prices, percentages, dates)
-- priceTargets: ALL specific dollar prices ($109K, $126K, $60K, etc.). type=target for upside, support for downside levels
-- keyDates: All specific dates mentioned (earnings, halving, policy events, predictions like "Phase 4", "summer 2026")
-- overallScore: -100 (extremely bearish) to +100 (extremely bullish). Phase descriptions, price targets, and directional claims all factor in
-- riskLevel: high if no specifics, medium if mixed, low if clear and specific
-- mentionedAssets: BTC, ETH, gold, oil, S&P, silver with directional bias from context
-- watchMinutes: Top 3-5 chapter timestamps from the video — what sections to watch
+Rules — GROUND EVERY CLAIM in the actual title/chapters/description text. Do NOT invent prices, dates, or signals that aren't supported by the source. If a field has no signal in the source, return an empty array or "NEUTRAL"/"low" — don't fabricate to fill it out.
+
+- signal: BUY if bullish with clear entries explicitly mentioned, SHORT if bearish with clear exits explicitly mentioned, HOLD if mixed/unclear, NEUTRAL if no trading content (e.g. educational, news, off-topic)
+- confidence: "high" ONLY if multiple specific price levels AND dates are explicitly mentioned in the source. "medium" if the directional thesis is clear but specifics are vague. "low" if mostly narrative without numbers.
+- summary: Direct about what the influencer ACTUALLY recommends in this video — quote-anchored, not generic. If signal=NEUTRAL, summarize the topic instead.
+- keyInsights: 3-5 most important claims FROM THE TEXT with actual numbers. Skip if the description has no numerical claims.
+- priceTargets: ONLY specific dollar prices that appear in the source ($109K, $126K, $60K, etc.). Type: "target" for upside levels, "support" for downside floors, "resistance" for ceilings, "entry"/"stop" if explicitly named. Empty array if no prices mentioned.
+- keyDates: ONLY dates explicitly mentioned (earnings, halving, policy events, predictions like "Phase 4", "summer 2026"). Empty array if no dates.
+- overallScore: -100 (extremely bearish) to +100 (extremely bullish). Anchor on EXPLICIT directional claims and price-target counts/magnitudes. Default to 0 if no clear signal.
+- riskLevel: "low" if claims are specific and grounded, "medium" if mixed, "high" if vague or no specifics
+- mentionedAssets: ONLY assets actually named (BTC, ETH, gold, oil, S&P, silver). direction from explicit context. Empty array if generic content.
+- watchMinutes: Top 3-5 chapter timestamps from the chapters list — pick the ones most relevant to trading decisions. Skip if no chapters provided.
 
 VIDEOS TO ANALYZE:
 ${videoBlocks}
@@ -465,8 +474,21 @@ async function fetchLatestVideos(): Promise<{ items: any[]; error?: string }> {
   }
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    // Cache check — explicit ?refresh=1 bypasses, otherwise serve cached
+    // result if within TTL. Bypassing also resets cache so the next caller
+    // gets the fresh result (no stampede if multiple clicks).
+    const refresh = request.nextUrl.searchParams.get('refresh') === '1'
+    const now = Date.now()
+    if (!refresh && cachedAnalysis && now - cachedAnalysis.ts < CACHE_TTL_MS) {
+      return NextResponse.json({
+        ...cachedAnalysis.data as object,
+        cacheStatus: 'fresh',
+        cacheAgeMs: now - cachedAnalysis.ts,
+      })
+    }
+
     const fetchResult = await fetchLatestVideos()
     if (fetchResult.items.length === 0) {
       // Surface the ACTUAL failure reason — was vague "check YOUTUBE_API_KEY"
@@ -524,13 +546,22 @@ export async function GET() {
       }
     })
 
-    return NextResponse.json({
+    const responseData = {
       success: true,
       videos: analyzedVideos,
       latest: analyzedVideos[0],
       channel: CHANNEL_HANDLE,
       channelUrl: `https://www.youtube.com/@${CHANNEL_HANDLE}`,
       timestamp: Date.now(),
+    }
+    // Cache the fresh result so subsequent visits within TTL skip the
+    // ~30-60s pipeline. Refresh button (?refresh=1) bypasses this cache
+    // when the user wants the latest videos right now.
+    cachedAnalysis = { data: responseData, ts: Date.now() }
+    return NextResponse.json({
+      ...responseData,
+      cacheStatus: 'cold',
+      cacheAgeMs: 0,
     })
   } catch (err) {
     console.error('Influencer API error:', err)
