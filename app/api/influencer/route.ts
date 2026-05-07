@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { callClaudeCode, ClaudeCodeRateLimitError } from '@/lib/services/claude-code-llm.service'
 
-const CHANNEL_ID = 'UCsT-PrX_ZgxXngz7kZsKJTw'
-const CHANNEL_HANDLE = 'ElcaroTrade'
+// Channel is configurable via env vars so you can swap influencers without
+// a code change. Defaults to ElcaroTrade for backward compat. The handle is
+// purely cosmetic (shown in UI); the channel ID is what YouTube needs.
+const CHANNEL_ID = process.env.YOUTUBE_CHANNEL_ID || 'UCsT-PrX_ZgxXngz7kZsKJTw'
+const CHANNEL_HANDLE = process.env.YOUTUBE_CHANNEL_HANDLE || 'ElcaroTrade'
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || ''
 const GROQ_API_KEY = process.env.GROQ_API_KEY || ''
 
@@ -546,10 +549,31 @@ export async function GET(request: NextRequest) {
       }
     })
 
+    // Identify trading-relevant videos vs filler content (the channel
+    // sometimes posts non-trading shorts — science, lifestyle, etc.).
+    // A video is "tradingRelevant" if Sonnet returned a non-NEUTRAL signal
+    // OR found at least one price target / mentioned asset / key date.
+    // The UI uses this to surface trading content first and dim the rest.
+    const taggedVideos = analyzedVideos.map(v => {
+      const a = v.analysis
+      const tradingRelevant =
+        a.signal !== 'NEUTRAL' ||
+        a.priceTargets.length > 0 ||
+        a.mentionedAssets.length > 0 ||
+        a.keyDates.length > 0
+      return { ...v, tradingRelevant }
+    })
+
+    // Best "latest" is the most recent TRADING-RELEVANT video, falling back
+    // to the literal newest if the channel hasn't posted trading content
+    // recently. Avoids highlighting a weather short as "the latest pick."
+    const latestTrading = taggedVideos.find(v => v.tradingRelevant) || taggedVideos[0]
+
     const responseData = {
       success: true,
-      videos: analyzedVideos,
-      latest: analyzedVideos[0],
+      videos: taggedVideos,
+      latest: latestTrading,
+      tradingRelevantCount: taggedVideos.filter(v => v.tradingRelevant).length,
       channel: CHANNEL_HANDLE,
       channelUrl: `https://www.youtube.com/@${CHANNEL_HANDLE}`,
       timestamp: Date.now(),
