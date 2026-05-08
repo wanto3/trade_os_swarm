@@ -430,9 +430,12 @@ async function fetchLatestVideos(): Promise<{ items: any[]; error?: string }> {
     }
   }
 
-  // Fetch latest videos from uploads playlist
+  // Fetch the latest 20 videos so we have headroom to surface trading
+  // content even when the channel mixes trading uploads with filler shorts
+  // (science/weather/lifestyle). The GET handler picks the best 5 from
+  // these — preferring trading-relevant videos, falling back to recency.
   const playlistRes = await fetch(
-    `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails,status&maxResults=5&playlistId=${uploadsId}&key=${YOUTUBE_API_KEY}`
+    `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails,status&maxResults=20&playlistId=${uploadsId}&key=${YOUTUBE_API_KEY}`
   )
   if (!playlistRes.ok) {
     const body = (await playlistRes.text()).slice(0, 300)
@@ -493,6 +496,29 @@ export async function GET(request: NextRequest) {
     }
 
     const fetchResult = await fetchLatestVideos()
+    // Pre-filter: skip obviously non-trading videos (weather, science, vlogs,
+    // lifestyle) before burning Sonnet tokens. Channels that mix content
+    // benefit; pure-trading channels pass everything through. Keyword
+    // signal-detection — anything with a $price, % move, asset name, or
+    // trading verb in title or first 500 chars of description scores as
+    // potentially trading.
+    const TRADING_SIGNALS = /\b(bitcoin|btc|ethereum|eth|crypto|xrp|sol|altcoin|stablecoin|halving|etf|bull(ish)?|bear(ish)?|long|short|buy|sell|breakout|support|resistance|target|entry|stop\s?loss|liquidation|trade|trading|investor|recession|rally|pump|dump|fed|interest rate|cpi|fomc|inflation|earnings|nasdaq|s&p|dow|stock|market|wave|cycle|phase|elliott|fibonacci|fib|trend|chart|ta\b|technical|fundamental|forecast|prediction|outlook|halving|gold|silver|wti|brent)\b/i
+    const looksLikeTrading = (item: any): boolean => {
+      const title = item.snippet?.title || ''
+      const desc = (item.snippet?.description || '').slice(0, 500)
+      const blob = `${title}\n${desc}`
+      // Negative-signal keywords — pure-non-trading shorts
+      const NON_TRADING = /\b(weather|meteorolog|atmosphere|butterfly effect|chaos theory|cooking|recipe|workout|gym|nutrition|skincare|beauty|fashion|gaming(?!.*\bcoin\b)|movie|netflix|tv show)\b/i
+      if (NON_TRADING.test(blob) && !TRADING_SIGNALS.test(blob)) return false
+      return TRADING_SIGNALS.test(blob)
+    }
+    // Score: trading-relevant first (preserving recency), then everything else.
+    // Take top 8 — 5 we'll definitely analyze, plus 3 buffer for tradingRelevantCount stat.
+    const trading = fetchResult.items.filter(looksLikeTrading).slice(0, 5)
+    const nonTrading = fetchResult.items.filter((v: any) => !looksLikeTrading(v)).slice(0, 5 - trading.length)
+    const selected = [...trading, ...nonTrading]
+    fetchResult.items = selected.length > 0 ? selected : fetchResult.items.slice(0, 5)
+
     if (fetchResult.items.length === 0) {
       // Surface the ACTUAL failure reason — was vague "check YOUTUBE_API_KEY"
       // before, which masked things like quota exhaustion, restricted keys,
