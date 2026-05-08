@@ -34,6 +34,14 @@ export interface PolymarketPosition {
   daysToCloseAtPlacement?: number
   /** Snapshot of LLM reasoning at placement time — for post-hoc analysis. */
   reasoningAtPlacement?: string
+  /** Where this position came from:
+   *   - 'app'      — user clicked Place from a dashboard recommendation (default)
+   *   - 'auto'     — auto-trader placed it (config.enabled = true)
+   *   - 'imported' — user imported from a Polymarket screenshot (their real
+   *                  trades, mirrored into the paper portfolio for tracking).
+   *                  Used by the comparison view to separate app-recommended
+   *                  picks from user-traded picks for hit-rate analysis. */
+  source?: 'app' | 'auto' | 'imported'
   placedAt: number
   resolvedAt?: number
   status: 'open' | 'won' | 'lost'
@@ -539,6 +547,91 @@ export function createPosition(rec: TradeRecommendation): PolymarketPosition | n
 
   console.log(`[PolymarketPortfolio] Placed trade: ${rec.market.question.substring(0, 60)} | ${rec.outcome} @ ${entryPrice} | $${cost.toFixed(2)} | DPS:${dpsTier}/${dpsCategory}`)
   return position
+}
+
+export interface ImportedPositionInput {
+  question: string
+  outcome: 'Yes' | 'No'
+  /** Price the user paid per share (0-1). */
+  entryPrice: number
+  /** Number of shares held. cost = entryPrice * quantity. */
+  quantity: number
+  /** Polymarket market URL if known — UI can link out. Optional. */
+  url?: string
+  /** Optional placement timestamp. Defaults to now. Use this if the user
+   *  knows when they bought (e.g. "3 days ago" → pass an ISO string). */
+  placedAtIso?: string
+  /** Free-form note from the user (e.g. "manual position from Polymarket
+   *  screenshot of 2026-05-08"). Stored as reasoningAtPlacement. */
+  note?: string
+}
+
+/** Add a position imported from an external source (screenshot of the
+ *  user's real Polymarket portfolio, manual paste, etc.). Bankroll is
+ *  decremented by the cost, same accounting as createPosition. Tagged
+ *  source='imported' so the comparison view can separate user-traded
+ *  picks from app-recommended ones for hit-rate analysis. */
+export function addImportedPosition(input: ImportedPositionInput): PolymarketPosition | null {
+  if (input.entryPrice <= 0 || input.entryPrice >= 1) return null
+  if (input.quantity <= 0) return null
+  if (!input.question || input.question.length < 5) return null
+
+  const cost = input.entryPrice * input.quantity
+  // Don't gate on canPlaceTrade() — imported positions reflect REAL trades
+  // the user already made on Polymarket; we're just mirroring them. The
+  // bankroll math runs anyway so the user can see deployed-capital state.
+  const placedAt = input.placedAtIso ? new Date(input.placedAtIso).getTime() : Date.now()
+  const outcomeIndex = input.outcome === 'Yes' ? 0 : 1
+
+  const position: PolymarketPosition = {
+    id: `pm-import-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+    marketId: `imported-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+    question: input.question.slice(0, 500),
+    outcome: input.outcome,
+    outcomeIndex,
+    entryPrice: input.entryPrice,
+    quantity: input.quantity,
+    cost,
+    potentialPayout: (1 - input.entryPrice) * input.quantity,
+    confidence: 'medium',  // unknown — user's own conviction
+    safetyScore: 50,       // neutral
+    estimatedProbability: input.entryPrice,  // unknown — proxy with market price
+    marketImpliedProb: input.entryPrice,
+    expectedValue: 0,      // unknown for imported
+    category: classifyCategory(input.question),
+    reasoningAtPlacement: input.note?.slice(0, 500),
+    source: 'imported',
+    placedAt,
+    status: 'open',
+    url: input.url || `https://polymarket.com/`,
+  }
+
+  positions.push(position)
+  portfolio.bankroll = Math.max(0, portfolio.bankroll - cost)
+  portfolio.totalTrades = positions.length
+  portfolio.lastUpdate = Date.now()
+  snapshotBankroll('placed')
+  recordDailySnapshot()
+  savePortfolioData()
+  console.log(`[PolymarketPortfolio] Imported position: ${input.question.slice(0, 60)} | ${input.outcome} @ ${input.entryPrice} | cost $${cost.toFixed(2)}`)
+  return position
+}
+
+/** Clear all positions — used by import-replace mode. Refunds open positions'
+ *  cost to bankroll first so the math stays clean. Call before bulk-importing
+ *  if the user wants to wipe slate and start from screenshot state. */
+export function clearAllPositions(): void {
+  // Refund any currently-open positions' cost so the bankroll reflects
+  // pre-import state. Resolved positions stay (their PnL is already realized).
+  const openCost = positions.filter(p => p.status === 'open').reduce((s, p) => s + p.cost, 0)
+  positions = []
+  portfolio.bankroll += openCost
+  portfolio.totalTrades = 0
+  portfolio.lastUpdate = Date.now()
+  snapshotBankroll('init')
+  recordDailySnapshot()
+  savePortfolioData()
+  console.log(`[PolymarketPortfolio] Cleared all positions, refunded $${openCost.toFixed(2)}`)
 }
 
 /** Cancel an OPEN position — refunds the cost back to bankroll and removes

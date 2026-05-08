@@ -7,6 +7,7 @@ import {
   Info, Wallet, Play, Pause, Settings, Trophy, X, RotateCcw,
   CheckCircle, AlertCircle
 } from 'lucide-react'
+import PortfolioImport from './portfolio-import'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -1821,6 +1822,12 @@ POLYMARKET_CLOB_API_SECRET=...`}
                 </>
               )}
 
+              {/* Import from Polymarket screenshot — Groq vision parses positions
+                  and adds them as paper positions tagged source='imported'. Lets
+                  the user mirror their real Polymarket trades into the dashboard
+                  for performance tracking + algorithm comparison. */}
+              <PortfolioImport onImported={loadPaperData} />
+
               {/* Positions table */}
               <div style={{ backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '12px', overflow: 'hidden' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -1863,6 +1870,19 @@ POLYMARKET_CLOB_API_SECRET=...`}
                           </td>
                           <td style={{ padding: '8px 12px' }}>
                             <span style={{ fontSize: '0.6rem', fontWeight: 700, color: '#8b949e', backgroundColor: 'rgba(139, 92, 246, 0.1)', padding: '2px 6px', borderRadius: '4px' }}>{pos.outcome}</span>
+                            {(pos as PolymarketPosition & { source?: string }).source === 'imported' && (
+                              <span
+                                title='Imported from Polymarket screenshot — your real trade, mirrored here for tracking'
+                                style={{
+                                  marginLeft: '6px', fontSize: '0.5rem', fontWeight: 700,
+                                  color: '#8ba3ff', backgroundColor: 'rgba(88,101,242,0.1)',
+                                  padding: '2px 5px', borderRadius: '3px',
+                                  cursor: 'help',
+                                }}
+                              >
+                                📷 Real
+                              </span>
+                            )}
                           </td>
                           <td style={{ padding: '8px 12px' }}><StatusBadge status={pos.status} /></td>
                           <td style={{ padding: '8px 12px', fontSize: '0.65rem', color: '#e6edf3' }}>${pos.cost.toFixed(2)}</td>
