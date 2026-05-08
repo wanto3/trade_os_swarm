@@ -24,6 +24,7 @@ import { MultiTimeframe, SupportResistanceLevels } from '@/components/dashboard/
 import RSIIndicator from '@/components/dashboard/rsi-indicator'
 import InfluencerInsights from '@/components/dashboard/influencer-insights'
 import DiscordInsights from '@/components/dashboard/discord-insights'
+import InstagramAnalysis from '@/components/dashboard/instagram-analysis'
 import MACDIndicator from '@/components/dashboard/macd-indicator'
 import BollingerIndicator from '@/components/dashboard/bollinger-indicator'
 import MovingAveragesIndicator from '@/components/dashboard/moving-averages-indicator'
@@ -1003,6 +1004,9 @@ export default function DashboardPage() {
 
               {/* Discord influencer (Adalyn) — paste-or-poll mode */}
               <DiscordInsights />
+
+              {/* Instagram analysis — primary signal source per user, more frequent posts */}
+              <InstagramAnalysis />
             </div>
           )}
 
