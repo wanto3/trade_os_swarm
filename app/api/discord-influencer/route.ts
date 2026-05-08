@@ -16,7 +16,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { promises as fs } from 'fs'
 import path from 'path'
-import { callClaudeCode } from '@/lib/services/claude-code-llm.service'
+import { callClaudeCode, ClaudeCodeRateLimitError } from '@/lib/services/claude-code-llm.service'
 
 const INFLUENCER_NAME = 'Adalyn'
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || ''
@@ -114,11 +114,14 @@ async function analyzeWithLLM(rawText: string, source: 'paste' | 'bot'): Promise
   const prompt = buildPrompt(rawText, source)
   const errors: string[] = []
 
-  // Detect serverless — go straight to Groq fallback
+  // Detect serverless / explicit Groq mode — skip Claude subprocess if so.
+  // PRIMARY_LLM=groq forces Groq-first, useful for testing fallback works
+  // OR when Max subscription has run out and you want to switch entirely.
   const IS_SERVERLESS = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME)
+  const FORCE_GROQ = process.env.PRIMARY_LLM === 'groq'
 
   // 1. Claude Code subprocess (Max sub, primary)
-  if (!IS_SERVERLESS) {
+  if (!IS_SERVERLESS && !FORCE_GROQ) {
     try {
       const parsed = await callClaudeCode<unknown>({
         prompt,
@@ -133,7 +136,10 @@ async function analyzeWithLLM(rawText: string, source: 'paste' | 'bot'): Promise
       const safe = msg
         .replace(/sk-ant-oat01-[A-Za-z0-9_\-\s]+/g, 'sk-ant-oat01-***REDACTED***')
         .replace(/Bearer\s+[A-Za-z0-9_\-\.]+/g, 'Bearer ***REDACTED***')
-      errors.push(`claude-code: ${safe.slice(0, 200)}`)
+      // Tag rate-limit specifically so logs make it obvious why Max sub
+      // is failing (vs auth issue, network problem, etc.).
+      const tag = e instanceof ClaudeCodeRateLimitError ? 'rate-limited' : 'failed'
+      errors.push(`claude-code ${tag}: ${safe.slice(0, 200)}`)
     }
   }
 

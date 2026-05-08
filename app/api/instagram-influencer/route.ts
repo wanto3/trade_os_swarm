@@ -18,7 +18,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { promises as fs } from 'fs'
 import path from 'path'
-import { callClaudeCode } from '@/lib/services/claude-code-llm.service'
+import { callClaudeCode, ClaudeCodeRateLimitError } from '@/lib/services/claude-code-llm.service'
 
 const INFLUENCER_NAME = process.env.INSTAGRAM_INFLUENCER_NAME || 'Trader Influencer'
 const INFLUENCER_HANDLE = process.env.INSTAGRAM_INFLUENCER_HANDLE || ''
@@ -114,8 +114,9 @@ async function analyzeWithLLM(rawText: string, source: 'paste' | 'bookmarklet'):
   const prompt = buildPrompt(rawText, source)
   const errors: string[] = []
   const IS_SERVERLESS = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME)
+  const FORCE_GROQ = process.env.PRIMARY_LLM === 'groq'
 
-  if (!IS_SERVERLESS) {
+  if (!IS_SERVERLESS && !FORCE_GROQ) {
     try {
       const parsed = await callClaudeCode<unknown>({
         prompt,
@@ -130,7 +131,8 @@ async function analyzeWithLLM(rawText: string, source: 'paste' | 'bookmarklet'):
       const safe = msg
         .replace(/sk-ant-oat01-[A-Za-z0-9_\-\s]+/g, 'sk-ant-oat01-***REDACTED***')
         .replace(/Bearer\s+[A-Za-z0-9_\-\.]+/g, 'Bearer ***REDACTED***')
-      errors.push(`claude-code: ${safe.slice(0, 200)}`)
+      const tag = e instanceof ClaudeCodeRateLimitError ? 'rate-limited' : 'failed'
+      errors.push(`claude-code ${tag}: ${safe.slice(0, 200)}`)
     }
   }
 

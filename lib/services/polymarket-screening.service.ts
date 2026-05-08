@@ -18,7 +18,7 @@
 
 import type { CategoryEvidence } from './category-research.service'
 import type { LLMMarketAnalysis, MarketForAnalysis } from './groq-market-analysis'
-import { callClaudeCode, type ClaudeModel } from './claude-code-llm.service'
+import { callClaudeCode, ClaudeCodeRateLimitError, type ClaudeModel } from './claude-code-llm.service'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -421,17 +421,33 @@ async function screenSingleBatch(
   // Skip the claude-code path entirely and go straight to Groq HTTP API.
   const IS_SERVERLESS = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME)
 
+  // PRIMARY_LLM=groq env override forces Groq-first. Use case: testing the
+  // fallback path works, OR Max subscription has run out and you want to
+  // permanently switch without code changes.
+  const FORCE_GROQ = process.env.PRIMARY_LLM === 'groq'
+
   // Build fallback chain so we never end up with 0 results from a transient
   // failure on one provider. Order picked by speed — first success wins.
-  const fallbackChain: ScreeningModel[] = IS_SERVERLESS
-    ? ['groq']  // serverless: only Groq HTTP API works
+  const fallbackChain: ScreeningModel[] = (IS_SERVERLESS || FORCE_GROQ)
+    ? ['groq']  // serverless or forced: only Groq HTTP API
     : model === 'haiku'  ? ['haiku', 'groq', 'sonnet']
       : model === 'groq'   ? ['groq', 'haiku', 'sonnet']
       : model === 'sonnet' ? ['sonnet', 'haiku', 'groq']
       : ['opus', 'sonnet', 'haiku', 'groq']
 
   let rawResponse: string | null = null
+  // Track when Max sub is rate-limited so we can short-circuit remaining
+  // claude -p attempts (they'd all fail the same way) and jump to Groq.
+  let maxSubExhausted = false
   for (const tryModel of fallbackChain) {
+    // Fast-path: if Max sub already rate-limited on a previous attempt, skip
+    // remaining Claude models and go straight to Groq. Saves 5-10 min on
+    // rate-limit days because we don't have to fail through every Claude
+    // model sequentially.
+    if (maxSubExhausted && tryModel !== 'groq') {
+      lastBatchErrors.push(`${MODEL_LABEL[tryModel]}: skipped (Max sub rate-limited earlier in this batch)`)
+      continue
+    }
     try {
       if (tryModel === 'opus' || tryModel === 'sonnet' || tryModel === 'haiku') {
         const claudeModel: ClaudeModel =
@@ -461,6 +477,15 @@ async function screenSingleBatch(
       break
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
+      // If Max subscription rate-limited on this Claude model, ALL other
+      // Claude models will fail the same way (same OAuth token). Set a
+      // flag so subsequent Claude attempts in this batch are skipped and
+      // we fall straight through to Groq. Saves 5-10 min on rate-limit days.
+      if (e instanceof ClaudeCodeRateLimitError && tryModel !== 'groq') {
+        maxSubExhausted = true
+        lastBatchErrors.push(`${MODEL_LABEL[tryModel]}: rate-limited — skipping remaining Claude models, jumping to Groq`)
+        continue
+      }
       // Redact secrets before logging or surfacing in API response. The
       // claude -p subprocess can echo the Authorization header in error
       // payloads (e.g. "API Error: Header '14' has invalid value:

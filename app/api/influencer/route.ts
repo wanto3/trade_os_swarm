@@ -108,11 +108,13 @@ async function analyzeBatch(videos: VideoForAnalysis[]): Promise<Map<string, Tra
   const errors: string[] = []
 
   // Detect serverless (Vercel, AWS Lambda) where claude -p subprocess is
-  // unavailable — go straight to Groq.
+  // unavailable — go straight to Groq. PRIMARY_LLM=groq env override
+  // forces Groq-first, useful when Max sub has run out for the month.
   const IS_SERVERLESS = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME)
+  const FORCE_GROQ = process.env.PRIMARY_LLM === 'groq'
 
   // 1. Claude Code subprocess (Max sub, primary path)
-  if (!IS_SERVERLESS) {
+  if (!IS_SERVERLESS && !FORCE_GROQ) {
     try {
       const parsed = await callClaudeCode<unknown>({
         prompt,
