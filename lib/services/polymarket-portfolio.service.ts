@@ -564,28 +564,156 @@ export interface ImportedPositionInput {
   /** Free-form note from the user (e.g. "manual position from Polymarket
    *  screenshot of 2026-05-08"). Stored as reasoningAtPlacement. */
   note?: string
+  /** Skip the Polymarket Gamma API market-lookup step. Default false.
+   *  Set true if you've already pre-matched the position OR if you
+   *  explicitly want a manual-only position with no auto-resolution. */
+  skipLookup?: boolean
+}
+
+// ─── Polymarket Gamma market lookup (for imported-position resolution) ─────
+
+interface GammaMarket {
+  id: string
+  question: string
+  slug?: string
+  closed?: boolean
+  endDate?: string
+  resolution?: string
+}
+
+let marketsLookupCache: { markets: GammaMarket[]; ts: number } | null = null
+const MARKETS_LOOKUP_CACHE_TTL_MS = 60 * 60_000  // 1 hour
+
+const LOOKUP_STOPWORDS = new Set([
+  'will', 'is', 'the', 'a', 'an', 'be', 'by', 'in', 'on', 'at', 'to', 'of',
+  'for', 'with', 'this', 'that', 'there', 'than', 'as', 'and', 'or', 'if',
+  'are', 'do', 'does', 'have', 'has', 'had', 'was', 'were',
+])
+
+function tokenize(s: string): Set<string> {
+  return new Set(
+    s.toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(t => t.length > 2 && !LOOKUP_STOPWORDS.has(t)),
+  )
+}
+
+function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0
+  let intersection = 0
+  for (const x of Array.from(a)) if (b.has(x)) intersection++
+  const union = a.size + b.size - intersection
+  return union > 0 ? intersection / union : 0
+}
+
+async function fetchAllMarkets(): Promise<GammaMarket[]> {
+  if (marketsLookupCache && Date.now() - marketsLookupCache.ts < MARKETS_LOOKUP_CACHE_TTL_MS) {
+    return marketsLookupCache.markets
+  }
+  try {
+    // Open + closed in parallel. Cap at 1000 each — most-recently-active
+    // markets first. Imported positions are typically still active, but
+    // matching against closed lets us also handle already-resolved imports.
+    const [openRes, closedRes] = await Promise.all([
+      fetch('https://gamma-api.polymarket.com/markets?closed=false&accepting_orders=true&order=volumeNum&ascending=false&limit=1000', { cache: 'no-store' }),
+      fetch('https://gamma-api.polymarket.com/markets?closed=true&order=endDate&ascending=false&limit=500', { cache: 'no-store' }),
+    ])
+    const open = openRes.ok ? await openRes.json() : []
+    const closed = closedRes.ok ? await closedRes.json() : []
+    const all = [
+      ...(Array.isArray(open) ? open : []),
+      ...(Array.isArray(closed) ? closed : []),
+    ] as GammaMarket[]
+    marketsLookupCache = { markets: all, ts: Date.now() }
+    return all
+  } catch (e) {
+    console.warn('[Portfolio] Gamma markets fetch failed:', e instanceof Error ? e.message : e)
+    return marketsLookupCache?.markets ?? []
+  }
+}
+
+/** Find a Polymarket market whose question best matches the given text.
+ *  Used at import-time to back-fill the real marketId so auto-resolution
+ *  works on imported positions. Returns null if no match crosses the
+ *  similarity threshold (default 0.5 Jaccard token overlap).
+ *
+ *  Threshold tuning notes:
+ *   - 0.5: catches "Reform UK Welsh Senedd" → "Will Reform UK win the most
+ *     seats in the 2026 Welsh Senedd election?" (high overlap on rare tokens)
+ *   - <0.4: false positives common (any politics question matches)
+ *   - >0.7: misses screenshots that truncate questions */
+export async function lookupMarketByQuestion(
+  question: string,
+  minSimilarity = 0.5,
+): Promise<GammaMarket | null> {
+  const queryTokens = tokenize(question)
+  if (queryTokens.size === 0) return null
+  const allMarkets = await fetchAllMarkets()
+  let bestMatch: GammaMarket | null = null
+  let bestScore = 0
+  for (const m of allMarkets) {
+    if (!m.question) continue
+    const score = jaccardSimilarity(queryTokens, tokenize(m.question))
+    if (score > bestScore) {
+      bestScore = score
+      bestMatch = m
+    }
+  }
+  return bestScore >= minSimilarity ? bestMatch : null
 }
 
 /** Add a position imported from an external source (screenshot of the
- *  user's real Polymarket portfolio, manual paste, etc.). Bankroll is
- *  decremented by the cost, same accounting as createPosition. Tagged
- *  source='imported' so the comparison view can separate user-traded
- *  picks from app-recommended ones for hit-rate analysis. */
-export function addImportedPosition(input: ImportedPositionInput): PolymarketPosition | null {
+ *  user's real Polymarket portfolio, manual paste, etc.).
+ *
+ *  Looks up the real Polymarket market by question text so the position
+ *  gets a real marketId (not a synthetic 'imported-...' string). With
+ *  the real id, the existing runResolutionOnly cron auto-resolves the
+ *  position when the market closes — same flow as app-recommended picks.
+ *
+ *  Bankroll is decremented by cost, same accounting as createPosition.
+ *  Tagged source='imported' so the comparison view can separate user-
+ *  traded picks from app-recommended ones for hit-rate analysis.
+ *
+ *  Returns the saved position. The result includes a `marketId` —
+ *  starting with 'imported-' if no Polymarket match was found (manual
+ *  resolve required), or the real Gamma id otherwise. */
+export async function addImportedPosition(input: ImportedPositionInput): Promise<PolymarketPosition | null> {
   if (input.entryPrice <= 0 || input.entryPrice >= 1) return null
   if (input.quantity <= 0) return null
   if (!input.question || input.question.length < 5) return null
 
   const cost = input.entryPrice * input.quantity
   // Don't gate on canPlaceTrade() — imported positions reflect REAL trades
-  // the user already made on Polymarket; we're just mirroring them. The
-  // bankroll math runs anyway so the user can see deployed-capital state.
+  // the user already made on Polymarket; we're just mirroring them.
   const placedAt = input.placedAtIso ? new Date(input.placedAtIso).getTime() : Date.now()
   const outcomeIndex = input.outcome === 'Yes' ? 0 : 1
 
+  // Try to match against the real Polymarket market. Failure is non-fatal —
+  // the position still imports, just with a synthetic id and won't auto-
+  // resolve (user can manually mark it later).
+  let resolvedMarketId = `imported-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`
+  let resolvedUrl = input.url || `https://polymarket.com/`
+  let lookupNote = ''
+  if (!input.skipLookup) {
+    try {
+      const match = await lookupMarketByQuestion(input.question)
+      if (match) {
+        resolvedMarketId = match.id
+        resolvedUrl = match.slug ? `https://polymarket.com/event/${match.slug}` : resolvedUrl
+        lookupNote = ` [auto-resolve: matched live market ${match.id.slice(0, 12)}…]`
+      } else {
+        lookupNote = ` [auto-resolve: no Polymarket match — needs manual resolve]`
+      }
+    } catch (e) {
+      console.warn('[Portfolio] Market lookup failed for import:', e instanceof Error ? e.message : e)
+      lookupNote = ` [auto-resolve: lookup failed — needs manual resolve]`
+    }
+  }
+
   const position: PolymarketPosition = {
     id: `pm-import-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
-    marketId: `imported-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+    marketId: resolvedMarketId,
     question: input.question.slice(0, 500),
     outcome: input.outcome,
     outcomeIndex,
@@ -599,11 +727,11 @@ export function addImportedPosition(input: ImportedPositionInput): PolymarketPos
     marketImpliedProb: input.entryPrice,
     expectedValue: 0,      // unknown for imported
     category: classifyCategory(input.question),
-    reasoningAtPlacement: input.note?.slice(0, 500),
+    reasoningAtPlacement: ((input.note || '') + lookupNote).slice(0, 500),
     source: 'imported',
     placedAt,
     status: 'open',
-    url: input.url || `https://polymarket.com/`,
+    url: resolvedUrl,
   }
 
   positions.push(position)
@@ -613,8 +741,39 @@ export function addImportedPosition(input: ImportedPositionInput): PolymarketPos
   snapshotBankroll('placed')
   recordDailySnapshot()
   savePortfolioData()
-  console.log(`[PolymarketPortfolio] Imported position: ${input.question.slice(0, 60)} | ${input.outcome} @ ${input.entryPrice} | cost $${cost.toFixed(2)}`)
+  console.log(`[PolymarketPortfolio] Imported position: ${input.question.slice(0, 60)} | ${input.outcome} @ ${input.entryPrice} | cost $${cost.toFixed(2)}${lookupNote}`)
   return position
+}
+
+/** Re-run market lookups for any imported positions still on synthetic
+ *  marketIds. Useful when a user imported before the lookup feature shipped,
+ *  OR when Gamma API was temporarily down at import time. */
+export async function reLookupImportedPositions(): Promise<{ relinked: number; stillUnmatched: number }> {
+  let relinked = 0
+  let stillUnmatched = 0
+  for (const p of positions) {
+    if (p.source !== 'imported') continue
+    if (p.status !== 'open') continue
+    if (!p.marketId.startsWith('imported-')) continue  // already real id
+    try {
+      const match = await lookupMarketByQuestion(p.question)
+      if (match) {
+        p.marketId = match.id
+        if (match.slug) p.url = `https://polymarket.com/event/${match.slug}`
+        relinked++
+      } else {
+        stillUnmatched++
+      }
+    } catch {
+      stillUnmatched++
+    }
+  }
+  if (relinked > 0) {
+    portfolio.lastUpdate = Date.now()
+    savePortfolioData()
+  }
+  console.log(`[PolymarketPortfolio] Re-lookup: ${relinked} relinked, ${stillUnmatched} still unmatched`)
+  return { relinked, stillUnmatched }
 }
 
 /** Clear all positions — used by import-replace mode. Refunds open positions'

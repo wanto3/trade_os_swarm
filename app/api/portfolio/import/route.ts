@@ -22,6 +22,7 @@ import {
   ensureInitialized,
   addImportedPosition,
   clearAllPositions,
+  reLookupImportedPositions,
   getPortfolio,
   type ImportedPositionInput,
 } from '@/lib/services/polymarket-portfolio.service'
@@ -149,7 +150,7 @@ export const maxDuration = 60
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, PUT, OPTIONS',
+  'Access-Control-Allow-Methods': 'POST, PUT, PATCH, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
 }
 
@@ -215,8 +216,10 @@ export async function PUT(request: NextRequest) {
       clearAllPositions()
     }
 
-    const inserted: ReturnType<typeof addImportedPosition>[] = []
+    const inserted: Awaited<ReturnType<typeof addImportedPosition>>[] = []
     const skipped: { reason: string; input: unknown }[] = []
+    let matchedCount = 0
+    let unmatchedCount = 0
     for (const p of positions) {
       const input: ImportedPositionInput = {
         question: String(p.question || ''),
@@ -227,9 +230,14 @@ export async function PUT(request: NextRequest) {
         placedAtIso: typeof p.placedAtIso === 'string' ? p.placedAtIso : undefined,
         note: typeof p.note === 'string' ? p.note : `Imported from Polymarket screenshot ${new Date().toISOString().slice(0, 10)}`,
       }
-      const created = addImportedPosition(input)
+      const created = await addImportedPosition(input)
       if (created) {
         inserted.push(created)
+        if (created.marketId.startsWith('imported-')) {
+          unmatchedCount++
+        } else {
+          matchedCount++
+        }
       } else {
         skipped.push({ reason: 'Validation failed (price out of range, quantity ≤ 0, or question too short)', input: p })
       }
@@ -240,8 +248,31 @@ export async function PUT(request: NextRequest) {
       mode,
       inserted: inserted.length,
       skipped: skipped.length,
+      autoResolveMatched: matchedCount,
+      autoResolveUnmatched: unmatchedCount,
       portfolio: getPortfolio(),
       ...(skipped.length > 0 ? { skippedDetails: skipped } : {}),
+    }, { headers: CORS_HEADERS })
+  } catch (e) {
+    return NextResponse.json({
+      success: false,
+      error: e instanceof Error ? e.message : String(e),
+    }, { status: 500, headers: CORS_HEADERS })
+  }
+}
+
+
+/** PATCH — re-run market lookups for any imported positions still on
+ *  synthetic ids. Useful after an initial import where Gamma API was
+ *  flaky, OR for positions imported before this lookup feature shipped. */
+export async function PATCH() {
+  try {
+    await ensureInitialized()
+    const result = await reLookupImportedPositions()
+    return NextResponse.json({
+      success: true,
+      ...result,
+      portfolio: getPortfolio(),
     }, { headers: CORS_HEADERS })
   } catch (e) {
     return NextResponse.json({
