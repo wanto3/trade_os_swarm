@@ -1744,6 +1744,12 @@ POLYMARKET_CLOB_API_SECRET=...`}
       {/* ── Paper Trades Tab ── */}
       {activeTab === 'paper-trades' && (
         <div>
+          {/* Import button at the top of Paper Trades tab — ALWAYS visible
+              regardless of whether positions exist. The original placement
+              was inside the "has positions" branch, hiding it from new
+              users who don't have any positions yet (catch-22). */}
+          <PortfolioImport onImported={loadPaperData} />
+
           {paperLoading ? (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '120px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '12px', color: '#6e7681' }}>
               <RefreshCw style={{ width: 16, height: 16, marginRight: '0.5rem', animation: 'spin 1s linear infinite' }} /> Loading...
@@ -1752,7 +1758,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '200px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '12px', color: '#6e7681', gap: '0.5rem' }}>
               <Target style={{ width: 32, height: 32, opacity: 0.5 }} />
               <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>No paper trades yet</div>
-              <div style={{ fontSize: '0.7rem' }}>Enable auto-trading in settings, or place a trade from the Opportunities tab</div>
+              <div style={{ fontSize: '0.7rem' }}>Place a trade from the Opportunities tab, or use <strong>📷 Import portfolio from screenshot</strong> above to mirror your real Polymarket positions.</div>
             </div>
           ) : (
             <>
@@ -1821,12 +1827,6 @@ POLYMARKET_CLOB_API_SECRET=...`}
                   </div>
                 </>
               )}
-
-              {/* Import from Polymarket screenshot — Groq vision parses positions
-                  and adds them as paper positions tagged source='imported'. Lets
-                  the user mirror their real Polymarket trades into the dashboard
-                  for performance tracking + algorithm comparison. */}
-              <PortfolioImport onImported={loadPaperData} />
 
               {/* Positions table */}
               <div style={{ backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '12px', overflow: 'hidden' }}>
