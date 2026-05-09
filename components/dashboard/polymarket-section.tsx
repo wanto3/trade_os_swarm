@@ -333,6 +333,11 @@ export function PolymarketSection() {
   // props, crypto-price, weather, celebrity, short-window) shouldn't
   // crowd the main view. User can toggle off to see them.
   const [hideLimitedEdge, setHideLimitedEdge] = useState<boolean>(true)
+  // Watch list category filter — lets the user focus on AI Strong picks
+  // (Opus has training-data edge), Your Edge picks (esports the user
+  // follows), or Limited Edge (sports/coin-flips for personal-judgment
+  // bets only). Default 'all' shows everything sorted by edge magnitude.
+  const [watchTierFilter, setWatchTierFilter] = useState<'all' | 'strong' | 'user' | 'weak' | 'untagged'>('all')
   // Half Kelly default — slightly more aggressive sizing for $4 grow phase.
   // User picks Full or Quarter from the selector if they want to dial up/down.
   const [kellyMode, setKellyMode] = useState<KellyMode>('half')
@@ -1659,6 +1664,21 @@ POLYMARKET_CLOB_API_SECRET=...`}
               return true
             })
             if (watchList.length === 0) return null
+            // Sort watchlist by edge magnitude descending (biggest disagreements
+            // between Opus and market surface first — those are where user
+            // judgment can find alpha).
+            const watchListSorted = [...watchList].sort((a, b) => {
+              const aEdge = Math.abs(a.estimatedProbability - a.odds)
+              const bEdge = Math.abs(b.estimatedProbability - b.odds)
+              return bEdge - aEdge
+            })
+            // Apply category filter from watchTierFilter state
+            const watchListFiltered = watchTierFilter === 'all'
+              ? watchListSorted
+              : watchListSorted.filter(r => {
+                const e = (r as TradeRecommendation & { aiEdge?: string }).aiEdge ?? 'untagged'
+                return e === watchTierFilter
+              })
             // Count by AI-edge tier so the user sees the breakdown at a glance:
             // "3 👤 your edge / 2 🤖 AI / 5 ⚠️ weak"
             const edgeCounts = { strong: 0, user: 0, weak: 0, untagged: 0 }
@@ -1669,40 +1689,135 @@ POLYMARKET_CLOB_API_SECRET=...`}
               else if (e === 'weak') edgeCounts.weak++
               else edgeCounts.untagged++
             }
+            // Category filter chip configs
+            type TierChip = { key: typeof watchTierFilter; label: string; color: string; count: number }
+            const tierChipsAll: TierChip[] = [
+              { key: 'all', label: `All ${watchList.length}`, color: '#8b949e', count: watchList.length },
+              { key: 'strong', label: `🤖 AI Strong`, color: '#3fb950', count: edgeCounts.strong },
+              { key: 'user', label: `👤 Your Edge`, color: '#a371f7', count: edgeCounts.user },
+              { key: 'weak', label: `⚠️ Limited`, color: '#a09060', count: edgeCounts.weak },
+            ]
+            const tierChips: TierChip[] = tierChipsAll.filter(c => c.key === 'all' || c.count > 0)
+
             return (
               <div style={{ marginTop: '1rem' }}>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: '0.75rem',
-                  marginBottom: '0.5rem', fontSize: '0.7rem',
-                  color: '#8b949e', textTransform: 'uppercase', letterSpacing: '0.04em',
+                  marginBottom: '0.5rem',
                   flexWrap: 'wrap',
                 }}>
-                  <span>👀 Watch List — Opus considered but skipped ({watchList.length})</span>
-                  <span style={{ display: 'flex', gap: '0.4rem', textTransform: 'none', letterSpacing: 'normal', fontSize: '0.6rem' }}>
-                    {edgeCounts.user > 0 && <span style={{ color: '#a371f7' }}>👤 {edgeCounts.user}</span>}
-                    {edgeCounts.strong > 0 && <span style={{ color: '#3fb950' }}>🤖 {edgeCounts.strong}</span>}
-                    {edgeCounts.weak > 0 && <span style={{ color: '#a09060' }}>⚠️ {edgeCounts.weak}</span>}
+                  <span style={{
+                    fontSize: '0.7rem', color: '#c9d1d9', fontWeight: 700,
+                    textTransform: 'uppercase', letterSpacing: '0.04em',
+                  }}>
+                    👀 Watch List — actionable picks Opus skipped ({watchList.length})
+                  </span>
+                  {/* Category filter chips */}
+                  <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
+                    {tierChips.map(chip => (
+                      <button
+                        key={chip.key}
+                        onClick={() => setWatchTierFilter(chip.key)}
+                        style={{
+                          padding: '2px 8px', fontSize: '0.55rem', fontWeight: 700,
+                          background: watchTierFilter === chip.key ? `${chip.color}22` : 'transparent',
+                          color: watchTierFilter === chip.key ? chip.color : '#6e7681',
+                          border: `1px solid ${watchTierFilter === chip.key ? chip.color : '#30363d'}`,
+                          borderRadius: '12px', cursor: 'pointer',
+                        }}
+                      >
+                        {chip.label}{chip.key !== 'all' && ` (${chip.count})`}
+                      </button>
+                    ))}
+                  </div>
+                  <span style={{ fontSize: '0.5rem', color: '#484f58', fontStyle: 'italic', marginLeft: 'auto' }}>
+                    sorted by largest Opus-vs-market gap first
                   </span>
                 </div>
                 <div style={{
                   display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
                   gap: '0.5rem',
                 }}>
-                  {watchList.map((rec) => {
+                  {watchListFiltered.map((rec) => {
                     const liveDaysToClose = liveDays(rec)
+                    const recExt = rec as TradeRecommendation & { aiEdge?: 'strong' | 'user' | 'weak'; aiEdgeReason?: string; llmDirection?: string }
+                    const edgePts = (rec.estimatedProbability - rec.odds) * 100  // signed edge
+                    const edgeAbs = Math.abs(edgePts)
+                    // Determine which side has implied edge from Opus's view
+                    const opusFavorsYes = rec.estimatedProbability > rec.odds
+                    const suggestedSide = opusFavorsYes ? 'Yes' : 'No'
+                    const suggestedPrice = opusFavorsYes ? rec.odds : 1 - rec.odds
+                    const payoutMultiple = suggestedPrice > 0 ? 1 / suggestedPrice : 0
+                    // Generate a one-line "verdict" — most actionable interpretation
+                    let verdict = ''
+                    let verdictColor = '#6e7681'
+                    if (edgeAbs < 1) {
+                      verdict = 'No edge — Opus agrees with market. Skip unless you have personal conviction.'
+                    } else if (edgeAbs < 3) {
+                      verdict = `Tiny ${edgePts >= 0 ? '+' : ''}${edgePts.toFixed(1)}pt edge → bet $1 ${suggestedSide} → win $${(payoutMultiple - 1).toFixed(2)} if right`
+                      verdictColor = '#f0883e'
+                    } else if (recExt.aiEdge === 'user') {
+                      verdict = `${edgePts >= 0 ? '+' : ''}${edgePts.toFixed(1)}pt edge — ${recExt.aiEdge === 'user' ? '👤 your scene knowledge applies' : 'judgment call'}. Bet ${suggestedSide} for ${payoutMultiple.toFixed(1)}x payout.`
+                      verdictColor = '#a371f7'
+                    } else {
+                      verdict = `${edgePts >= 0 ? '+' : ''}${edgePts.toFixed(1)}pt — Opus skipped (${recExt.llmDirection === 'skip' ? 'low conf' : 'tiny edge'}). Override if you disagree.`
+                      verdictColor = '#a09060'
+                    }
+                    // Build a synthetic TradeRecommendation override for the
+                    // "Place anyway" button — uses Opus's preferred side
+                    const placeAnyway = async () => {
+                      const stake = window.prompt(
+                        `Place a paper bet on this skipped pick?\n\n${rec.market.question.slice(0, 120)}\n\nSuggested: bet ${suggestedSide} at ${(suggestedPrice * 100).toFixed(0)}% market price\nIf right: $1 → $${payoutMultiple.toFixed(2)}\nOpus skipped this (${recExt.llmDirection || 'unknown'} reason: ${rec.reasoning?.slice(0, 100) || 'no reasoning'})\n\nEnter stake amount in dollars:`,
+                        '1.00',
+                      )
+                      if (!stake) return
+                      const stakeNum = parseFloat(stake)
+                      if (!isFinite(stakeNum) || stakeNum <= 0) {
+                        alert('Invalid stake. Must be a positive number.')
+                        return
+                      }
+                      // Build a rec-shaped object but override the outcome to
+                      // user's preferred side. The bet uses real market price.
+                      const overrideRec = {
+                        ...rec,
+                        outcome: suggestedSide,
+                        // Set odds to the suggested side's price so Kelly calc
+                        // works, but server uses the actual market.
+                        odds: suggestedPrice,
+                        marketImpliedProb: suggestedPrice,
+                        // estimatedProbability flips for No-side rec
+                        estimatedProbability: opusFavorsYes
+                          ? rec.estimatedProbability
+                          : 1 - rec.estimatedProbability,
+                        // Force a small Kelly fraction so the user's stake (not Kelly) drives
+                        kellyFraction: 0,
+                      }
+                      try {
+                        const res = await fetch('/api/polymarket/place', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify(overrideRec),
+                        })
+                        const json = await res.json()
+                        if (json.success) {
+                          loadPaperData()
+                          alert(`Placed $${stakeNum.toFixed(2)} on ${suggestedSide}. Override paper trade — Opus skipped but you took the bet.`)
+                        } else {
+                          alert(`Failed to place: ${json.error}`)
+                        }
+                      } catch (e) {
+                        alert(`Network error: ${e}`)
+                      }
+                    }
                     return (
-                      <a
+                      <div
                         key={`watch-${rec.market.id}`}
-                        href={rec.market.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
                         style={{
                           backgroundColor: '#0d1117',
                           border: '1px dashed #30363d',
                           borderRadius: '10px',
                           padding: '0.6rem 0.75rem',
-                          textDecoration: 'none',
                           color: '#8b949e',
                           display: 'flex', flexDirection: 'column', gap: '0.35rem',
                           fontSize: '0.65rem',
@@ -1723,37 +1838,37 @@ POLYMARKET_CLOB_API_SECRET=...`}
                             letterSpacing: '0.04em',
                             fontWeight: 600,
                           }}>
-                            {(rec as TradeRecommendation & { llmDirection?: string }).llmDirection === 'skip' ? 'Low conf' : 'Skipped'}
+                            {recExt.llmDirection === 'skip' ? 'Low conf' : 'Skipped'}
                           </span>
-                          {/* AI-edge tag in Watch List too — esports skips will show
-                              "Your Edge" so user knows their judgment matters here */}
-                          {(rec as TradeRecommendation & { aiEdge?: 'strong' | 'user' | 'weak'; aiEdgeReason?: string }).aiEdge && (() => {
-                            const r = rec as TradeRecommendation & { aiEdge?: 'strong' | 'user' | 'weak'; aiEdgeReason?: string }
-                            const edge = r.aiEdge!
-                            const cfg = edge === 'strong'
+                          {recExt.aiEdge && (() => {
+                            const cfg = recExt.aiEdge === 'strong'
                               ? { label: '🤖 AI', color: '#3fb950', bg: 'rgba(63,185,80,0.12)' }
-                              : edge === 'user'
+                              : recExt.aiEdge === 'user'
                                 ? { label: '👤 You', color: '#a371f7', bg: 'rgba(163,113,247,0.12)' }
                                 : { label: '⚠️', color: '#a09060', bg: 'rgba(160,144,96,0.12)' }
                             return (
                               <span
-                                title={r.aiEdgeReason || ''}
+                                title={recExt.aiEdgeReason || ''}
                                 style={{
-                                  fontSize: '0.5rem',
-                                  fontWeight: 700,
-                                  color: cfg.color,
-                                  backgroundColor: cfg.bg,
-                                  padding: '0.1rem 0.4rem',
-                                  borderRadius: '4px',
-                                  letterSpacing: '0.02em',
-                                  cursor: 'help',
+                                  fontSize: '0.5rem', fontWeight: 700,
+                                  color: cfg.color, backgroundColor: cfg.bg,
+                                  padding: '0.1rem 0.4rem', borderRadius: '4px',
+                                  letterSpacing: '0.02em', cursor: 'help',
                                 }}
                               >
                                 {cfg.label}
                               </span>
                             )
                           })()}
-                          <span style={{ fontSize: '0.55rem', color: '#6e7681' }}>
+                          <span style={{
+                            fontSize: '0.5rem', fontWeight: 700,
+                            color: edgeAbs >= 3 ? '#f0c000' : '#484f58',
+                            backgroundColor: edgeAbs >= 3 ? 'rgba(240,192,0,0.1)' : 'transparent',
+                            padding: '0.1rem 0.4rem', borderRadius: '3px',
+                          }}>
+                            edge {edgePts >= 0 ? '+' : ''}{edgePts.toFixed(1)}pt
+                          </span>
+                          <span style={{ fontSize: '0.55rem', color: '#6e7681', marginLeft: 'auto' }}>
                             {liveDaysToClose <= 1 ? `${Math.max(1, Math.round(liveDaysToClose * 24))}h` : `${liveDaysToClose.toFixed(1)}d`}
                           </span>
                         </div>
@@ -1766,16 +1881,54 @@ POLYMARKET_CLOB_API_SECRET=...`}
                         }}>
                           <span>Mkt YES: {(rec.odds * 100).toFixed(0)}%</span>
                           <span>Opus est: {(rec.estimatedProbability * 100).toFixed(0)}%</span>
+                          <span style={{ color: '#f0c000' }}>Payout: {payoutMultiple.toFixed(1)}x</span>
+                        </div>
+                        {/* Verdict line — actionable interpretation */}
+                        <div style={{
+                          fontSize: '0.6rem', color: verdictColor,
+                          lineHeight: 1.3, fontWeight: 600,
+                          padding: '0.3rem 0', borderTop: '1px solid #21262d', marginTop: '0.2rem',
+                        }}>
+                          {verdict}
                         </div>
                         {rec.reasoning && (
                           <div style={{
-                            fontSize: '0.6rem', color: '#6e7681',
+                            fontSize: '0.55rem', color: '#6e7681',
                             fontStyle: 'italic', lineHeight: 1.3,
                           }}>
                             {rec.reasoning.length > 110 ? rec.reasoning.substring(0, 110) + '…' : rec.reasoning}
                           </div>
                         )}
-                      </a>
+                        <div style={{ display: 'flex', gap: '6px', marginTop: '0.3rem' }}>
+                          <a
+                            href={rec.market.url}
+                            target='_blank'
+                            rel='noopener noreferrer'
+                            style={{
+                              flex: 1, textAlign: 'center',
+                              fontSize: '0.55rem', padding: '4px 8px',
+                              background: 'transparent', border: '1px solid #30363d',
+                              borderRadius: '4px', color: '#8b949e',
+                              textDecoration: 'none',
+                            }}
+                          >
+                            View on Polymarket ↗
+                          </a>
+                          <button
+                            onClick={placeAnyway}
+                            title='Place a paper bet on this pick despite Opus skipping. Use when you have personal conviction (esports, niche knowledge, etc.).'
+                            style={{
+                              flex: 1, fontSize: '0.55rem', padding: '4px 8px',
+                              background: 'rgba(63,185,80,0.10)',
+                              border: '1px solid rgba(63,185,80,0.4)',
+                              borderRadius: '4px', color: '#3fb950',
+                              cursor: 'pointer', fontWeight: 700,
+                            }}
+                          >
+                            ⚡ Place {suggestedSide} anyway
+                          </button>
+                        </div>
+                      </div>
                     )
                   })}
                 </div>
