@@ -47,7 +47,7 @@ interface BatchAssessment {
 
 // ─── Prompt Construction ─────────────────────────────────────────────────────
 
-function buildBatchScreeningPrompt(markets: ScreeningInput[]): string {
+function buildBatchScreeningPrompt(markets: ScreeningInput[], lessonsBlock = ''): string {
   const marketLines = markets
     .map((m, i) => {
       const hours = m.endDate
@@ -78,7 +78,7 @@ function buildBatchScreeningPrompt(markets: ScreeningInput[]): string {
     })
     .join('\n')
 
-  return `You are screening prediction markets for trading opportunities. For EACH market below, give your assessment in ONE pass.
+  return `You are screening prediction markets for trading opportunities. For EACH market below, give your assessment in ONE pass.${lessonsBlock}
 
 MARKETS:
 ${marketLines}
@@ -149,6 +149,17 @@ For EACH market, output:
 - shouldBet: true if confidence is high or medium AND there's a meaningful edge (≥5% normally; ≥2% for closing-soon; ≥1% for Cat A heavy-favorite confirmations at yesPrice ≥0.85 closing within 48h — these are safe-scalp territory where small confirmed edges are structurally valuable to a small-bankroll trader compounding daily).
 
 Be calibrated, not paranoid. The user is paying for Opus 4.7 specifically because you have broad world knowledge — use it. Don't reflexively skip just because you can't cite a source; if you can reason about it, that's medium confidence. But don't fabricate edges where none exist either.
+
+📍 REGIONAL / SUB-NATIONAL POLITICS — calibrate tighter:
+
+Polymarket includes many regional, state-level, and devolved-government election markets (Welsh Senedd, Scottish Parliament, US gubernatorial races, German Landtag, Mexican state elections, Indian state elections, etc.). These are NOT the same as national elections:
+
+  - National-level polling (UK general election, US presidential) is RICH in your training data. You can reason confidently.
+  - Regional/devolved-body polling (Welsh Senedd, US state mid-terms, Indian state Vidhan Sabha) is SPARSE in training. National-level momentum often doesn't transfer:
+      * UK-wide Reform polling 25% does NOT mean Reform takes most seats in Welsh Senedd. Welsh politics is dominated by Labour + Plaid Cymru historically; voting systems differ (regional list) from Westminster FPTP.
+      * "X polling strong nationally" rarely justifies a >5pt edge claim on a specific regional vote.
+  - For ANY regional/sub-national/local election market: default to confidence='low' and direction='skip' UNLESS you have specific named polling for THAT region within the last 6 months. National polling extrapolation is NOT a basis for edge.
+  - This applies equally to: state governor races, municipal/mayoral elections, devolved parliaments, regional assembly seat counts, local ballot initiatives.
 
 ⚠️ ANTI-FABRICATION GUARDRAIL — applies to ALL categories:
 
@@ -463,7 +474,12 @@ async function screenSingleBatch(
 ): Promise<Map<string, LLMMarketAnalysis>> {
   const results = new Map<string, LLMMarketAnalysis>()
   if (markets.length === 0) return results
-  const prompt = buildBatchScreeningPrompt(markets)
+  // Inject the user-curated "lessons learned" block into the prompt so
+  // Opus pattern-matches new markets against past failures and skips
+  // similar fabrication patterns.
+  const { getLessonsPromptBlock } = await import('./lessons-learned.service')
+  const lessonsBlock = await getLessonsPromptBlock()
+  const prompt = buildBatchScreeningPrompt(markets, lessonsBlock)
 
   // Detect serverless environment — Vercel/Lambda can't spawn `claude -p`
   // subprocess (no Claude Code binary, no OAuth creds on their machines).

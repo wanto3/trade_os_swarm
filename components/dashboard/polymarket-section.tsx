@@ -2060,9 +2060,52 @@ POLYMARKET_CLOB_API_SECRET=...`}
                                 </button>
                               </div>
                             ) : (
-                              <span style={{ fontSize: '0.55rem', color: '#484f58' }}>
-                                resolved ({pos.resolution || '?'})
-                              </span>
+                              <div style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>
+                                <span style={{ fontSize: '0.55rem', color: '#484f58' }}>
+                                  resolved ({pos.resolution || '?'})
+                                </span>
+                                {/* Log a lesson — feeds into future Opus prompts */}
+                                {pos.status === 'lost' && (
+                                  <button
+                                    onClick={async () => {
+                                      const takeaway = window.prompt(
+                                        `Log a one-sentence takeaway for future picks.\n\nMarket: ${pos.question.slice(0, 100)}\nOpus thought: ${pos.outcome} side, ${(pos.estimatedProbability * 100).toFixed(0)}% real prob\nActually resolved: ${pos.resolution}\n\nWhat did Opus get wrong? (Will be injected into future screening prompts as context.)`,
+                                        'Regional politics ≠ national polling momentum',
+                                      )
+                                      if (!takeaway || takeaway.trim().length < 5) return
+                                      try {
+                                        const res = await fetch('/api/lessons', {
+                                          method: 'POST',
+                                          headers: { 'Content-Type': 'application/json' },
+                                          body: JSON.stringify({
+                                            question: pos.question,
+                                            opusPrediction: `${pos.outcome} side @ ${(pos.estimatedProbability * 100).toFixed(0)}% real prob`,
+                                            actualOutcome: `Market resolved ${pos.resolution}`,
+                                            takeaway: takeaway.trim(),
+                                            positionId: pos.id,
+                                          }),
+                                        })
+                                        const json = await res.json()
+                                        if (json.success) {
+                                          alert(`Logged. Future screening prompts will include this takeaway as context.`)
+                                        } else {
+                                          alert(`Failed: ${json.error}`)
+                                        }
+                                      } catch (e) {
+                                        alert(`Network error: ${e}`)
+                                      }
+                                    }}
+                                    title='Log a one-sentence takeaway from this loss. Future Opus prompts will see it and pattern-match.'
+                                    style={{
+                                      fontSize: '0.5rem', padding: '0.15rem 0.4rem',
+                                      background: 'transparent', border: '1px solid #f0c00055',
+                                      borderRadius: '3px', color: '#f0c000', cursor: 'pointer',
+                                    }}
+                                  >
+                                    💡 Log lesson
+                                  </button>
+                                )}
+                              </div>
                             )}
                           </td>
                         </tr>
