@@ -328,6 +328,11 @@ export function PolymarketSection() {
   // closing, heavy favorite (70-92% YES), Opus medium+ confidence, ≥5pt edge.
   // Some days zero picks; some days 2-3. The user's primary growth path.
   const [filterKey, setFilterKey] = useState<FilterKey>('dailyTarget')
+  // Hide AI-weak ("Limited Edge") picks from the opportunities lane by
+  // default. Categories where Opus is unreliable (live sports, sports
+  // props, crypto-price, weather, celebrity, short-window) shouldn't
+  // crowd the main view. User can toggle off to see them.
+  const [hideLimitedEdge, setHideLimitedEdge] = useState<boolean>(true)
   // Half Kelly default — slightly more aggressive sizing for $4 grow phase.
   // User picks Full or Quarter from the selector if they want to dial up/down.
   const [kellyMode, setKellyMode] = useState<KellyMode>('half')
@@ -583,6 +588,13 @@ export function PolymarketSection() {
 
   const opportunities = data?.opportunities ?? []
   const filtered = applyMultiSort(opportunities).filter(rec => {
+    // Global gate: hide AI-weak picks unless user toggles them on. Limited-
+    // Edge picks (live sports, props, crypto-price etc.) crowd the main view
+    // with low-trust EV claims. Watch List still surfaces them for user
+    // judgment trades.
+    const recExtGlobal = rec as TradeRecommendation & { aiEdge?: string }
+    if (hideLimitedEdge && recExtGlobal.aiEdge === 'weak') return false
+
     if (filterKey === 'high') return rec.confidence === 'high'
     if (filterKey === 'medium') return rec.confidence === 'medium'
     if (filterKey === 'low') return rec.confidence === 'low'
@@ -614,11 +626,20 @@ export function PolymarketSection() {
       const recExt = rec as TradeRecommendation & { aiEdge?: string; dailyRoi?: number }
       const edgePts = rec.estimatedProbability - rec.odds
       const dailyRoi = recExt.dailyRoi ?? (rec.expectedValue / Math.max(0.5, days))
-      const isShortCycle = days <= 7 && edgePts >= 0.05
-      // Loosened mid-horizon edge from 10pt → 7pt. Live data showed picks
-      // like US-Iran peace 9d at 8.2pt edge / 6.9%/day were just barely
-      // missing the threshold even though they're textbook daily-compound
-      // material. 7pt with AI-Strong is still meaningful edge.
+      // Tier-aware short-cycle threshold: AI-Strong + your-edge get the
+      // standard 5pt floor; AI-weak (live sports / props / coin flips)
+      // requires 15pt + high-confidence to even surface as daily-compound.
+      // Stops Real-Madrid-vs-X-tomorrow from crowding the lane with
+      // medium-conf "Opus says 55% on a 22% market" picks that are
+      // fabrication-prone in low-edge categories.
+      const isAiWeak = recExt.aiEdge === 'weak'
+      const shortCycleEdgeMin = isAiWeak ? 0.15 : 0.05
+      const shortCycleConfMin = isAiWeak  // confidence requirement
+      const isShortCycle = days <= 7 && edgePts >= shortCycleEdgeMin &&
+                           (!shortCycleConfMin || rec.confidence === 'high')
+      // Loosened mid-horizon edge from 10pt → 7pt for AI-Strong. AI-weak
+      // mid-horizon picks excluded entirely (they should not be in the
+      // daily-compound lane regardless).
       const isMidHorizonHighEdge = days <= 30 && edgePts >= 0.07 && recExt.aiEdge === 'strong'
       return (
         rec.confidence !== 'low' &&
@@ -1160,6 +1181,26 @@ POLYMARKET_CLOB_API_SECRET=...`}
                   {tab.label}
                 </button>
               ))}
+
+              {/* Hide Limited Edge toggle — separates "Opus categories"
+                  (politics/M&A/etc.) from coin-flip categories (live sports,
+                  props). On by default to keep the main lane trustworthy. */}
+              <button
+                onClick={() => setHideLimitedEdge(v => !v)}
+                title={hideLimitedEdge
+                  ? 'Currently HIDING ⚠️ Limited Edge picks (live sports, props, crypto-price). Click to show them too.'
+                  : 'Currently SHOWING ⚠️ Limited Edge picks. Click to hide low-AI-trust categories from the main lane.'}
+                style={{
+                  marginLeft: '0.4rem',
+                  padding: '3px 8px', fontSize: '0.55rem', fontWeight: 700,
+                  background: hideLimitedEdge ? 'rgba(63,185,80,0.10)' : 'rgba(160,144,96,0.10)',
+                  color: hideLimitedEdge ? '#3fb950' : '#a09060',
+                  border: `1px solid ${hideLimitedEdge ? 'rgba(63,185,80,0.3)' : 'rgba(160,144,96,0.3)'}`,
+                  borderRadius: '14px', cursor: 'pointer',
+                }}
+              >
+                {hideLimitedEdge ? '🤖 AI-Trustworthy only' : '⚠️ Showing Limited Edge'}
+              </button>
             </div>
 
             <span style={{ fontSize: '0.6rem', color: loading ? '#3fb950' : '#6e7681' }}>
@@ -1178,7 +1219,14 @@ POLYMARKET_CLOB_API_SECRET=...`}
               const recExt = r as TradeRecommendation & { aiEdge?: string; dailyRoi?: number }
               const edgePts = r.estimatedProbability - r.odds
               const dailyRoi = recExt.dailyRoi ?? (r.expectedValue / Math.max(0.5, days))
-              const isShortCycle = days <= 7 && edgePts >= 0.05
+              // Tier-aware: AI-weak picks need 15pt edge + high confidence
+              // to qualify as short-cycle daily-compound (matches the
+              // dailyTarget filter logic exactly).
+              const isAiWeak = recExt.aiEdge === 'weak'
+              const shortCycleEdgeMin = isAiWeak ? 0.15 : 0.05
+              const shortCycleConfMin = isAiWeak
+              const isShortCycle = days <= 7 && edgePts >= shortCycleEdgeMin &&
+                                   (!shortCycleConfMin || r.confidence === 'high')
               const isMidHorizonHighEdge = days <= 30 && edgePts >= 0.07 && recExt.aiEdge === 'strong'
               return r.confidence !== 'low' && r.expectedValue > 0 &&
                      dailyRoi >= 0.01 && r.odds >= 0.55 && r.odds <= 0.95 &&

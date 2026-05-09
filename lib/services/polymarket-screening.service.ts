@@ -150,6 +150,19 @@ For EACH market, output:
 
 Be calibrated, not paranoid. The user is paying for Opus 4.7 specifically because you have broad world knowledge — use it. Don't reflexively skip just because you can't cite a source; if you can reason about it, that's medium confidence. But don't fabricate edges where none exist either.
 
+⚠️ ANTI-FABRICATION GUARDRAIL — applies to ALL categories:
+
+Polymarket markets are price-discovery on real outcomes. Any claim that the market is mispriced by more than 20 percentage points needs SPECIFIC justification — not just "movies often disappoint" or "underdogs sometimes win." If you assert a >20pt edge:
+
+  - QUOTE a specific fact from the question text, recent training-data knowledge, or a base rate with the actual numbers ("congressional polling shows X 40% lead"; "this team has 8-2 record this season"; "merger filings indicate regulatory headwinds").
+  - If you can't cite a specific basis, your real estimate is closer to the market price. Pick a smaller edge (3-10pt) or skip.
+  - Especially watch for these false-confidence patterns:
+    * Box-office / opening weekend predictions for movies you don't have specific tracking data on. Default to "agree with market" unless you remember specific tracking-poll data, comp-title patterns, or social signal volumes.
+    * Single-game sports outcomes for matchups you don't have recent form data on. NEUTRAL is the right answer for "Real Madrid vs X tomorrow" if you don't know the lineup, recent form, or tactical matchup specifics.
+    * Hyper-specific date predictions ("by May 31, 2026") where the date itself is arbitrary — base rates dominate, edge claims should be small.
+
+If your reasoning would fit on the back of a fortune cookie, your confidence should be "low" and your direction should usually be "skip", regardless of how confident the prompt rules above made you feel.
+
 Return a JSON array with EXACTLY this shape, one entry per market in the same order:
 [
   {"marketId":"...","yourEstimate":0.0-1.0,"direction":"yes|no|skip","confidence":"high|medium|low","reasoning":"...","shouldBet":true|false},
@@ -260,7 +273,9 @@ function applySafetyRules(
   if (est > 1) est /= 100
   est = Math.min(0.99, Math.max(0.01, est))
 
-  const edgeSize = Math.abs(est - marketYesPrice)
+  // Note: edgeSize is intentionally `let` so the fabrication guardrail
+  // below can shrink it after capping `est`.
+  let edgeSize = Math.abs(est - marketYesPrice)
   const evidenceCount = evidence
     ? evidence.bullishFindings.length + evidence.bearishFindings.length + evidence.neutralFindings.length
     : 0
@@ -313,6 +328,40 @@ function applySafetyRules(
   if (direction === 'no' && estVsMarket >= 0) {
     direction = 'skip'
     shouldBet = false
+  }
+
+  // FABRICATION GUARDRAIL — defense in depth against the prompt failing
+  // to suppress over-confident large-edge claims. If Opus claims an
+  // edge > 25pt without "high" confidence + non-trivial reasoning, the
+  // claim is likely vibes-based fabrication. Examples we caught manually:
+  //   - "MK2 box office NO @ 20% with 65% real prob" (45pt edge, medium
+  //     conf, no specific tracking data — fabricated)
+  // Rule: if edge ≥25pt AND confidence !== 'high' AND reasoning < 60 chars
+  // (proxy for "no quote-anchored basis"), force-downgrade to direction='skip'
+  // OR shrink edge to 10pt cap. Choose shrink so the pick still surfaces in
+  // the broader opportunities lane but with a sane bet size.
+  const reasoningText = (raw.reasoning || '').trim()
+  const SUSPICIOUS_EDGE_THRESHOLD = 0.25
+  const REASONING_MIN_CHARS = 60
+  const looksFabricated =
+    edgeSize >= SUSPICIOUS_EDGE_THRESHOLD &&
+    confidence !== 'high' &&
+    reasoningText.length < REASONING_MIN_CHARS
+  if (looksFabricated) {
+    // Cap est so the resulting edge is at most 10pt (still meaningful but
+    // not insane). Direction stays the same so the pick can still appear
+    // in the watch list — just with smaller claimed edge.
+    const cappedEst = direction === 'yes'
+      ? Math.min(0.99, marketYesPrice + 0.10)
+      : direction === 'no'
+        ? Math.max(0.01, marketYesPrice - 0.10)
+        : est
+    est = cappedEst
+    // Recompute edgeSize so downstream EV math is consistent with the cap.
+    edgeSize = Math.abs(est - marketYesPrice)
+    console.warn(
+      `[ApplySafetyRules] Fabrication guardrail fired: edge clamped from large→${(edgeSize * 100).toFixed(1)}pt because confidence='${confidence}' and reasoning was ${reasoningText.length} chars (need ≥${REASONING_MIN_CHARS}). Reasoning: "${reasoningText.slice(0, 100)}…"`,
+    )
   }
 
   return {
