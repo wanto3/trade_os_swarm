@@ -5,6 +5,7 @@ import {
   getPortfolio,
   cancelPosition,
   setBankroll,
+  resolvePosition,
 } from '@/lib/services/polymarket-portfolio.service'
 
 export const dynamic = 'force-dynamic'
@@ -97,6 +98,61 @@ export async function PATCH(request: NextRequest) {
       success: true,
       data: { portfolio: updated },
       timestamp: Date.now(),
+    })
+  } catch (error) {
+    return NextResponse.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    }, { status: 500 })
+  }
+}
+
+/**
+ * POST /api/polymarket/positions
+ * Body: { id: string, resolution: 'yes' | 'no' | 'invalid' }
+ *
+ * Manually resolve a position to won/lost. Use cases:
+ *   - Imported positions with synthetic marketIds that can't auto-resolve
+ *   - Override an auto-resolution that came through wrong
+ *   - Mark a position resolved before its end date (early settlement)
+ *
+ * Resolution logic mirrors the auto-resolve path:
+ *   - yes/no maps to outcome → won if matches user's bet, lost otherwise
+ *   - invalid refunds the cost (treated as void market)
+ * Updates bankroll + bankrollHistory + dailyPerformance via the same
+ * helpers, so manual + auto-resolutions appear identically in analytics.
+ */
+export async function POST(request: NextRequest) {
+  try {
+    await ensureInitialized()
+    const body = await request.json()
+    const id = String(body.id || '')
+    const resolution = body.resolution as 'yes' | 'no' | 'invalid'
+    if (!id) {
+      return NextResponse.json({
+        success: false,
+        error: 'Missing required field: id',
+      }, { status: 400 })
+    }
+    if (!['yes', 'no', 'invalid'].includes(resolution)) {
+      return NextResponse.json({
+        success: false,
+        error: "resolution must be one of: 'yes', 'no', 'invalid'",
+      }, { status: 400 })
+    }
+    const resolved = resolvePosition(id, resolution)
+    if (!resolved) {
+      return NextResponse.json({
+        success: false,
+        error: 'Position not found or already resolved',
+      }, { status: 400 })
+    }
+    return NextResponse.json({
+      success: true,
+      data: {
+        position: resolved,
+        portfolio: getPortfolio(),
+      },
     })
   } catch (error) {
     return NextResponse.json({

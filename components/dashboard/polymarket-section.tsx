@@ -95,6 +95,7 @@ interface PolymarketPosition {
   marketId: string
   question: string
   outcome: 'Yes' | 'No'
+  outcomeIndex: number  // 0 for Yes-side bet, 1 for No-side bet — needed for manual-resolve UI
   entryPrice: number
   quantity: number
   cost: number
@@ -105,6 +106,7 @@ interface PolymarketPosition {
   marketImpliedProb: number
   expectedValue: number
   category: string
+  source?: 'app' | 'auto' | 'imported'
   placedAt: number
   resolvedAt?: number
   status: 'open' | 'won' | 'lost'
@@ -1744,11 +1746,47 @@ POLYMARKET_CLOB_API_SECRET=...`}
       {/* ── Paper Trades Tab ── */}
       {activeTab === 'paper-trades' && (
         <div>
-          {/* Import button at the top of Paper Trades tab — ALWAYS visible
-              regardless of whether positions exist. The original placement
-              was inside the "has positions" branch, hiding it from new
-              users who don't have any positions yet (catch-22). */}
-          <PortfolioImport onImported={loadPaperData} />
+          {/* Import button + Check Resolutions trigger — both ALWAYS visible
+              at top of Paper Trades tab regardless of position count.
+              "Check Resolutions" calls /api/polymarket/resolve-only on
+              demand instead of waiting for the 2h cron. */}
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+            <PortfolioImport onImported={loadPaperData} />
+            <button
+              onClick={async () => {
+                const ok = window.confirm(
+                  'Check Polymarket for any resolved markets and update matching open positions?\n\nThis polls Polymarket\'s public API (free, no LLM) and resolves any of your positions whose underlying market has closed. Same as the 2h cron — just on demand.'
+                )
+                if (!ok) return
+                try {
+                  const res = await fetch('/api/polymarket/resolve-only', { cache: 'no-store' })
+                  const json = await res.json()
+                  if (json.success) {
+                    loadPaperData()
+                    window.alert(
+                      `Resolution check complete.\n\nResolved: ${json.resolved}\nErrors: ${(json.errors || []).length}\nBankroll now: $${json.portfolio?.bankroll?.toFixed(2) ?? '?'}`
+                    )
+                  } else {
+                    window.alert(`Failed: ${json.error || 'unknown'}`)
+                  }
+                } catch (e) {
+                  window.alert(`Network error: ${e}`)
+                }
+              }}
+              title='Manually trigger resolution check — polls Polymarket for any closed markets and resolves matching open positions. No LLM cost. Same as the 2h cron.'
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: '6px',
+                background: 'rgba(63,185,80,0.10)',
+                border: '1px solid rgba(63,185,80,0.35)',
+                borderRadius: '8px', padding: '0.5rem 0.85rem',
+                fontSize: '0.65rem', fontWeight: 700, color: '#3fb950',
+                cursor: 'pointer',
+                height: 'fit-content',
+              }}
+            >
+              <RefreshCw size={12} /> Check resolutions now
+            </button>
+          </div>
 
           {paperLoading ? (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '120px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '12px', color: '#6e7681' }}>
@@ -1861,6 +1899,37 @@ POLYMARKET_CLOB_API_SECRET=...`}
                           alert(`Network error: ${e}`)
                         }
                       }
+                      const manualResolve = async (resolution: 'yes' | 'no' | 'invalid') => {
+                        // Show context-aware confirmation showing the user
+                        // exactly what won/lost outcome they're locking in.
+                        const wouldWin = (resolution === 'yes' && pos.outcomeIndex === 0) ||
+                                          (resolution === 'no' && pos.outcomeIndex === 1)
+                        const isInvalid = resolution === 'invalid'
+                        const verdict = isInvalid
+                          ? 'VOID (refund stake, no PnL)'
+                          : wouldWin
+                            ? `WIN — bankroll +$${pos.potentialPayout.toFixed(2)} (PnL +$${(pos.potentialPayout - pos.cost).toFixed(2)})`
+                            : `LOSS — bankroll −$${pos.cost.toFixed(2)} (already deducted at placement, so net change $0)`
+                        const ok = window.confirm(
+                          `Manually mark this position resolved?\n\n${pos.question.substring(0, 100)}\nYour bet: ${pos.outcome}\nMarket resolution: ${resolution.toUpperCase()}\n\nResult: ${verdict}\n\nThis updates bankroll, bankrollHistory, and Performance tab analytics. Cannot be undone (cancel is for OPEN positions only).`,
+                        )
+                        if (!ok) return
+                        try {
+                          const res = await fetch('/api/polymarket/positions', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ id: pos.id, resolution }),
+                          })
+                          const json = await res.json()
+                          if (json.success) {
+                            loadPaperData()
+                          } else {
+                            alert(`Failed to resolve: ${json.error}`)
+                          }
+                        } catch (e) {
+                          alert(`Network error: ${e}`)
+                        }
+                      }
                       return (
                         <tr key={pos.id} style={{ borderBottom: '1px solid #21262d' }}>
                           <td style={{ padding: '8px 12px', maxWidth: '200px' }}>
@@ -1894,19 +1963,58 @@ POLYMARKET_CLOB_API_SECRET=...`}
                           <td style={{ padding: '8px 12px', fontSize: '0.65rem', fontWeight: 700, color: pos.safetyScore >= 70 ? '#3fb950' : pos.safetyScore >= 55 ? '#f0883e' : '#8b949e' }}>{pos.safetyScore}</td>
                           <td style={{ padding: '8px 12px', textAlign: 'right' }}>
                             {pos.status === 'open' ? (
-                              <button
-                                onClick={cancelPosition}
-                                title='Refund stake and remove this position. Use for accidental placements.'
-                                style={{
-                                  fontSize: '0.55rem', padding: '0.2rem 0.5rem',
-                                  background: 'transparent', border: '1px solid #f85149aa',
-                                  borderRadius: '4px', color: '#f85149', cursor: 'pointer',
-                                }}
-                              >
-                                ✕ Cancel
-                              </button>
+                              <div style={{ display: 'inline-flex', gap: '4px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                <button
+                                  onClick={() => manualResolve('yes')}
+                                  title='Mark this market as resolved YES. Updates bankroll based on whether your bet matches.'
+                                  style={{
+                                    fontSize: '0.55rem', padding: '0.2rem 0.45rem',
+                                    background: 'rgba(63,185,80,0.08)', border: '1px solid rgba(63,185,80,0.4)',
+                                    borderRadius: '4px', color: '#3fb950', cursor: 'pointer',
+                                    fontWeight: 700,
+                                  }}
+                                >
+                                  ✓ Yes
+                                </button>
+                                <button
+                                  onClick={() => manualResolve('no')}
+                                  title='Mark this market as resolved NO. Updates bankroll based on whether your bet matches.'
+                                  style={{
+                                    fontSize: '0.55rem', padding: '0.2rem 0.45rem',
+                                    background: 'rgba(248,81,73,0.08)', border: '1px solid rgba(248,81,73,0.4)',
+                                    borderRadius: '4px', color: '#f85149', cursor: 'pointer',
+                                    fontWeight: 700,
+                                  }}
+                                >
+                                  ✗ No
+                                </button>
+                                <button
+                                  onClick={() => manualResolve('invalid')}
+                                  title='Mark this market as void/invalid. Refunds the stake, records no PnL.'
+                                  style={{
+                                    fontSize: '0.55rem', padding: '0.2rem 0.45rem',
+                                    background: 'transparent', border: '1px solid #6e7681',
+                                    borderRadius: '4px', color: '#8b949e', cursor: 'pointer',
+                                  }}
+                                >
+                                  Void
+                                </button>
+                                <button
+                                  onClick={cancelPosition}
+                                  title='Refund stake and remove this position entirely. Use for accidental placements.'
+                                  style={{
+                                    fontSize: '0.55rem', padding: '0.2rem 0.45rem',
+                                    background: 'transparent', border: '1px solid #f85149aa',
+                                    borderRadius: '4px', color: '#f85149', cursor: 'pointer',
+                                  }}
+                                >
+                                  ✕ Cancel
+                                </button>
+                              </div>
                             ) : (
-                              <span style={{ fontSize: '0.55rem', color: '#484f58' }}>resolved</span>
+                              <span style={{ fontSize: '0.55rem', color: '#484f58' }}>
+                                resolved ({pos.resolution || '?'})
+                              </span>
                             )}
                           </td>
                         </tr>
