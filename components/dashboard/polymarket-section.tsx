@@ -1813,6 +1813,8 @@ POLYMARKET_CLOB_API_SECRET=...`}
                     return (
                       <div
                         key={`watch-${rec.market.id}`}
+                        onClick={() => window.open(rec.market.url, '_blank', 'noopener,noreferrer')}
+                        title='Click anywhere to open this market on Polymarket'
                         style={{
                           backgroundColor: '#0d1117',
                           border: '1px dashed #30363d',
@@ -1821,6 +1823,16 @@ POLYMARKET_CLOB_API_SECRET=...`}
                           color: '#8b949e',
                           display: 'flex', flexDirection: 'column', gap: '0.35rem',
                           fontSize: '0.65rem',
+                          cursor: 'pointer',
+                          transition: 'border-color 120ms ease, background-color 120ms ease',
+                        }}
+                        onMouseEnter={e => {
+                          e.currentTarget.style.borderColor = '#58a6ff'
+                          e.currentTarget.style.backgroundColor = '#0f1623'
+                        }}
+                        onMouseLeave={e => {
+                          e.currentTarget.style.borderColor = '#30363d'
+                          e.currentTarget.style.backgroundColor = '#0d1117'
                         }}
                       >
                         <div style={{
@@ -1880,6 +1892,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
                           href={rec.market.url}
                           target='_blank'
                           rel='noopener noreferrer'
+                          onClick={e => e.stopPropagation()}
                           style={{
                             color: '#c9d1d9', fontSize: '0.75rem', lineHeight: 1.3,
                             textDecoration: 'none',
@@ -1921,6 +1934,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
                             href={rec.market.url}
                             target='_blank'
                             rel='noopener noreferrer'
+                            onClick={e => e.stopPropagation()}
                             style={{
                               flex: 1, textAlign: 'center',
                               fontSize: '0.55rem', padding: '4px 8px',
@@ -1932,7 +1946,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
                             View on Polymarket ↗
                           </a>
                           <button
-                            onClick={placeAnyway}
+                            onClick={e => { e.stopPropagation(); placeAnyway() }}
                             title='Place a paper bet on this pick despite Opus skipping. Use when you have personal conviction (esports, niche knowledge, etc.).'
                             style={{
                               flex: 1, fontSize: '0.55rem', padding: '4px 8px',
