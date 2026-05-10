@@ -1872,9 +1872,26 @@ POLYMARKET_CLOB_API_SECRET=...`}
                             {liveDaysToClose <= 1 ? `${Math.max(1, Math.round(liveDaysToClose * 24))}h` : `${liveDaysToClose.toFixed(1)}d`}
                           </span>
                         </div>
-                        <div style={{ color: '#c9d1d9', fontSize: '0.75rem', lineHeight: 1.3 }}>
-                          {rec.market.question}
-                        </div>
+                        {/* Title is now a clickable link to Polymarket — was
+                            previously plain text. Most natural place to click
+                            for "open market on Polymarket". External link icon
+                            on hover signals the affordance. */}
+                        <a
+                          href={rec.market.url}
+                          target='_blank'
+                          rel='noopener noreferrer'
+                          style={{
+                            color: '#c9d1d9', fontSize: '0.75rem', lineHeight: 1.3,
+                            textDecoration: 'none',
+                            display: 'inline-block',
+                            cursor: 'pointer',
+                          }}
+                          onMouseEnter={e => { e.currentTarget.style.color = '#58a6ff'; e.currentTarget.style.textDecoration = 'underline' }}
+                          onMouseLeave={e => { e.currentTarget.style.color = '#c9d1d9'; e.currentTarget.style.textDecoration = 'none' }}
+                          title='Open this market on Polymarket'
+                        >
+                          {rec.market.question} <span style={{ fontSize: '0.6rem', color: '#6e7681' }}>↗</span>
+                        </a>
                         <div style={{
                           display: 'flex', justifyContent: 'space-between',
                           fontSize: '0.55rem', color: '#6e7681',
