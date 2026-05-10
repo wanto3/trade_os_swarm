@@ -583,13 +583,170 @@ function saveDiskCache(data: unknown): void {
 // Hydrate from disk at module load (once per Node process)
 loadDiskCache()
 
+// ─── Live Price Refresh ──────────────────────────────────────────────────────
+// The full Opus pipeline takes 60-120s and we cache its output for 1h fresh,
+// 8h stale. But for sub-72h markets (esp. ≤24h closing-today picks) prices
+// can swing 50%+ in an hour as new info arrives. Showing 1-8h-stale prices
+// produces wrong edges (the original "Mortal Kombat 40-45m" bug: Opus saw
+// the bucket at 87%, said "no edge", then the market dropped to 19% but the
+// dashboard still showed 87%).
+//
+// Solution: on every GET, fetch live prices from Gamma for sub-3-day markets
+// and patch them in. If the price has moved >5pt since Opus analyzed, Opus's
+// estimatedProbability is no longer valid for the new price — drop that rec
+// from displayed lists rather than show a fake edge. The next pipeline run
+// will re-analyze with fresh prices.
+//
+// Cost: 1 Gamma batched call (~300-800ms) per dashboard request.
+// Free, no LLM tokens.
+const STALE_DELTA_THRESHOLD = 0.05  // 5pp YES-price move ⇒ Opus analysis stale
+
+async function fetchFreshYesPrices(marketIds: string[]): Promise<Map<string, number>> {
+  const result = new Map<string, number>()
+  if (marketIds.length === 0) return result
+
+  // Gamma accepts repeated `?id=` params; batch in groups of 80 to stay under
+  // typical URL length limits.
+  const BATCH = 80
+  const chunks: string[][] = []
+  for (let i = 0; i < marketIds.length; i += BATCH) {
+    chunks.push(marketIds.slice(i, i + BATCH))
+  }
+
+  await Promise.all(chunks.map(async (chunk) => {
+    const params = chunk.map(id => `id=${encodeURIComponent(id)}`).join('&')
+    const url = `https://gamma-api.polymarket.com/markets?${params}&limit=${chunk.length}`
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(6000) })
+      if (!res.ok) return
+      const arr = (await res.json()) as Array<{ id: string; outcomePrices?: string }>
+      for (const m of arr || []) {
+        try {
+          const prices = JSON.parse(m.outcomePrices || '[]')
+          if (Array.isArray(prices) && prices.length >= 2) {
+            const yes = Number(prices[0])
+            if (isFinite(yes) && yes >= 0 && yes <= 1) {
+              result.set(String(m.id), yes)
+            }
+          }
+        } catch { /* malformed — skip */ }
+      }
+    } catch (e) {
+      console.warn('[PriceRefresh] chunk failed:', e instanceof Error ? e.message : e)
+    }
+  }))
+
+  return result
+}
+
+function applyFreshPrices(data: any, priceMap: Map<string, number>): any {
+  if (priceMap.size === 0) return data
+
+  const buckets: string[] = [
+    'opportunities', 'hotNowOpportunities', 'todayOpportunities',
+    'nearCertainOpportunities', 'closingSoonOpportunities',
+    'closingTodayAnalyzed', 'longTailOpportunities',
+  ]
+
+  let updated = 0
+  let dropped = 0
+  const result: any = { ...data }
+
+  for (const b of buckets) {
+    const arr = (data as any)[b]
+    if (!Array.isArray(arr)) continue
+    const next: any[] = []
+    for (const rec of arr) {
+      const id = rec?.market?.id
+      const fresh = id != null ? priceMap.get(String(id)) : undefined
+      if (typeof fresh !== 'number') {
+        next.push(rec)
+        continue
+      }
+
+      // OLD yes price was at outcomePrices[0] (set by the screening pipeline).
+      // Fall back to deriving from rec.odds + outcome label if missing.
+      const oldYes = Array.isArray(rec.market?.outcomePrices) && rec.market.outcomePrices.length >= 1
+        ? Number(rec.market.outcomePrices[0])
+        : (rec.outcome === 'No' ? 1 - Number(rec.odds || 0) : Number(rec.odds || 0))
+      const delta = isFinite(oldYes) ? Math.abs(fresh - oldYes) : 0
+
+      if (delta >= STALE_DELTA_THRESHOLD) {
+        // Price moved enough that Opus's estimatedProbability no longer maps
+        // to a meaningful edge — Opus reasoned about the OLD price. Drop
+        // rather than show a misleading edge that will appear/disappear with
+        // each pipeline run.
+        dropped++
+        continue
+      }
+
+      const wasYesRec = rec.outcome === 'Yes' || rec.outcome == null
+      const newOdds = wasYesRec ? fresh : 1 - fresh
+      const newRec = {
+        ...rec,
+        market: {
+          ...rec.market,
+          outcomePrices: [fresh, 1 - fresh],
+        },
+        odds: newOdds,
+        marketImpliedProb: newOdds,
+        // Recompute EV with refreshed market price; estimatedProbability
+        // remains Opus's verdict (valid because we filtered |Δ|<5pt above).
+        expectedValue: typeof rec.estimatedProbability === 'number'
+          ? (rec.estimatedProbability - newOdds) / Math.max(0.01, 1 - newOdds)
+          : rec.expectedValue,
+        priceRefreshedAt: Date.now(),
+      }
+      next.push(newRec)
+      updated++
+    }
+    result[b] = next
+  }
+
+  result.priceRefreshedAt = Date.now()
+  result.priceRefreshStats = { updated, droppedStale: dropped }
+  if (updated + dropped > 0) {
+    console.log(`[PriceRefresh] updated=${updated} droppedStale=${dropped} (>${(STALE_DELTA_THRESHOLD * 100).toFixed(0)}pt move)`)
+  }
+  return result
+}
+
+async function refreshLivePrices(data: any): Promise<any> {
+  // Only refresh sub-3-day markets — beyond that horizon, prices are stable
+  // enough on the hour timescale that the cached snapshot is fine.
+  const buckets = [
+    'opportunities', 'hotNowOpportunities', 'todayOpportunities',
+    'nearCertainOpportunities', 'closingSoonOpportunities',
+    'closingTodayAnalyzed', 'longTailOpportunities',
+  ]
+  const targetIds = new Set<string>()
+  for (const b of buckets) {
+    const arr = (data as any)[b]
+    if (!Array.isArray(arr)) continue
+    for (const rec of arr) {
+      const days = rec?.timeAnalysis?.daysToClose ?? rec?.daysToClose ?? 999
+      const id = rec?.market?.id
+      if (days <= 3 && id) targetIds.add(String(id))
+    }
+  }
+  if (targetIds.size === 0) return data
+  try {
+    const priceMap = await fetchFreshYesPrices(Array.from(targetIds))
+    return applyFreshPrices(data, priceMap)
+  } catch (e) {
+    console.warn('[PriceRefresh] fatal — serving stale prices:', e instanceof Error ? e.message : e)
+    return data
+  }
+}
+
 export async function GET() {
   const now = Date.now()
 
-  // FRESH: return immediately, no work
+  // FRESH: return immediately (with live-price refresh patched on top)
   if (cachedResponse && now < cachedResponse.freshExpiry) {
+    const refreshed = await refreshLivePrices(cachedResponse.data)
     return Response.json({
-      ...cachedResponse.data,
+      ...refreshed,
       cacheStatus: 'fresh',
       analysisInProgress: false,
     })
@@ -616,8 +773,9 @@ export async function GET() {
         })
       inflightPipeline = Promise.resolve()
     }
+    const refreshed = await refreshLivePrices(cachedResponse.data)
     return Response.json({
-      ...cachedResponse.data,
+      ...refreshed,
       cacheStatus: 'stale-revalidating',
       analysisInProgress: true,  // background refresh running
     })
@@ -628,7 +786,8 @@ export async function GET() {
   if (inflightPipeline) {
     try {
       const data = await inflightPipeline
-      return Response.json(data)
+      const refreshed = await refreshLivePrices(data)
+      return Response.json(refreshed)
     } catch {
       // fall through
     }
@@ -651,7 +810,8 @@ export async function GET() {
 
   try {
     const data = await inflightPipeline
-    return Response.json(data)
+    const refreshed = await refreshLivePrices(data)
+    return Response.json(refreshed)
   } catch (error) {
     console.error('Polymarket API error:', error)
     return NextResponse.json(
