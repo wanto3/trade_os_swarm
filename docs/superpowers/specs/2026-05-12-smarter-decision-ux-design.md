@@ -90,10 +90,11 @@ Replaces the current pick card layout on:
 **Shape:**
 
 ```
-✅ BUY YES on "<question>"
+✅ BUY YES on "Will BTC close above $80k May 11?"
+   ↳ BTC is already at $82k with 8h left — market hasn't priced in the move
 
-Why:        <1-2 sentence bull case — actual reasoning, not generic>
-Why not:    <1-2 sentence bear case — forced from the model>
+Why not:    If the model is wrong about settlement timing, a flash dip
+            below $80k at the wire still pays NO.
 How much:   $0.40 (10% of bankroll — Kelly says safe here)
 Window:     Closes in 8h ⏰ — price refreshes every visit
 Track:      3W/1L on crypto-threshold picks (75% over last 4)
@@ -101,15 +102,33 @@ Track:      3W/1L on crypto-threshold picks (75% over last 4)
 [Place $0.40]  [Skip]  [View on Polymarket]
 ```
 
-Each line shows the data PLUS the technical breakdown beneath/on hover
-(per the B choice for indicators).
+**The italic subtitle directly under the question is the primary "why
+recommended" explanation.** Written in plain English, one sentence,
+no jargon — it's what the user reads to decide whether to look closer.
+This is a new requirement: a short plain-English summary distinct from
+the existing technical `reasoning` field, which often contains
+Opus-internal shorthand ("DPS aligns", "structural setup confirmed",
+etc.) that doesn't help a lay reader.
+
+Each line below shows the data PLUS the technical breakdown beneath/on
+hover (per the B choice for indicators).
 
 **Data additions:**
 
+- **Plain-English summary on every screening result.** Prompt extension
+  adds `"plainSummary": "one-sentence plain-English explanation of why
+  this is recommended, written like you're explaining it to a friend.
+  No trading jargon (no DPS, EV%, edge pp, conviction, Kelly). Lead with
+  the concrete fact that creates the edge."` Distinct from the existing
+  `reasoning` field, which often contains Opus shorthand and longer
+  context. The plain summary renders as the italic subtitle directly
+  under the question on every Decision Card.
 - **Bear case field on every screening result.** Prompt extension in
   `polymarket-screening.service.ts` — adds `"reasoningAgainst": "1-2
   sentence bear case"` to the JSON contract. The screening output already
-  carries `reasoning` (bull); we mirror it with `reasoningAgainst`.
+  carries `reasoning` (bull, technical); we mirror it with
+  `reasoningAgainst` (bear, also can be technical — the audience here
+  is the user thinking carefully, not a glance read).
 - **Category track record aggregation.** New service:
   `lib/services/category-stats.service.ts`. Reads resolved positions from
   `data/polymarket-portfolio.json`, groups by category (derived from
@@ -233,11 +252,17 @@ Implementation order optimizes for "ship value early, no big-bang":
   bankroll/portfolio header
 - Ship + verify
 
-**Phase 2 — Bear case prompt**
-- Extend `polymarket-screening.service.ts` JSON contract
-- Update batched-screening prompt to require `reasoningAgainst`
-- Wire `reasoningAgainst` through `LLMMarketAnalysis` → `TradeRecommendation`
-- Display alongside existing reasoning on cards (still old layout)
+**Phase 2 — Bear case + plain-English summary prompt**
+- Extend `polymarket-screening.service.ts` JSON contract with two new
+  fields: `plainSummary` (one-sentence lay-friendly recommendation
+  explanation) and `reasoningAgainst` (bear case)
+- Update batched-screening prompt with explicit rules for each field
+  (lead with the concrete edge-creating fact, no trading jargon for
+  `plainSummary`; 1-2 sentence bear case for `reasoningAgainst`)
+- Wire both through `LLMMarketAnalysis` → `TradeRecommendation`
+- Display `plainSummary` as italic subtitle under the question, and
+  `reasoningAgainst` alongside existing reasoning on cards (old layout
+  still — Decision Card swap happens in Phase 3)
 
 **Phase 3 — Decision Card component**
 - Build `decision-card.tsx` consuming `{rec, categoryStats, bankroll}`
