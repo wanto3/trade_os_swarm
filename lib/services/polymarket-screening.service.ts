@@ -243,6 +243,71 @@ async function callGroqBatch(prompt: string, retries = 3): Promise<string> {
   throw new Error(`Screening: max retries exceeded — last error: ${lastError}`)
 }
 
+// ─── Contradiction Detection ─────────────────────────────────────────────────
+// Catches the LLM pattern of writing prose like "market priced fairly" or
+// "no strong prior" while simultaneously emitting a numeric estimate that
+// disagrees with the market by a meaningful amount. The numeric estimate
+// in that case is hallucinated — Opus is contradicting itself. Used by
+// the safety-rules clamp to reset such estimates to the market price.
+
+const NO_EDGE_PHRASES: string[] = [
+  // "no signal here" variants
+  'no strong prior',
+  'no strong directional signal',
+  'no clear directional signal',
+  'no decisive edge',
+  'no strong edge',
+  'no clear edge',
+  'no obvious edge',
+  'no specific tracking',
+  'no strong read',
+  'no strong form',
+  'no prior',
+  'no information',
+  'no clear signal',
+  'no edge',
+  'limited context',
+  'limited info',
+  // "fair / accurate market" variants
+  'priced fairly',
+  'priced fair',
+  'price is fair',
+  'market priced fair',
+  'market is fair',
+  'fair price',
+  'fairly priced',
+  'reasonable price',
+  'price reasonable',
+  // "coin flip / balanced" variants
+  'coin flip',
+  'coinflip',
+  'evenly matched',
+  'evenly balanced',
+  'balanced matchup',
+  'balanced teams',
+  'roughly even',
+  'genuine toss',
+]
+
+/**
+ * Returns true if the reasoning text contains a "no edge / fair price /
+ * coin flip" phrase AND the numeric estimate disagrees with the market
+ * by at least `minEdge` (default 5pp). Exported for unit testing.
+ */
+export function reasoningContradictsEstimate(
+  reasoning: string,
+  est: number,
+  marketYesPrice: number,
+  minEdge = 0.05,
+): boolean {
+  if (typeof est !== 'number' || typeof marketYesPrice !== 'number') return false
+  const r = (reasoning || '').toLowerCase()
+  if (!r) return false
+  const hasNoEdgePhrase = NO_EDGE_PHRASES.some(p => r.includes(p))
+  if (!hasNoEdgePhrase) return false
+  return Math.abs(est - marketYesPrice) >= minEdge
+}
+
 // ─── Response Parsing ────────────────────────────────────────────────────────
 
 function stripFencesAndParse(raw: string): BatchAssessment[] {
@@ -373,6 +438,29 @@ function applySafetyRules(
     console.warn(
       `[ApplySafetyRules] Fabrication guardrail fired: edge clamped from large→${(edgeSize * 100).toFixed(1)}pt because confidence='${confidence}' and reasoning was ${reasoningText.length} chars (need ≥${REASONING_MIN_CHARS}). Reasoning: "${reasoningText.slice(0, 100)}…"`,
     )
+  }
+
+  // CONTRADICTION GUARDRAIL — the fabrication clamp above only fires when
+  // reasoning is short. But Opus also fabricates with LONG reasoning that
+  // contradicts its own numeric estimate. Live examples from production:
+  //   - "NAVI top-tier CS team; GamerLegion is solid but a clear underdog.
+  //      Market priced fairly." → est=0.76 vs market=0.245 (+51.5pt edge)
+  //   - "Lower-tier SA teams I have no strong prior on." → est=0.725 vs
+  //      market=0.275 (+45pt edge — claiming edge on teams Opus admits
+  //      no prior on)
+  //   - "NA derby, balanced. Coin flip with no strong directional signal."
+  //      → est=0.55 vs market=0.42 (+13pt edge from a literal coin flip)
+  // When the prose says "no edge / fair / coin flip / no prior" AND the
+  // numeric estimate disagrees with market by ≥5pt, the numeric estimate
+  // is hallucinated. Reset to market price + force skip.
+  if (reasoningContradictsEstimate(reasoningText, est, marketYesPrice)) {
+    console.warn(
+      `[ApplySafetyRules] Contradiction clamp fired: reasoning says "no edge / fair / coin flip" but numeric estimate disagrees with market by ${(edgeSize * 100).toFixed(1)}pt. Resetting est=${est.toFixed(3)} to market=${marketYesPrice.toFixed(3)} and forcing skip. Reasoning: "${reasoningText.slice(0, 120)}…"`,
+    )
+    est = marketYesPrice
+    edgeSize = 0
+    direction = 'skip'
+    shouldBet = false
   }
 
   return {

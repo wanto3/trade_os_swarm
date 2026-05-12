@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { isTopTierEsports } from '@/lib/services/esports-classifier'
 
 // Force dynamic rendering — never cache Polymarket data
 export const dynamic = 'force-dynamic'
@@ -1277,8 +1278,21 @@ async function runFullPipeline(): Promise<any> {
         'weather', 'celebrity', 'short-window',
       ])
       if (cat === 'esports') {
-        rec.aiEdge = 'user'
-        rec.aiEdgeReason = 'Esports — you have documented edge from following the scene; Opus lacks recent form data'
+        // Tier-gating: every esports market used to inherit "user-edge"
+        // regardless of tournament/team tier. That pushed the user toward
+        // "place anyway" on lower-tier matchups (BESTIA Academy vs
+        // HereWeGoAgain at CCT, Passion UA vs Sinners, etc.) where their
+        // scene knowledge doesn't actually apply → systematic losses.
+        // Now: only tier-1 tournaments + tier-1 team names get user-edge.
+        // Everything else in esports defaults to aiEdge='weak' (skip
+        // unless the user has explicit personal conviction).
+        if (isTopTierEsports(rec.market.question)) {
+          rec.aiEdge = 'user'
+          rec.aiEdgeReason = 'Top-tier esports (recognized tournament + team) — your scene knowledge applies'
+        } else {
+          rec.aiEdge = 'weak'
+          rec.aiEdgeReason = 'Lower-tier esports matchup (qualifier / academy / regional cup or unfamiliar roster). Neither Opus nor your scene knowledge likely has reliable signal — skip unless you specifically follow these teams.'
+        }
       } else if (cat && AI_STRONG_CATS.has(cat)) {
         rec.aiEdge = 'strong'
         rec.aiEdgeReason = `Opus 4.7 has strong training-data edge in ${cat} (base-rate reasoning, historical patterns)`
