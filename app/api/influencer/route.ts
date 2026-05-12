@@ -292,6 +292,8 @@ QUALITY RULES
 ═══════════════════════════════════════════════════════════════════
 
 - GROUND EVERY CLAIM in the transcript (or chapters/description if no transcript). Do NOT invent prices, dates, or quotes. The "quote" field MUST appear verbatim in the source.
+- NEVER emit placeholder strings like "n/a", "N/A", "unknown", "tbd", "?", "-", or "unspecified" for any field. If you don't have a real value, OMIT the field entirely (for optional fields like date/quote/timestamp) or OMIT THE WHOLE ENTRY from the array (for required-date entries in keyDates). An empty keyDates array is BETTER than one with "n/a" entries — the user reads "n/a" as a failure of the system, not as honesty about missing data.
+- If the transcript or description genuinely contains NO specific dates and NO specific prices, return empty arrays for keyDates and priceTargets. That's the honest signal.
 - signal: BUY if directional bullish thesis with entry levels explicitly mentioned, SHORT if directional bearish with exit/short levels, HOLD if mixed/unclear, NEUTRAL if no trading content (educational, off-topic, weather, etc.)
 - confidence: "high" ONLY if multiple specific prices AND dates appear in the TRANSCRIPT and the directional call is unambiguous. "medium" if the directional thesis is clear but timeframes are vague. "low" if the analysis came from title/description only (no transcript available) or specifics are missing.
 - transcriptUsed: true if a transcript was provided in the VIDEO block above, false otherwise. This is a self-reporting flag — set it honestly.
@@ -431,12 +433,38 @@ function normalizeArray(parsed: unknown): any[] {
  *  code can rely on shape. Missing fields get safe defaults. Preserves
  *  the optional `quote`/`timestamp` evidence fields so the UI can show
  *  the verbatim phrase the LLM extracted each target/date from. */
+/** Models love to satisfy a required field with placeholders like "n/a",
+ *  "unknown", "tbd" rather than omit the entry. Treat those as no-date
+ *  and let downstream code render appropriately. Anything genuinely
+ *  non-numeric/non-date that looks like a placeholder also gets stripped. */
+function looksLikePlaceholder(s: string): boolean {
+  const t = s.trim().toLowerCase()
+  return (
+    t === '' ||
+    t === 'n/a' || t === 'na' || t === 'n.a.' ||
+    t === 'unknown' || t === 'unspecified' ||
+    t === 'tbd' || t === 'tba' ||
+    t === 'none' || t === 'null' || t === 'undefined' ||
+    t === '?' || t === '??' || t === '???' ||
+    /^-+$/.test(t)
+  )
+}
+
 function sanitize(raw: any): TradingAnalysis {
   const validSignals = ['BUY', 'HOLD', 'SHORT', 'NEUTRAL']
   const validConf = ['high', 'medium', 'low']
   const validSent = ['bullish', 'bearish', 'neutral']
   const validRisk = ['low', 'medium', 'high']
   const validTargetType = ['entry', 'target', 'stop', 'support', 'resistance']
+
+  /** Normalize a date-ish field — return undefined for placeholders so
+   *  downstream code doesn't render "n/a" chips. */
+  const cleanDate = (v: any): string | undefined => {
+    if (typeof v !== 'string') return undefined
+    if (looksLikePlaceholder(v)) return undefined
+    return v.slice(0, 50)
+  }
+
   return {
     signal: validSignals.includes(raw.signal) ? raw.signal : 'NEUTRAL',
     confidence: validConf.includes(raw.confidence) ? raw.confidence : 'low',
@@ -445,24 +473,30 @@ function sanitize(raw: any): TradingAnalysis {
     priceTargets: Array.isArray(raw.priceTargets)
       ? raw.priceTargets
           .slice(0, 12)
-          .filter((p: any) => p && typeof p === 'object' && typeof p.price === 'string')
+          .filter((p: any) => p && typeof p === 'object' && typeof p.price === 'string' && !looksLikePlaceholder(p.price))
           .map((p: any) => ({
             price: String(p.price).slice(0, 30),
-            date: p.date ? String(p.date).slice(0, 40) : undefined,
+            date: cleanDate(p.date),
             type: validTargetType.includes(p.type) ? p.type : 'target',
             confidence: p.confidence === 'high' ? 'high' : 'low',
-            quote: p.quote ? String(p.quote).slice(0, 240) : undefined,
+            quote: p.quote && !looksLikePlaceholder(String(p.quote)) ? String(p.quote).slice(0, 240) : undefined,
             timestamp: p.timestamp ? String(p.timestamp).slice(0, 12) : undefined,
           }))
       : [],
+    // keyDates with placeholder dates are dropped entirely — a "key date"
+    // with no date isn't useful for anything. Same for placeholder events.
     keyDates: Array.isArray(raw.keyDates)
       ? raw.keyDates
           .slice(0, 10)
-          .filter((d: any) => d && typeof d === 'object' && typeof d.date === 'string')
+          .filter((d: any) =>
+            d && typeof d === 'object' &&
+            typeof d.date === 'string' &&
+            !looksLikePlaceholder(d.date)
+          )
           .map((d: any) => ({
             date: String(d.date).slice(0, 50),
-            event: typeof d.event === 'string' ? d.event.slice(0, 120) : '',
-            quote: d.quote ? String(d.quote).slice(0, 240) : undefined,
+            event: typeof d.event === 'string' && !looksLikePlaceholder(d.event) ? d.event.slice(0, 120) : '',
+            quote: d.quote && !looksLikePlaceholder(String(d.quote)) ? String(d.quote).slice(0, 240) : undefined,
             timestamp: d.timestamp ? String(d.timestamp).slice(0, 12) : undefined,
           }))
       : [],
