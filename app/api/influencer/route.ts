@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
+import * as fs from 'fs'
+import * as path from 'path'
 import { callClaudeCode, ClaudeCodeRateLimitError } from '@/lib/services/claude-code-llm.service'
 
 // Channel is configurable via env vars so you can swap influencers without
@@ -8,6 +10,160 @@ const CHANNEL_ID = process.env.YOUTUBE_CHANNEL_ID || 'UCsT-PrX_ZgxXngz7kZsKJTw'
 const CHANNEL_HANDLE = process.env.YOUTUBE_CHANNEL_HANDLE || 'ElcaroTrade'
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || ''
 const GROQ_API_KEY = process.env.GROQ_API_KEY || ''
+
+// ─── Transcript fetching (no auth, no third-party deps) ───────────────────
+// The original prompt only gave the LLM the video TITLE + chapter list +
+// first 2500 chars of description. Influencer videos describe trading ideas
+// in the SPOKEN content — exact prices, exact dates, quoted reasoning. None
+// of that reached the model, so summaries were generic and dropped specifics
+// the user heard repeated multiple times on-screen.
+//
+// Fix: scrape the watch page for the captionTracks URL embedded in
+// `ytInitialPlayerResponse`, fetch the JSON3 transcript, concatenate with
+// inline `[m:ss]` markers every 30 seconds for grounding. Transcripts are
+// immutable per videoId so we cache to disk forever (a re-uploaded edit
+// would get a new videoId from YouTube).
+const TRANSCRIPT_CACHE_PATH = path.join(process.cwd(), 'data', 'youtube-transcript-cache.json')
+const TRANSCRIPT_MAX_CHARS = 14000  // ~3500 tokens — covers ~45 min audio
+interface CachedTranscript { text: string; fetchedAt: number; lang: string; truncated?: boolean }
+let transcriptCache: Map<string, CachedTranscript> = new Map()
+
+function loadTranscriptCache(): void {
+  try {
+    if (!fs.existsSync(TRANSCRIPT_CACHE_PATH)) return
+    const raw = fs.readFileSync(TRANSCRIPT_CACHE_PATH, 'utf-8')
+    const obj = JSON.parse(raw) as Record<string, CachedTranscript>
+    transcriptCache = new Map(Object.entries(obj))
+    console.log(`[Transcript] Loaded cache (${transcriptCache.size} videos)`)
+  } catch (e) {
+    console.warn('[Transcript] cache load failed:', e instanceof Error ? e.message : e)
+  }
+}
+
+function saveTranscriptCache(): void {
+  try {
+    const dir = path.dirname(TRANSCRIPT_CACHE_PATH)
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+    const obj = Object.fromEntries(transcriptCache.entries())
+    fs.writeFileSync(TRANSCRIPT_CACHE_PATH, JSON.stringify(obj))
+  } catch (e) {
+    console.warn('[Transcript] cache save failed:', e instanceof Error ? e.message : e)
+  }
+}
+
+loadTranscriptCache()
+
+/**
+ * Fetch a YouTube video's transcript using the unofficial-but-public
+ * timedtext endpoint. Returns empty string on any failure (transcript
+ * unavailable, no captions, network error) so the downstream prompt
+ * gracefully falls back to title+description.
+ *
+ * Cached forever per videoId — transcripts are immutable.
+ */
+async function fetchTranscript(videoId: string): Promise<string> {
+  const cached = transcriptCache.get(videoId)
+  if (cached) return cached.text
+
+  try {
+    // Step 1: fetch the watch page HTML. Server-side fetch from a desktop
+    // UA — YouTube returns the same HTML it serves browsers.
+    const watchUrl = `https://www.youtube.com/watch?v=${videoId}`
+    const res = await fetch(watchUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!res.ok) {
+      console.warn(`[Transcript] watch page ${videoId} returned ${res.status}`)
+      return ''
+    }
+    const html = await res.text()
+
+    // Step 2: pull captionTracks out of the embedded player response. The
+    // shape is `"captionTracks":[{"baseUrl":"...","languageCode":"en",...}]`.
+    const match = html.match(/"captionTracks":(\[.*?\])/)
+    if (!match) {
+      // No captions surfaced — could be a private/age-gated video or one
+      // where the creator disabled captions. Cache the empty string so we
+      // don't retry every dashboard refresh.
+      transcriptCache.set(videoId, { text: '', fetchedAt: Date.now(), lang: 'none' })
+      saveTranscriptCache()
+      return ''
+    }
+
+    let tracks: Array<{ baseUrl: string; languageCode?: string; kind?: string }>
+    try {
+      // YouTube's embedded JSON sometimes contains escape sequences like &
+      const cleaned = match[1].replace(/\\u0026/g, '&')
+      tracks = JSON.parse(cleaned)
+    } catch (e) {
+      console.warn(`[Transcript] captionTracks parse failed for ${videoId}:`, e instanceof Error ? e.message : e)
+      return ''
+    }
+
+    // Prefer manual English captions (kind != 'asr'); fall back to
+    // auto-generated English; final fallback is the first available track
+    // (some channels only have non-English manual captions).
+    const en = tracks.find(t => t.languageCode === 'en' && t.kind !== 'asr')
+      || tracks.find(t => t.languageCode === 'en')
+      || tracks[0]
+    if (!en?.baseUrl) return ''
+
+    // Step 3: fetch json3 transcript (cleaner than xml/srv3 formats)
+    const transcriptUrl = en.baseUrl + (en.baseUrl.includes('fmt=') ? '' : '&fmt=json3')
+    const tres = await fetch(transcriptUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!tres.ok) {
+      console.warn(`[Transcript] json3 ${videoId} returned ${tres.status}`)
+      return ''
+    }
+    const tdata = await tres.json() as {
+      events?: Array<{ segs?: Array<{ utf8?: string }>; tStartMs?: number }>
+    }
+
+    // Step 4: concatenate text segments, inserting `[m:ss]` markers every
+    // ~30 seconds so the LLM can cite timestamps when extracting quotes.
+    const events = tdata.events || []
+    const parts: string[] = []
+    let lastMarker = -30_000
+    for (const ev of events) {
+      const t = ev.tStartMs ?? 0
+      const text = (ev.segs || []).map(s => s.utf8 || '').join('').trim()
+      if (!text) continue
+      if (t - lastMarker >= 30_000) {
+        const min = Math.floor(t / 60_000)
+        const sec = Math.floor((t % 60_000) / 1000).toString().padStart(2, '0')
+        parts.push(`\n[${min}:${sec}] `)
+        lastMarker = t
+      }
+      parts.push(text + ' ')
+    }
+
+    let fullText = parts.join('').replace(/\s+\n/g, '\n').trim()
+    let truncated = false
+    if (fullText.length > TRANSCRIPT_MAX_CHARS) {
+      fullText = fullText.slice(0, TRANSCRIPT_MAX_CHARS) + '\n[...transcript truncated]'
+      truncated = true
+    }
+
+    transcriptCache.set(videoId, {
+      text: fullText,
+      fetchedAt: Date.now(),
+      lang: en.languageCode || 'en',
+      truncated,
+    })
+    saveTranscriptCache()
+    return fullText
+  } catch (e) {
+    console.warn(`[Transcript] ${videoId} failed:`, e instanceof Error ? e.message : e)
+    return ''
+  }
+}
 
 // In-memory cache (per-process). YouTube videos + LLM analysis are expensive
 // (~30-60s per uncached call) and the data doesn't change often — new videos
@@ -22,19 +178,29 @@ interface TradingAnalysis {
   confidence: 'high' | 'medium' | 'low'
   summary: string
   keyInsights: string[]
-  priceTargets: { price: string; date?: string; type: 'entry' | 'target' | 'stop' | 'support' | 'resistance'; confidence: 'high' | 'low' }[]
-  keyDates: { date: string; event: string }[]
+  // `quote` is the verbatim transcript phrase that supports this target —
+  // makes the price/date traceable so the user can verify against the video
+  // instead of trusting the LLM didn't hallucinate.
+  priceTargets: { price: string; date?: string; type: 'entry' | 'target' | 'stop' | 'support' | 'resistance'; confidence: 'high' | 'low'; quote?: string; timestamp?: string }[]
+  keyDates: { date: string; event: string; quote?: string; timestamp?: string }[]
   sentiment: 'bullish' | 'bearish' | 'neutral'
   overallScore: number
   riskLevel: 'low' | 'medium' | 'high'
   mentionedAssets: { name: string; direction: 'bullish' | 'bearish' | 'neutral' }[]
   watchMinutes: { minute: string; topic: string }[]
+  // Indicates whether the analysis was grounded in the actual video transcript
+  // (true) or just title/description (false). UI surfaces this so the user
+  // knows whether to trust the specifics.
+  transcriptUsed?: boolean
 }
 
 interface VideoForAnalysis {
   videoId: string
   title: string
   description: string
+  // Verbatim spoken content with [m:ss] timestamp markers every ~30s.
+  // Empty string if captions unavailable (rare; most videos have auto-gen).
+  transcript: string
   timestamps: { time: string; label: string; seconds: number }[]
   viewCount: number
 }
@@ -48,51 +214,96 @@ interface VideoForAnalysis {
 function buildBatchPrompt(videos: VideoForAnalysis[]): string {
   const videoBlocks = videos.map((v, i) => {
     const chapters = v.timestamps.slice(0, 10).map(t => `  [${t.time}] ${t.label}`).join('\n')
-    const descSnip = v.description.slice(0, 2500)
+    const descSnip = v.description.slice(0, 1500)
     const viewStr = v.viewCount > 0 ? `${(v.viewCount / 1000).toFixed(0)}K views` : ''
+    // Transcript is the PRIMARY source — descriptions are usually generic
+    // affiliate-link blobs. If transcript is missing (rare), we fall back
+    // to chapters + description.
+    const transcriptBlock = v.transcript
+      ? `TRANSCRIPT (verbatim — what the influencer ACTUALLY SAID. Quote from this. Timestamps in [m:ss] format every ~30s):
+${v.transcript}`
+      : 'TRANSCRIPT: (unavailable — analyze title/chapters/description only and mark confidence=low)'
     return `=== VIDEO ${i + 1} (id: ${v.videoId}) ===
 TITLE: ${v.title}
 ${viewStr ? `VIEWS: ${viewStr}\n` : ''}CHAPTERS:
 ${chapters || '  (no chapters)'}
-DESCRIPTION:
-${descSnip}`
+DESCRIPTION (first 1500 chars only — usually generic boilerplate, NOT your primary source):
+${descSnip}
+
+${transcriptBlock}`
   }).join('\n\n')
 
-  return `You are a crypto trading analyst. Analyze each of the following YouTube videos from @ElcaroTrade and extract structured trading insights for EACH ONE.
+  return `You are a crypto trading analyst extracting structured insights from YouTube influencer videos. Your job: capture EVERY specific price target and date the influencer mentions, with verbatim quotes for traceability.
 
-Return ONLY a valid JSON ARRAY (no markdown, no code fences) with EXACTLY ${videos.length} entries — one per video, in the same order. Each entry has the following shape:
+Return ONLY a valid JSON ARRAY (no markdown, no code fences) with EXACTLY ${videos.length} entries — one per video, in the same order. Shape:
 {
-  "videoId": "<id from the VIDEO header>",
+  "videoId": "<id from VIDEO header>",
   "signal": "BUY" | "HOLD" | "SHORT" | "NEUTRAL",
   "confidence": "high" | "medium" | "low",
-  "summary": "2-3 sentence summary of the key trading thesis. Max 250 chars. Be specific about what action to take.",
-  "keyInsights": ["Specific insight 1", "Specific insight 2", ...],
-  "priceTargets": [{"price": "$100K", "date": "Q2 2026", "type": "target", "confidence": "high"}, ...],
-  "keyDates": [{"date": "Q2 2026", "event": "Phase 4 prediction"}],
+  "summary": "2-3 sentence summary of the key trading thesis. Max 250 chars. Quote the influencer where useful. Lead with the most actionable specific (target/date/level), not generic 'bullish on BTC'.",
+  "keyInsights": ["Specific quoted claim 1 with numbers", "Specific quoted claim 2 with numbers", ...],
+  "priceTargets": [
+    {"price": "$130K", "date": "December 2026", "type": "target", "confidence": "high", "quote": "I think we hit one-thirty by end of December", "timestamp": "12:45"},
+    ...
+  ],
+  "keyDates": [
+    {"date": "Q1 2027", "event": "Cycle top", "quote": "the top of this cycle lands in Q1 twenty-twenty-seven", "timestamp": "8:30"},
+    ...
+  ],
   "sentiment": "bullish" | "bearish" | "neutral",
   "overallScore": 50,
   "riskLevel": "low" | "medium" | "high",
   "mentionedAssets": [{"name": "Bitcoin", "direction": "bullish"}, ...],
-  "watchMinutes": [{"minute": "2:36", "topic": "2024 Predictions"}, ...]
+  "watchMinutes": [{"minute": "2:36", "topic": "Bitcoin target discussion"}, ...],
+  "transcriptUsed": true
 }
 
-Rules — GROUND EVERY CLAIM in the actual title/chapters/description text. Do NOT invent prices, dates, or signals that aren't supported by the source. If a field has no signal in the source, return an empty array or "NEUTRAL"/"low" — don't fabricate to fill it out.
+═══════════════════════════════════════════════════════════════════
+PRIMARY DIRECTIVE — EXHAUSTIVE EXTRACTION FROM THE TRANSCRIPT
+═══════════════════════════════════════════════════════════════════
 
-- signal: BUY if bullish with clear entries explicitly mentioned, SHORT if bearish with clear exits explicitly mentioned, HOLD if mixed/unclear, NEUTRAL if no trading content (e.g. educational, news, off-topic)
-- confidence: "high" ONLY if multiple specific price levels AND dates are explicitly mentioned in the source. "medium" if the directional thesis is clear but specifics are vague. "low" if mostly narrative without numbers.
-- summary: Direct about what the influencer ACTUALLY recommends in this video — quote-anchored, not generic. If signal=NEUTRAL, summarize the topic instead.
-- keyInsights: 3-5 most important claims FROM THE TEXT with actual numbers. Skip if the description has no numerical claims.
-- priceTargets: ONLY specific dollar prices that appear in the source ($109K, $126K, $60K, etc.). Type: "target" for upside levels, "support" for downside floors, "resistance" for ceilings, "entry"/"stop" if explicitly named. Empty array if no prices mentioned.
-- keyDates: ONLY dates explicitly mentioned (earnings, halving, policy events, predictions like "Phase 4", "summer 2026"). Empty array if no dates.
-- overallScore: -100 (extremely bearish) to +100 (extremely bullish). Anchor on EXPLICIT directional claims and price-target counts/magnitudes. Default to 0 if no clear signal.
-- riskLevel: "low" if claims are specific and grounded, "medium" if mixed, "high" if vague or no specifics
-- mentionedAssets: ONLY assets actually named (BTC, ETH, gold, oil, S&P, silver). direction from explicit context. Empty array if generic content.
-- watchMinutes: Top 3-5 chapter timestamps from the chapters list — pick the ones most relevant to trading decisions. Skip if no chapters provided.
+The user has watched these videos and confirms the influencer repeats SPECIFIC prices and SPECIFIC dates multiple times. Past summaries dropped those entirely — that's the bug we're fixing.
+
+For each video with a transcript:
+
+1. **priceTargets — capture EVERY dollar amount mentioned**, including:
+   - Specific numbers: "$130k", "126 thousand", "one hundred and fifty", "thirty-cent altcoin"
+   - Ranges: "between $100k and $120k" → emit BOTH endpoints as separate targets
+   - Repeated mentions: if a price comes up 3+ times across the video, that's the influencer's CONVICTION level — mark confidence="high" and include the strongest quote
+   - Quote the EXACT phrase from the transcript (10-30 words) so the user can ctrl-F it in the video
+   - Include the [m:ss] timestamp from the transcript where each price was said (use the marker immediately preceding the quote)
+
+2. **keyDates — capture EVERY date or timeframe mentioned**, including:
+   - Calendar: "December 2026", "end of Q1", "by Christmas", "September 8th"
+   - Relative: "in two weeks", "before halving", "after the next FOMC"
+   - Phase/cycle: "Phase 4 of the cycle", "this bull cycle top", "next leg up"
+   - For each, capture WHAT EVENT the date is tied to (target hit, support break, cycle top, etc.)
+   - Quote the verbatim phrase. Include the [m:ss] timestamp.
+
+3. **summary — must lead with the most specific actionable thesis.**
+   GOOD: "BTC to $130K by Dec '26, sees $108K support — accumulate dips."
+   BAD: "Bitcoin analysis, bullish thesis discussed."
+
+4. **keyInsights — 3-5 most important claims with QUOTED NUMBERS.**
+   Each insight should be specific enough that a reader who didn't watch the video knows exactly what was said. Prefer "Sees BTC tagging $109K then pulling back to $95K before next leg" over "discusses BTC price action."
+
+═══════════════════════════════════════════════════════════════════
+QUALITY RULES
+═══════════════════════════════════════════════════════════════════
+
+- GROUND EVERY CLAIM in the transcript (or chapters/description if no transcript). Do NOT invent prices, dates, or quotes. The "quote" field MUST appear verbatim in the source.
+- signal: BUY if directional bullish thesis with entry levels explicitly mentioned, SHORT if directional bearish with exit/short levels, HOLD if mixed/unclear, NEUTRAL if no trading content (educational, off-topic, weather, etc.)
+- confidence: "high" ONLY if multiple specific prices AND dates appear in the TRANSCRIPT and the directional call is unambiguous. "medium" if the directional thesis is clear but timeframes are vague. "low" if the analysis came from title/description only (no transcript available) or specifics are missing.
+- transcriptUsed: true if a transcript was provided in the VIDEO block above, false otherwise. This is a self-reporting flag — set it honestly.
+- overallScore: -100 (extremely bearish) to +100 (extremely bullish). Anchor on the strength of the influencer's directional claims and the count of specific targets supporting that direction. 0 if neutral / NEUTRAL signal.
+- riskLevel: "low" if claims are specific and quoted, "medium" if directionally clear but vague on specifics, "high" if mostly vibes.
+- mentionedAssets: ONLY assets actually named (BTC, ETH, SOL, XRP, gold, oil, S&P, silver). Direction from explicit context in the transcript.
+- watchMinutes: 3-5 key timestamps from the transcript where the most important calls are made — pick ones tied to a priceTarget or keyDate so the user can jump straight to them.
 
 VIDEOS TO ANALYZE:
 ${videoBlocks}
 
-Return the JSON array now (${videos.length} entries, in order):`
+Return the JSON array now (${videos.length} entries, in order, ONE LINE per nested object is fine):`
 }
 
 /**
@@ -217,24 +428,50 @@ function normalizeArray(parsed: unknown): any[] {
 }
 
 /** Validate + clean up an LLM-returned analysis object so downstream
- *  code can rely on shape. Missing fields get safe defaults. */
+ *  code can rely on shape. Missing fields get safe defaults. Preserves
+ *  the optional `quote`/`timestamp` evidence fields so the UI can show
+ *  the verbatim phrase the LLM extracted each target/date from. */
 function sanitize(raw: any): TradingAnalysis {
   const validSignals = ['BUY', 'HOLD', 'SHORT', 'NEUTRAL']
   const validConf = ['high', 'medium', 'low']
   const validSent = ['bullish', 'bearish', 'neutral']
   const validRisk = ['low', 'medium', 'high']
+  const validTargetType = ['entry', 'target', 'stop', 'support', 'resistance']
   return {
     signal: validSignals.includes(raw.signal) ? raw.signal : 'NEUTRAL',
     confidence: validConf.includes(raw.confidence) ? raw.confidence : 'low',
     summary: typeof raw.summary === 'string' ? raw.summary.slice(0, 300) : '',
     keyInsights: Array.isArray(raw.keyInsights) ? raw.keyInsights.slice(0, 5).map((s: any) => String(s).slice(0, 250)) : [],
-    priceTargets: Array.isArray(raw.priceTargets) ? raw.priceTargets.slice(0, 8).filter((p: any) => p && typeof p === 'object') : [],
-    keyDates: Array.isArray(raw.keyDates) ? raw.keyDates.slice(0, 6).filter((d: any) => d && typeof d === 'object') : [],
+    priceTargets: Array.isArray(raw.priceTargets)
+      ? raw.priceTargets
+          .slice(0, 12)
+          .filter((p: any) => p && typeof p === 'object' && typeof p.price === 'string')
+          .map((p: any) => ({
+            price: String(p.price).slice(0, 30),
+            date: p.date ? String(p.date).slice(0, 40) : undefined,
+            type: validTargetType.includes(p.type) ? p.type : 'target',
+            confidence: p.confidence === 'high' ? 'high' : 'low',
+            quote: p.quote ? String(p.quote).slice(0, 240) : undefined,
+            timestamp: p.timestamp ? String(p.timestamp).slice(0, 12) : undefined,
+          }))
+      : [],
+    keyDates: Array.isArray(raw.keyDates)
+      ? raw.keyDates
+          .slice(0, 10)
+          .filter((d: any) => d && typeof d === 'object' && typeof d.date === 'string')
+          .map((d: any) => ({
+            date: String(d.date).slice(0, 50),
+            event: typeof d.event === 'string' ? d.event.slice(0, 120) : '',
+            quote: d.quote ? String(d.quote).slice(0, 240) : undefined,
+            timestamp: d.timestamp ? String(d.timestamp).slice(0, 12) : undefined,
+          }))
+      : [],
     sentiment: validSent.includes(raw.sentiment) ? raw.sentiment : 'neutral',
     overallScore: typeof raw.overallScore === 'number' ? Math.max(-100, Math.min(100, raw.overallScore)) : 0,
     riskLevel: validRisk.includes(raw.riskLevel) ? raw.riskLevel : 'medium',
     mentionedAssets: Array.isArray(raw.mentionedAssets) ? raw.mentionedAssets.slice(0, 8).filter((a: any) => a && typeof a === 'object') : [],
     watchMinutes: Array.isArray(raw.watchMinutes) ? raw.watchMinutes.slice(0, 5).filter((w: any) => w && typeof w === 'object') : [],
+    transcriptUsed: raw.transcriptUsed === true,
   }
 }
 
@@ -295,6 +532,7 @@ function buildFallbackAnalysis(title: string, description: string): TradingAnaly
     riskLevel: 'high',
     mentionedAssets: detectAssetsWithDirection(description),
     watchMinutes,
+    transcriptUsed: false,
   }
 }
 
@@ -535,14 +773,23 @@ export async function GET(request: NextRequest) {
     }
     const videos = fetchResult.items
 
-    // Build batch input — extract timestamps + view counts in parallel.
-    const batchInput: VideoForAnalysis[] = videos.map(({ snippet, statistics, videoId }) => ({
+    // Build batch input — extract timestamps + fetch transcripts in parallel.
+    // Transcripts are the PRIMARY source for price/date extraction (description
+    // is usually generic boilerplate). Cached forever per videoId on disk, so
+    // re-fetches on dashboard refresh are free.
+    const transcripts = await Promise.all(
+      videos.map((v: any) => fetchTranscript(v.videoId).catch(() => ''))
+    )
+    const batchInput: VideoForAnalysis[] = videos.map(({ snippet, statistics, videoId }: any, idx: number) => ({
       videoId,
       title: snippet.title,
       description: snippet.description || '',
+      transcript: transcripts[idx] || '',
       timestamps: extractTimestampsFromDescription(snippet.description || ''),
       viewCount: parseInt(statistics.viewCount || '0'),
     }))
+    const withTranscript = batchInput.filter(v => v.transcript.length > 0).length
+    console.log(`[Influencer] Transcripts: ${withTranscript}/${batchInput.length} videos (${Math.round(transcripts.reduce((s, t) => s + (t?.length || 0), 0) / 1000)}KB total)`)
 
     // Single LLM call analyzing all 5 videos at once (was 5 separate calls).
     const analysisMap = await analyzeBatch(batchInput)
@@ -618,5 +865,87 @@ export async function GET(request: NextRequest) {
   } catch (err) {
     console.error('Influencer API error:', err)
     return NextResponse.json({ success: false, error: String(err) }, { status: 500 })
+  }
+}
+
+/**
+ * POST /api/influencer
+ * Body: { videoId: string, transcript: string }
+ *
+ * Manual transcript ingestion — escape hatch for when our scraper can't
+ * fetch a transcript (YouTube has been hardening against unauthenticated
+ * scrapers, so direct timedtext fetches often return empty). The user
+ * opens the video on YouTube, clicks "..." → "Show transcript", copies
+ * the text, and pastes it here. We cache it under the videoId so the
+ * next analysis pass picks it up and uses it as the PRIMARY source for
+ * date/price extraction.
+ *
+ * Pasted transcripts don't need timestamps — just the plain text is fine.
+ * The LLM will extract dates/prices without [m:ss] markers, just without
+ * clickable jump-to-moment links.
+ */
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json()
+    const videoId = String(body.videoId || '').trim()
+    const transcript = String(body.transcript || '').trim()
+    if (!videoId || videoId.length > 20) {
+      return NextResponse.json({ success: false, error: 'Invalid videoId' }, { status: 400 })
+    }
+    if (!transcript || transcript.length < 100) {
+      return NextResponse.json({ success: false, error: 'Transcript must be at least 100 chars' }, { status: 400 })
+    }
+    // Cap at TRANSCRIPT_MAX_CHARS so a long paste doesn't blow up the prompt
+    const capped = transcript.length > TRANSCRIPT_MAX_CHARS
+      ? transcript.slice(0, TRANSCRIPT_MAX_CHARS) + '\n[...transcript truncated]'
+      : transcript
+    transcriptCache.set(videoId, {
+      text: capped,
+      fetchedAt: Date.now(),
+      lang: 'en-manual',
+      truncated: transcript.length > TRANSCRIPT_MAX_CHARS,
+    })
+    saveTranscriptCache()
+    // Invalidate the analysis cache so the next GET re-runs the LLM with the
+    // freshly-pasted transcript. Wasteful (re-screens all 5 videos for one
+    // update) but simple and a transcript paste is a rare action.
+    cachedAnalysis = null
+    console.log(`[Influencer] Manual transcript stored for ${videoId} (${capped.length} chars). Analysis cache cleared.`)
+    return NextResponse.json({
+      success: true,
+      videoId,
+      chars: capped.length,
+      truncated: transcript.length > TRANSCRIPT_MAX_CHARS,
+    })
+  } catch (e) {
+    return NextResponse.json({
+      success: false,
+      error: e instanceof Error ? e.message : String(e),
+    }, { status: 500 })
+  }
+}
+
+/**
+ * DELETE /api/influencer/transcript?videoId=<id>
+ * Removes a cached transcript so the next GET tries to re-fetch (or, if
+ * the user wants, re-pastes). Used by the UI's "clear pasted transcript"
+ * button. Without it, a bad paste would stick forever.
+ */
+export async function DELETE(request: NextRequest) {
+  try {
+    const videoId = request.nextUrl.searchParams.get('videoId')
+    if (!videoId) {
+      return NextResponse.json({ success: false, error: 'missing ?videoId' }, { status: 400 })
+    }
+    const had = transcriptCache.has(videoId)
+    transcriptCache.delete(videoId)
+    saveTranscriptCache()
+    cachedAnalysis = null
+    return NextResponse.json({ success: true, removed: had })
+  } catch (e) {
+    return NextResponse.json({
+      success: false,
+      error: e instanceof Error ? e.message : String(e),
+    }, { status: 500 })
   }
 }

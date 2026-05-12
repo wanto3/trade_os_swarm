@@ -8,13 +8,19 @@ interface TradingAnalysis {
   confidence: 'high' | 'medium' | 'low'
   summary: string
   keyInsights: string[]
-  priceTargets: { price: string; date?: string; type: 'entry' | 'target' | 'stop' | 'support' | 'resistance'; confidence: 'high' | 'low' }[]
-  keyDates: { date: string; event: string }[]
+  // `quote` is the verbatim phrase from the transcript that supports this
+  // target, `timestamp` is the [m:ss] position where it was said. Lets the
+  // user verify against the actual video instead of trusting the LLM.
+  priceTargets: { price: string; date?: string; type: 'entry' | 'target' | 'stop' | 'support' | 'resistance'; confidence: 'high' | 'low'; quote?: string; timestamp?: string }[]
+  keyDates: { date: string; event: string; quote?: string; timestamp?: string }[]
   sentiment: 'bullish' | 'bearish' | 'neutral'
   overallScore: number
   riskLevel: 'low' | 'medium' | 'high'
   mentionedAssets: { name: string; direction: 'bullish' | 'bearish' | 'neutral' }[]
   watchMinutes: { minute: string; topic: string }[]
+  // True if the LLM had the actual video transcript (high-fidelity), false
+  // if it only saw title/description (low-fidelity fallback).
+  transcriptUsed?: boolean
 }
 
 interface Video {
@@ -109,6 +115,19 @@ function formatViewCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`
   return n.toString()
+}
+
+/** Convert a "[m:ss]" or "h:mm:ss" timestamp string to total seconds.
+ *  Used to build YouTube deep-links that jump to the exact moment a price
+ *  target / date was spoken. Returns null on unparseable input. */
+function parseTimestampToSec(ts: string): number | null {
+  const m = ts.replace(/[\[\]]/g, '').trim().match(/^(?:(\d{1,2}):)?(\d{1,2}):(\d{2})$/)
+  if (!m) return null
+  const h = m[1] ? parseInt(m[1], 10) : 0
+  const min = parseInt(m[2], 10)
+  const sec = parseInt(m[3], 10)
+  if ([h, min, sec].some(n => isNaN(n))) return null
+  return h * 3600 + min * 60 + sec
 }
 
 function VideoCard({ video, isLatest }: { video: Video; isLatest: boolean }) {
@@ -245,6 +264,28 @@ function VideoCard({ video, isLatest }: { video: Video; isLatest: boolean }) {
               {video.analysis.riskLevel} risk
             </span>
           </div>
+          {/* Transcript-grounded badge — green mic if the LLM had the verbatim
+              spoken content of the video, dim grey if it only had the title +
+              description (analysis confidence is much lower in that case). */}
+          <span
+            title={video.analysis.transcriptUsed
+              ? 'Analysis grounded in the actual video transcript — prices and dates are extracted from what the influencer said on-screen.'
+              : 'No transcript available for this video — analysis is based on title + description only. Treat specifics with caution.'}
+            style={{
+              fontSize: '0.5rem', fontWeight: 600,
+              color: video.analysis.transcriptUsed ? '#3fb950' : '#6e7681',
+              backgroundColor: video.analysis.transcriptUsed
+                ? 'rgba(63,185,80,0.10)'
+                : 'rgba(110,118,129,0.08)',
+              border: `1px solid ${video.analysis.transcriptUsed
+                ? 'rgba(63,185,80,0.3)'
+                : 'rgba(110,118,129,0.25)'}`,
+              padding: '0.05rem 0.3rem', borderRadius: '3px',
+              letterSpacing: '0.02em',
+            }}
+          >
+            {video.analysis.transcriptUsed ? '🎙️ transcript' : '📝 desc only'}
+          </span>
         </div>
 
         {/* Score bar */}
@@ -280,43 +321,148 @@ function VideoCard({ video, isLatest }: { video: Video; isLatest: boolean }) {
           </div>
         )}
 
-        {/* Price targets */}
+        {/* Price targets — now with verbatim quotes + clickable timestamps.
+            Each chip jumps to the moment in the video where it was said. */}
         {video.analysis.priceTargets.length > 0 && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem', marginBottom: '0.4rem' }}>
-            {video.analysis.priceTargets.slice(0, 5).map((pt, i) => (
-              <div key={i} style={{
-                display: 'flex', alignItems: 'center', gap: '2px',
-                background: 'rgba(88,166,255,0.07)',
-                border: '1px solid rgba(88,166,255,0.18)',
-                borderRadius: '4px', padding: '1px 5px',
-              }}>
-                <DollarSign size={7} color={TYPE_COLORS[pt.type] || '#58a6ff'} />
-                <span style={{ fontSize: '0.55rem', fontWeight: 700, color: TYPE_COLORS[pt.type] || '#58a6ff' }}>
-                  {pt.price}
-                </span>
-                <span style={{ fontSize: '0.45rem', color: '#484f58', textTransform: 'capitalize' }}>{pt.type}</span>
-                {pt.date && <span style={{ fontSize: '0.45rem', color: '#6e7681' }}>{pt.date.slice(0, 10)}</span>}
-              </div>
-            ))}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginBottom: '0.4rem' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
+              {video.analysis.priceTargets.slice(0, 8).map((pt, i) => {
+                const tsSec = pt.timestamp ? parseTimestampToSec(pt.timestamp) : null
+                const jumpUrl = tsSec !== null
+                  ? `${video.url}&t=${tsSec}s`
+                  : video.url
+                const wrapStyle: React.CSSProperties = {
+                  display: 'flex', alignItems: 'center', gap: '2px',
+                  background: 'rgba(88,166,255,0.07)',
+                  border: '1px solid rgba(88,166,255,0.18)',
+                  borderRadius: '4px', padding: '1px 5px',
+                  textDecoration: 'none',
+                  cursor: pt.timestamp ? 'pointer' : 'default',
+                }
+                const content = (
+                  <>
+                    <DollarSign size={7} color={TYPE_COLORS[pt.type] || '#58a6ff'} />
+                    <span style={{ fontSize: '0.55rem', fontWeight: 700, color: TYPE_COLORS[pt.type] || '#58a6ff' }}>
+                      {pt.price}
+                    </span>
+                    <span style={{ fontSize: '0.45rem', color: '#484f58', textTransform: 'capitalize' }}>{pt.type}</span>
+                    {pt.date && <span style={{ fontSize: '0.45rem', color: '#6e7681' }}>{pt.date.slice(0, 14)}</span>}
+                    {pt.timestamp && (
+                      <span style={{ fontSize: '0.45rem', color: '#3fb950', fontWeight: 600 }}>
+                        @{pt.timestamp}
+                      </span>
+                    )}
+                  </>
+                )
+                const tooltip = pt.quote
+                  ? `"${pt.quote}"${pt.timestamp ? ` — @${pt.timestamp}` : ''}\nClick to jump to this moment in the video`
+                  : pt.date ? `${pt.price} ${pt.type} (${pt.date})` : `${pt.price} ${pt.type}`
+                return pt.timestamp ? (
+                  <a
+                    key={i}
+                    href={jumpUrl}
+                    target='_blank'
+                    rel='noopener noreferrer'
+                    title={tooltip}
+                    style={wrapStyle}
+                    onClick={e => e.stopPropagation()}
+                  >
+                    {content}
+                  </a>
+                ) : (
+                  <div key={i} title={tooltip} style={wrapStyle}>{content}</div>
+                )
+              })}
+            </div>
+            {/* Show the strongest quote inline so the user sees the influencer's
+                actual words without hovering. Picks the first chip with a
+                quote — usually the high-confidence one. */}
+            {(() => {
+              const withQuote = video.analysis.priceTargets.find(pt => pt.quote)
+              if (!withQuote?.quote) return null
+              return (
+                <div style={{
+                  fontSize: '0.55rem', color: '#8b949e',
+                  fontStyle: 'italic', lineHeight: 1.35,
+                  paddingLeft: '8px', borderLeft: '2px solid rgba(88,166,255,0.3)',
+                  marginTop: '2px',
+                }}>
+                  “{withQuote.quote}”{withQuote.timestamp && (
+                    <span style={{ color: '#3fb950', marginLeft: '4px', fontStyle: 'normal' }}>@{withQuote.timestamp}</span>
+                  )}
+                </div>
+              )
+            })()}
           </div>
         )}
 
-        {/* Key dates */}
+        {/* Key dates — same treatment: quote + timestamp + jump link */}
         {video.analysis.keyDates.length > 0 && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem', marginBottom: '0.4rem' }}>
-            {video.analysis.keyDates.slice(0, 3).map((kd, i) => (
-              <div key={i} style={{
-                display: 'flex', alignItems: 'center', gap: '2px',
-                background: 'rgba(163,113,247,0.07)',
-                border: '1px solid rgba(163,113,247,0.18)',
-                borderRadius: '4px', padding: '1px 5px',
-              }}>
-                <Calendar size={7} color='#a371f7' />
-                <span style={{ fontSize: '0.52rem', color: '#a371f7' }}>
-                  {kd.date.length > 18 ? kd.date.slice(0, 16) + '…' : kd.date}
-                </span>
-              </div>
-            ))}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginBottom: '0.4rem' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
+              {video.analysis.keyDates.slice(0, 6).map((kd, i) => {
+                const tsSec = kd.timestamp ? parseTimestampToSec(kd.timestamp) : null
+                const jumpUrl = tsSec !== null
+                  ? `${video.url}&t=${tsSec}s`
+                  : video.url
+                const wrapStyle: React.CSSProperties = {
+                  display: 'flex', alignItems: 'center', gap: '2px',
+                  background: 'rgba(163,113,247,0.07)',
+                  border: '1px solid rgba(163,113,247,0.18)',
+                  borderRadius: '4px', padding: '1px 5px',
+                  textDecoration: 'none',
+                  cursor: kd.timestamp ? 'pointer' : 'default',
+                }
+                const content = (
+                  <>
+                    <Calendar size={7} color='#a371f7' />
+                    <span style={{ fontSize: '0.52rem', color: '#a371f7' }}>
+                      {kd.date.length > 22 ? kd.date.slice(0, 20) + '…' : kd.date}
+                    </span>
+                    {kd.event && <span style={{ fontSize: '0.45rem', color: '#6e7681' }}>{kd.event.slice(0, 18)}</span>}
+                    {kd.timestamp && (
+                      <span style={{ fontSize: '0.45rem', color: '#3fb950', fontWeight: 600 }}>
+                        @{kd.timestamp}
+                      </span>
+                    )}
+                  </>
+                )
+                const tooltip = kd.quote
+                  ? `"${kd.quote}"${kd.timestamp ? ` — @${kd.timestamp}` : ''}\nClick to jump to this moment in the video`
+                  : `${kd.date}${kd.event ? ` — ${kd.event}` : ''}`
+                return kd.timestamp ? (
+                  <a
+                    key={i}
+                    href={jumpUrl}
+                    target='_blank'
+                    rel='noopener noreferrer'
+                    title={tooltip}
+                    style={wrapStyle}
+                    onClick={e => e.stopPropagation()}
+                  >
+                    {content}
+                  </a>
+                ) : (
+                  <div key={i} title={tooltip} style={wrapStyle}>{content}</div>
+                )
+              })}
+            </div>
+            {(() => {
+              const withQuote = video.analysis.keyDates.find(kd => kd.quote)
+              if (!withQuote?.quote) return null
+              return (
+                <div style={{
+                  fontSize: '0.55rem', color: '#8b949e',
+                  fontStyle: 'italic', lineHeight: 1.35,
+                  paddingLeft: '8px', borderLeft: '2px solid rgba(163,113,247,0.3)',
+                  marginTop: '2px',
+                }}>
+                  “{withQuote.quote}”{withQuote.timestamp && (
+                    <span style={{ color: '#3fb950', marginLeft: '4px', fontStyle: 'normal' }}>@{withQuote.timestamp}</span>
+                  )}
+                </div>
+              )
+            })()}
           </div>
         )}
 
@@ -414,11 +560,66 @@ function VideoCard({ video, isLatest }: { video: Video; isLatest: boolean }) {
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '0.35rem 0.7rem',
         borderTop: '1px solid rgba(42,42,74,0.5)',
+        gap: '0.4rem', flexWrap: 'wrap',
       }}>
         <a href={video.url} target='_blank' rel='noopener noreferrer'
           style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '4px', color: '#6e7681', fontSize: '0.52rem' }}>
           <Play size={8} />Watch on YouTube <ExternalLink size={7} />
         </a>
+        {/* Manual transcript paste — escape hatch for when our scraper can't
+            fetch transcripts. User opens video on YouTube, clicks "..." →
+            "Show transcript", copies, pastes here. We re-analyze with it as
+            the primary source for date/price extraction. Especially useful
+            for videos where transcriptUsed=false (the badge in the header
+            shows "📝 desc only" — that's when this button matters). */}
+        {!video.analysis.transcriptUsed && (
+          <button
+            onClick={async (e) => {
+              e.stopPropagation()
+              const instructions = `Paste the transcript for "${video.title.slice(0, 80)}".
+
+How to grab it:
+  1. Open the video on YouTube
+  2. Click "..." under the video → "Show transcript"
+  3. Click the 3-dot menu in the transcript panel → "Toggle timestamps" (optional but recommended)
+  4. Select all the transcript text and copy it
+  5. Paste it here
+
+Min 100 chars; pastes are cached forever per-video. The analysis will re-run with the transcript as primary source.`
+              const pasted = window.prompt(instructions, '')
+              if (!pasted || pasted.trim().length < 100) {
+                if (pasted !== null) alert('Transcript must be at least 100 characters.')
+                return
+              }
+              try {
+                const res = await fetch('/api/influencer', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ videoId: video.id, transcript: pasted.trim() }),
+                })
+                const j = await res.json()
+                if (j.success) {
+                  alert(`Transcript saved (${j.chars} chars). Click Refresh on the panel to re-analyze with the transcript as the primary source.`)
+                } else {
+                  alert(`Failed: ${j.error || 'unknown'}`)
+                }
+              } catch (err) {
+                alert(`Network error: ${err}`)
+              }
+            }}
+            title="Manually paste this video's transcript. Use when the 📝 desc-only badge appears — our scraper couldn't fetch the captions automatically. Once pasted, the analysis re-runs grounded in what the influencer actually said."
+            style={{
+              background: 'rgba(248,166,38,0.10)',
+              border: '1px solid rgba(248,166,38,0.3)',
+              borderRadius: '4px', padding: '2px 8px',
+              color: '#f8a626', fontSize: '0.5rem', fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex', alignItems: 'center', gap: '3px',
+            }}
+          >
+            📋 Paste transcript
+          </button>
+        )}
         {video.likeCount > 0 && (
           <span style={{ fontSize: '0.48rem', color: '#484f58' }}>
             ♥ {formatViewCount(video.likeCount)}
