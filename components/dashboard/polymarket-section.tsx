@@ -1759,15 +1759,31 @@ POLYMARKET_CLOB_API_SECRET=...`}
                     const edgeAbs = Math.abs(edgePts)
                     // Three-way direction: 'yes' if Opus's est > market by >=0.5pt,
                     // 'no' if est < market by >=0.5pt, 'none' for truly-no-edge
-                    // picks (where picking a side would be arbitrary). The
-                    // 'none' case fixes a subtle bug: opusFavorsYes used
-                    // strict > so when est == market exactly, it silently
-                    // resolved to 'No' — surfacing "Place No anyway" buttons
-                    // on cards with literally zero implied edge.
+                    // picks. The 'none' case fixes the strict-> bug where
+                    // est == market exactly resolved silently to 'No'.
                     const aiLean: 'yes' | 'no' | 'none' =
                       edgeAbs < 0.5 ? 'none' : edgePts > 0 ? 'yes' : 'no'
+
+                    // CRITICAL FIX: for "Team A vs Team B" markets, generic
+                    // YES/NO labels were meaningless ("does YES mean Spurs
+                    // or Timberwolves?"). For multi-outcome markets where
+                    // outcomes are real names (not literal Yes/No), surface
+                    // the actual outcome name instead. The "yes side" maps
+                    // to whatever rec.outcome represents (the side Opus's
+                    // estimate refers to); "no side" is the OTHER outcome.
+                    const outcomesArr = (rec.market.outcomes as string[] | undefined) || []
+                    const isBinaryYesNo =
+                      outcomesArr.length < 2 ||
+                      (outcomesArr[0] === 'Yes' && outcomesArr[1] === 'No')
+                    const yesSideName = isBinaryYesNo
+                      ? 'YES'
+                      : (rec.outcome || outcomesArr[0] || 'YES')
+                    const noSideName = isBinaryYesNo
+                      ? 'NO'
+                      : (outcomesArr.find(o => o !== rec.outcome) || outcomesArr[1] || 'NO')
+
                     const opusFavorsYes = aiLean === 'yes'
-                    const suggestedSide = aiLean === 'yes' ? 'Yes' : aiLean === 'no' ? 'No' : ''
+                    const suggestedSide = aiLean === 'yes' ? yesSideName : aiLean === 'no' ? noSideName : ''
                     const suggestedPrice = aiLean === 'yes' ? rec.odds : aiLean === 'no' ? 1 - rec.odds : 0
                     const payoutMultiple = suggestedPrice > 0 ? 1 / suggestedPrice : 0
                     // Generate a one-line "verdict" — most actionable interpretation
@@ -1786,12 +1802,15 @@ POLYMARKET_CLOB_API_SECRET=...`}
                       verdictColor = '#a09060'
                     }
                     // Parameterized placement helper — accepts the side the
-                    // user explicitly chose. Replaces the previous closure
-                    // that hardcoded Opus's preferred side; now zero-edge
-                    // cards can offer both YES and NO buttons and let the
-                    // user pick rather than guessing for them.
-                    const placeOnSide = async (side: 'Yes' | 'No') => {
-                      const sidePrice = side === 'Yes' ? rec.odds : 1 - rec.odds
+                    // user explicitly chose. Side is the literal outcome
+                    // name (the team name for sports/esports markets, or
+                    // "Yes"/"No" for binary markets) so server-side bet
+                    // creation maps to the correct token.
+                    const placeOnSide = async (side: string) => {
+                      // The "yes side" is the rec.outcome (the side Opus's
+                      // estimate refers to). Everything else is "no side".
+                      const isYesSide = side === yesSideName
+                      const sidePrice = isYesSide ? rec.odds : 1 - rec.odds
                       const sidePayout = sidePrice > 0 ? 1 / sidePrice : 0
                       const stake = window.prompt(
                         `Place a paper bet on this skipped pick?\n\n${rec.market.question.slice(0, 120)}\n\nSide: ${side} at ${(sidePrice * 100).toFixed(0)}% market price\nIf right: $1 → $${sidePayout.toFixed(2)}\nOpus skipped this (${recExt.llmDirection || 'unknown'} reason: ${rec.reasoning?.slice(0, 100) || 'no reasoning'})\n\nEnter stake amount in dollars:`,
@@ -1808,7 +1827,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
                         outcome: side,
                         odds: sidePrice,
                         marketImpliedProb: sidePrice,
-                        estimatedProbability: side === 'Yes'
+                        estimatedProbability: isYesSide
                           ? rec.estimatedProbability
                           : 1 - rec.estimatedProbability,
                         kellyFraction: 0,
@@ -1880,10 +1899,17 @@ POLYMARKET_CLOB_API_SECRET=...`}
                               'none' shows a neutral pill so the user knows
                               there's no directional edge to chase. */}
                           {(() => {
+                            // Label shows the actual outcome name (team name
+                            // for sports/esports, "YES"/"NO" for binary
+                            // markets). Resolves the user's complaint:
+                            // "still confused yes or no here cause its like
+                            // 2 teams team a vs team b".
+                            const yesLabel = isBinaryYesNo ? 'YES' : yesSideName
+                            const noLabel = isBinaryYesNo ? 'NO' : noSideName
                             const cfg = aiLean === 'yes'
-                              ? { label: '⬆ YES', color: '#3fb950', bg: 'rgba(63,185,80,0.18)', border: 'rgba(63,185,80,0.5)', title: `Opus leans YES — thinks YES probability is ${edgeAbs.toFixed(1)}pt higher than market price` }
+                              ? { label: `⬆ ${yesLabel}`, color: '#3fb950', bg: 'rgba(63,185,80,0.18)', border: 'rgba(63,185,80,0.5)', title: `Opus leans ${yesLabel} — thinks ${yesLabel}'s probability is ${edgeAbs.toFixed(1)}pt higher than market price` }
                               : aiLean === 'no'
-                                ? { label: '⬇ NO', color: '#f85149', bg: 'rgba(248,81,73,0.18)', border: 'rgba(248,81,73,0.5)', title: `Opus leans NO — thinks YES probability is ${edgeAbs.toFixed(1)}pt lower than market price (i.e. NO is undervalued)` }
+                                ? { label: `⬇ ${noLabel}`, color: '#f85149', bg: 'rgba(248,81,73,0.18)', border: 'rgba(248,81,73,0.5)', title: `Opus leans ${noLabel} — thinks ${yesLabel}'s probability is ${edgeAbs.toFixed(1)}pt lower than market price (i.e. ${noLabel} is undervalued)` }
                                 : { label: '— NO LEAN', color: '#8b949e', bg: 'rgba(139,148,158,0.12)', border: 'rgba(139,148,158,0.35)', title: 'Opus agrees with the market — no directional edge in either direction. Take this only if you have personal conviction.' }
                             return (
                               <span
@@ -1989,9 +2015,15 @@ POLYMARKET_CLOB_API_SECRET=...`}
                           display: 'flex', justifyContent: 'space-between',
                           fontSize: '0.55rem', color: '#6e7681',
                         }}>
-                          <span>Mkt YES: {(rec.odds * 100).toFixed(0)}%</span>
-                          <span>Opus est: {(rec.estimatedProbability * 100).toFixed(0)}%</span>
-                          <span style={{ color: '#f0c000' }}>Payout: {payoutMultiple.toFixed(1)}x</span>
+                          <span title={`Market's implied probability that ${yesSideName} wins / resolves YES`}>
+                            Mkt {yesSideName}: {(rec.odds * 100).toFixed(0)}%
+                          </span>
+                          <span title={`Opus's estimate of the probability that ${yesSideName} wins / resolves YES`}>
+                            Opus {yesSideName}: {(rec.estimatedProbability * 100).toFixed(0)}%
+                          </span>
+                          <span style={{ color: '#f0c000' }} title={`If you bet $1 on ${suggestedSide || yesSideName} and win, you get this much back`}>
+                            Payout: {payoutMultiple.toFixed(1)}x
+                          </span>
                         </div>
                         {/* Verdict line — actionable interpretation */}
                         <div style={{
@@ -2033,8 +2065,8 @@ POLYMARKET_CLOB_API_SECRET=...`}
                             // strict > comparison defaulted to No.
                             <>
                               <button
-                                onClick={e => { e.stopPropagation(); placeOnSide('Yes') }}
-                                title='Place on YES — no Opus lean either way, so this is your judgment call'
+                                onClick={e => { e.stopPropagation(); placeOnSide(yesSideName) }}
+                                title={`Place on ${yesSideName} — no Opus lean either way, so this is your judgment call`}
                                 style={{
                                   flex: 1, fontSize: '0.55rem', padding: '4px 8px',
                                   background: 'rgba(63,185,80,0.08)',
@@ -2043,11 +2075,11 @@ POLYMARKET_CLOB_API_SECRET=...`}
                                   cursor: 'pointer', fontWeight: 700,
                                 }}
                               >
-                                ⬆ Bet YES
+                                ⬆ Bet {yesSideName}
                               </button>
                               <button
-                                onClick={e => { e.stopPropagation(); placeOnSide('No') }}
-                                title='Place on NO — no Opus lean either way, so this is your judgment call'
+                                onClick={e => { e.stopPropagation(); placeOnSide(noSideName) }}
+                                title={`Place on ${noSideName} — no Opus lean either way, so this is your judgment call`}
                                 style={{
                                   flex: 1, fontSize: '0.55rem', padding: '4px 8px',
                                   background: 'rgba(248,81,73,0.08)',
@@ -2056,12 +2088,12 @@ POLYMARKET_CLOB_API_SECRET=...`}
                                   cursor: 'pointer', fontWeight: 700,
                                 }}
                               >
-                                ⬇ Bet NO
+                                ⬇ Bet {noSideName}
                               </button>
                             </>
                           ) : (
                             <button
-                              onClick={e => { e.stopPropagation(); placeOnSide(suggestedSide as 'Yes' | 'No') }}
+                              onClick={e => { e.stopPropagation(); placeOnSide(suggestedSide) }}
                               title={`Opus leans ${suggestedSide} (${edgeAbs.toFixed(1)}pt edge). Click to place a paper bet on that side.`}
                               style={{
                                 flex: 1, fontSize: '0.55rem', padding: '4px 8px',
