@@ -1744,10 +1744,18 @@ POLYMARKET_CLOB_API_SECRET=...`}
                     const recExt = rec as TradeRecommendation & { aiEdge?: 'strong' | 'user' | 'weak'; aiEdgeReason?: string; llmDirection?: string }
                     const edgePts = (rec.estimatedProbability - rec.odds) * 100  // signed edge
                     const edgeAbs = Math.abs(edgePts)
-                    // Determine which side has implied edge from Opus's view
-                    const opusFavorsYes = rec.estimatedProbability > rec.odds
-                    const suggestedSide = opusFavorsYes ? 'Yes' : 'No'
-                    const suggestedPrice = opusFavorsYes ? rec.odds : 1 - rec.odds
+                    // Three-way direction: 'yes' if Opus's est > market by >=0.5pt,
+                    // 'no' if est < market by >=0.5pt, 'none' for truly-no-edge
+                    // picks (where picking a side would be arbitrary). The
+                    // 'none' case fixes a subtle bug: opusFavorsYes used
+                    // strict > so when est == market exactly, it silently
+                    // resolved to 'No' — surfacing "Place No anyway" buttons
+                    // on cards with literally zero implied edge.
+                    const aiLean: 'yes' | 'no' | 'none' =
+                      edgeAbs < 0.5 ? 'none' : edgePts > 0 ? 'yes' : 'no'
+                    const opusFavorsYes = aiLean === 'yes'
+                    const suggestedSide = aiLean === 'yes' ? 'Yes' : aiLean === 'no' ? 'No' : ''
+                    const suggestedPrice = aiLean === 'yes' ? rec.odds : aiLean === 'no' ? 1 - rec.odds : 0
                     const payoutMultiple = suggestedPrice > 0 ? 1 / suggestedPrice : 0
                     // Generate a one-line "verdict" — most actionable interpretation
                     let verdict = ''
@@ -1764,11 +1772,16 @@ POLYMARKET_CLOB_API_SECRET=...`}
                       verdict = `${edgePts >= 0 ? '+' : ''}${edgePts.toFixed(1)}pt — Opus skipped (${recExt.llmDirection === 'skip' ? 'low conf' : 'tiny edge'}). Override if you disagree.`
                       verdictColor = '#a09060'
                     }
-                    // Build a synthetic TradeRecommendation override for the
-                    // "Place anyway" button — uses Opus's preferred side
-                    const placeAnyway = async () => {
+                    // Parameterized placement helper — accepts the side the
+                    // user explicitly chose. Replaces the previous closure
+                    // that hardcoded Opus's preferred side; now zero-edge
+                    // cards can offer both YES and NO buttons and let the
+                    // user pick rather than guessing for them.
+                    const placeOnSide = async (side: 'Yes' | 'No') => {
+                      const sidePrice = side === 'Yes' ? rec.odds : 1 - rec.odds
+                      const sidePayout = sidePrice > 0 ? 1 / sidePrice : 0
                       const stake = window.prompt(
-                        `Place a paper bet on this skipped pick?\n\n${rec.market.question.slice(0, 120)}\n\nSuggested: bet ${suggestedSide} at ${(suggestedPrice * 100).toFixed(0)}% market price\nIf right: $1 → $${payoutMultiple.toFixed(2)}\nOpus skipped this (${recExt.llmDirection || 'unknown'} reason: ${rec.reasoning?.slice(0, 100) || 'no reasoning'})\n\nEnter stake amount in dollars:`,
+                        `Place a paper bet on this skipped pick?\n\n${rec.market.question.slice(0, 120)}\n\nSide: ${side} at ${(sidePrice * 100).toFixed(0)}% market price\nIf right: $1 → $${sidePayout.toFixed(2)}\nOpus skipped this (${recExt.llmDirection || 'unknown'} reason: ${rec.reasoning?.slice(0, 100) || 'no reasoning'})\n\nEnter stake amount in dollars:`,
                         '1.00',
                       )
                       if (!stake) return
@@ -1777,20 +1790,14 @@ POLYMARKET_CLOB_API_SECRET=...`}
                         alert('Invalid stake. Must be a positive number.')
                         return
                       }
-                      // Build a rec-shaped object but override the outcome to
-                      // user's preferred side. The bet uses real market price.
                       const overrideRec = {
                         ...rec,
-                        outcome: suggestedSide,
-                        // Set odds to the suggested side's price so Kelly calc
-                        // works, but server uses the actual market.
-                        odds: suggestedPrice,
-                        marketImpliedProb: suggestedPrice,
-                        // estimatedProbability flips for No-side rec
-                        estimatedProbability: opusFavorsYes
+                        outcome: side,
+                        odds: sidePrice,
+                        marketImpliedProb: sidePrice,
+                        estimatedProbability: side === 'Yes'
                           ? rec.estimatedProbability
                           : 1 - rec.estimatedProbability,
-                        // Force a small Kelly fraction so the user's stake (not Kelly) drives
                         kellyFraction: 0,
                       }
                       try {
@@ -1802,7 +1809,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
                         const json = await res.json()
                         if (json.success) {
                           loadPaperData()
-                          alert(`Placed $${stakeNum.toFixed(2)} on ${suggestedSide}. Override paper trade — Opus skipped but you took the bet.`)
+                          alert(`Placed $${stakeNum.toFixed(2)} on ${side}. Override paper trade — Opus skipped but you took the bet.`)
                         } else {
                           alert(`Failed to place: ${json.error}`)
                         }
@@ -1852,6 +1859,34 @@ POLYMARKET_CLOB_API_SECRET=...`}
                           }}>
                             {recExt.llmDirection === 'skip' ? 'Low conf' : 'Skipped'}
                           </span>
+                          {/* AI lean indicator — the single most important
+                              answer the user wants when scanning a card:
+                              "which side does the model think is undervalued?"
+                              Was buried inside the verdict line; now a
+                              prominent colored pill in the header row.
+                              'none' shows a neutral pill so the user knows
+                              there's no directional edge to chase. */}
+                          {(() => {
+                            const cfg = aiLean === 'yes'
+                              ? { label: '⬆ YES', color: '#3fb950', bg: 'rgba(63,185,80,0.18)', border: 'rgba(63,185,80,0.5)', title: `Opus leans YES — thinks YES probability is ${edgeAbs.toFixed(1)}pt higher than market price` }
+                              : aiLean === 'no'
+                                ? { label: '⬇ NO', color: '#f85149', bg: 'rgba(248,81,73,0.18)', border: 'rgba(248,81,73,0.5)', title: `Opus leans NO — thinks YES probability is ${edgeAbs.toFixed(1)}pt lower than market price (i.e. NO is undervalued)` }
+                                : { label: '— NO LEAN', color: '#8b949e', bg: 'rgba(139,148,158,0.12)', border: 'rgba(139,148,158,0.35)', title: 'Opus agrees with the market — no directional edge in either direction. Take this only if you have personal conviction.' }
+                            return (
+                              <span
+                                title={cfg.title}
+                                style={{
+                                  fontSize: '0.6rem', fontWeight: 800,
+                                  color: cfg.color, backgroundColor: cfg.bg,
+                                  border: `1px solid ${cfg.border}`,
+                                  padding: '0.15rem 0.5rem', borderRadius: '4px',
+                                  letterSpacing: '0.03em', cursor: 'help',
+                                }}
+                              >
+                                {cfg.label}
+                              </span>
+                            )
+                          })()}
                           {recExt.aiEdge && (() => {
                             const cfg = recExt.aiEdge === 'strong'
                               ? { label: '🤖 AI', color: '#3fb950', bg: 'rgba(63,185,80,0.12)' }
@@ -1945,19 +1980,56 @@ POLYMARKET_CLOB_API_SECRET=...`}
                           >
                             View on Polymarket ↗
                           </a>
-                          <button
-                            onClick={e => { e.stopPropagation(); placeAnyway() }}
-                            title='Place a paper bet on this pick despite Opus skipping. Use when you have personal conviction (esports, niche knowledge, etc.).'
-                            style={{
-                              flex: 1, fontSize: '0.55rem', padding: '4px 8px',
-                              background: 'rgba(63,185,80,0.10)',
-                              border: '1px solid rgba(63,185,80,0.4)',
-                              borderRadius: '4px', color: '#3fb950',
-                              cursor: 'pointer', fontWeight: 700,
-                            }}
-                          >
-                            ⚡ Place {suggestedSide} anyway
-                          </button>
+                          {aiLean === 'none' ? (
+                            // No directional lean from Opus — show BOTH sides
+                            // so the user picks rather than us guessing.
+                            // Was a real bug: zero-edge cards previously
+                            // surfaced "Place No anyway" because the underlying
+                            // strict > comparison defaulted to No.
+                            <>
+                              <button
+                                onClick={e => { e.stopPropagation(); placeOnSide('Yes') }}
+                                title='Place on YES — no Opus lean either way, so this is your judgment call'
+                                style={{
+                                  flex: 1, fontSize: '0.55rem', padding: '4px 8px',
+                                  background: 'rgba(63,185,80,0.08)',
+                                  border: '1px solid rgba(63,185,80,0.35)',
+                                  borderRadius: '4px', color: '#3fb950',
+                                  cursor: 'pointer', fontWeight: 700,
+                                }}
+                              >
+                                ⬆ Bet YES
+                              </button>
+                              <button
+                                onClick={e => { e.stopPropagation(); placeOnSide('No') }}
+                                title='Place on NO — no Opus lean either way, so this is your judgment call'
+                                style={{
+                                  flex: 1, fontSize: '0.55rem', padding: '4px 8px',
+                                  background: 'rgba(248,81,73,0.08)',
+                                  border: '1px solid rgba(248,81,73,0.35)',
+                                  borderRadius: '4px', color: '#f85149',
+                                  cursor: 'pointer', fontWeight: 700,
+                                }}
+                              >
+                                ⬇ Bet NO
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              onClick={e => { e.stopPropagation(); placeOnSide(suggestedSide as 'Yes' | 'No') }}
+                              title={`Opus leans ${suggestedSide} (${edgeAbs.toFixed(1)}pt edge). Click to place a paper bet on that side.`}
+                              style={{
+                                flex: 1, fontSize: '0.55rem', padding: '4px 8px',
+                                background: aiLean === 'yes' ? 'rgba(63,185,80,0.12)' : 'rgba(248,81,73,0.12)',
+                                border: `1px solid ${aiLean === 'yes' ? 'rgba(63,185,80,0.45)' : 'rgba(248,81,73,0.45)'}`,
+                                borderRadius: '4px',
+                                color: aiLean === 'yes' ? '#3fb950' : '#f85149',
+                                cursor: 'pointer', fontWeight: 700,
+                              }}
+                            >
+                              {aiLean === 'yes' ? '⬆' : '⬇'} Bet {suggestedSide} anyway
+                            </button>
+                          )}
                         </div>
                       </div>
                     )
