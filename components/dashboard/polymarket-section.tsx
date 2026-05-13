@@ -1664,13 +1664,26 @@ POLYMARKET_CLOB_API_SECRET=...`}
               return true
             })
             if (watchList.length === 0) return null
-            // Sort watchlist by edge magnitude descending (biggest disagreements
-            // between Opus and market surface first — those are where user
-            // judgment can find alpha).
+            // Sort by win probability of the suggested side, NOT by edge.
+            // Rationale: "being right" beats "claimed edge". A pick at 84%
+            // YES with +0.5pt edge is more likely to win than a coin-flip
+            // with a fabricated +30pt edge — and the user is compounding
+            // a small bankroll where hit rate matters more than swing size.
+            //
+            // For each rec compute the price of the side Opus leans toward
+            // (or the favorite-side price for no-lean picks). That IS the
+            // market's estimate of "how often this bet wins" — the wisdom
+            // of the crowd as a sanity anchor on top of Opus's claim.
+            const winProbOfSide = (r: TradeRecommendation): number => {
+              const edge = (r.estimatedProbability - r.odds)
+              if (Math.abs(edge) < 0.005) {
+                // No lean — use whichever side is the favorite
+                return Math.max(r.odds, 1 - r.odds)
+              }
+              return edge > 0 ? r.odds : 1 - r.odds
+            }
             const watchListSorted = [...watchList].sort((a, b) => {
-              const aEdge = Math.abs(a.estimatedProbability - a.odds)
-              const bEdge = Math.abs(b.estimatedProbability - b.odds)
-              return bEdge - aEdge
+              return winProbOfSide(b) - winProbOfSide(a)  // high win prob first
             })
             // Apply category filter from watchTierFilter state
             const watchListFiltered = watchTierFilter === 'all'
@@ -1710,7 +1723,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
                     fontSize: '0.7rem', color: '#c9d1d9', fontWeight: 700,
                     textTransform: 'uppercase', letterSpacing: '0.04em',
                   }}>
-                    👀 Watch List — actionable picks Opus skipped ({watchList.length})
+                    👀 Watch List — actionable picks Opus skipped ({watchList.length}) · <span style={{ fontSize: '0.55rem', color: '#8b949e', fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>sorted by win-probability first, edge second</span>
                   </span>
                   {/* Category filter chips */}
                   <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
@@ -1731,7 +1744,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
                     ))}
                   </div>
                   <span style={{ fontSize: '0.5rem', color: '#484f58', fontStyle: 'italic', marginLeft: 'auto' }}>
-                    sorted by largest Opus-vs-market gap first
+                    🎯 highest win-probability first · edge is secondary
                   </span>
                 </div>
                 <div style={{
@@ -1907,12 +1920,44 @@ POLYMARKET_CLOB_API_SECRET=...`}
                               </span>
                             )
                           })()}
+                          {/* WIN ODDS — the side price the user would be
+                              betting at, framed as "how often this wins"
+                              per the market's collective estimate. Primary
+                              signal: a 70% win prob with a tiny edge beats
+                              a 30% win prob with a huge fabricated edge.
+                              Color-coded by hit-rate band so the eye lands
+                              on high-probability picks first. */}
+                          {(() => {
+                            const sidePrice = aiLean === 'yes' ? rec.odds : aiLean === 'no' ? 1 - rec.odds : Math.max(rec.odds, 1 - rec.odds)
+                            const winPct = sidePrice * 100
+                            const cfg = winPct >= 70
+                              ? { color: '#3fb950', bg: 'rgba(63,185,80,0.16)' }
+                              : winPct >= 50
+                                ? { color: '#79c0ff', bg: 'rgba(121,192,255,0.12)' }
+                                : winPct >= 30
+                                  ? { color: '#f0c000', bg: 'rgba(240,192,0,0.12)' }
+                                  : { color: '#f0883e', bg: 'rgba(240,136,62,0.12)' }
+                            return (
+                              <span
+                                title={`Probability of this bet winning per the market price (${winPct.toFixed(0)}%). The favorite-side price is what the world thinks — high win% = safe scalp, low win% = longshot.`}
+                                style={{
+                                  fontSize: '0.6rem', fontWeight: 800,
+                                  color: cfg.color, backgroundColor: cfg.bg,
+                                  padding: '0.15rem 0.5rem', borderRadius: '4px',
+                                  cursor: 'help',
+                                }}
+                              >
+                                🎯 wins ~{winPct.toFixed(0)}%
+                              </span>
+                            )
+                          })()}
                           <span style={{
                             fontSize: '0.5rem', fontWeight: 700,
-                            color: edgeAbs >= 3 ? '#f0c000' : '#484f58',
-                            backgroundColor: edgeAbs >= 3 ? 'rgba(240,192,0,0.1)' : 'transparent',
+                            color: edgeAbs >= 3 ? '#a09060' : '#484f58',
+                            backgroundColor: edgeAbs >= 3 ? 'rgba(160,144,96,0.08)' : 'transparent',
                             padding: '0.1rem 0.4rem', borderRadius: '3px',
-                          }}>
+                          }}
+                          title={`Edge = Opus's estimate vs market. Bigger ≠ better — high edges with low confidence are often fabricated. Use as a secondary signal after win probability.`}>
                             edge {edgePts >= 0 ? '+' : ''}{edgePts.toFixed(1)}pt
                           </span>
                           <span style={{ fontSize: '0.55rem', color: '#6e7681', marginLeft: 'auto' }}>
