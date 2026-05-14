@@ -52,16 +52,26 @@ export default function PortfolioImportFromAddress({ onImported }: Props) {
   // Tick state used only to force a re-render so "Xm ago" updates live.
   const [, setTick] = useState(0)
   const autoSyncedThisMount = useRef(false)
+  // Tracks mount state so async work can short-circuit safely if the
+  // user navigates to another tab/screen mid-fetch. Without this guard
+  // setState calls fire on torn-down components — React warns but
+  // also intermittently crashes in some prod builds.
+  const isMounted = useRef(true)
+  useEffect(() => {
+    isMounted.current = true
+    return () => { isMounted.current = false }
+  }, [])
 
   // Load the saved address on first render so the "Sync now" strip can
   // appear without the user opening the full panel. Auto-trigger a
   // sync if it's been >5min since the last one.
   useEffect(() => {
-    let cancelled = false
-    fetch('/api/portfolio/import-from-address')
+    const ac = new AbortController()
+    fetch('/api/portfolio/import-from-address', { signal: ac.signal })
       .then(r => r.json())
       .then(j => {
-        if (cancelled || !j.success || !j.address) return
+        if (!isMounted.current || ac.signal.aborted) return
+        if (!j.success || !j.address) return
         setSavedAddress(j.address)
         setAddress(j.address)
         setSavedAt(j.savedAt ?? null)
@@ -75,8 +85,8 @@ export default function PortfolioImportFromAddress({ onImported }: Props) {
           syncNow(j.address, 'replace', /* silent */ true)
         }
       })
-      .catch(() => { /* ignore */ })
-    return () => { cancelled = true }
+      .catch(() => { /* ignore — likely an abort from navigation */ })
+    return () => { ac.abort() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -99,6 +109,7 @@ export default function PortfolioImportFromAddress({ onImported }: Props) {
   }, [])
 
   const syncNow = useCallback(async (addr: string, syncMode: 'augment' | 'replace', silent = false) => {
+    if (!isMounted.current) return
     if (!silent) setImporting(true)
     else setAutoSyncing(true)
     setError(null)
@@ -109,6 +120,7 @@ export default function PortfolioImportFromAddress({ onImported }: Props) {
         body: JSON.stringify({ address: addr, mode: syncMode }),
       })
       const json = await res.json()
+      if (!isMounted.current) return   // navigated away — drop the result
       if (!json.success) {
         if (!silent) setError(json.error || 'Sync failed')
         return
@@ -123,10 +135,16 @@ export default function PortfolioImportFromAddress({ onImported }: Props) {
           bankroll: json.portfolio?.bankroll ?? 0,
         })
       }
-      onImported?.()
+      // Wrap parent callback in try/catch so a parent throwing
+      // doesn't propagate up and bubble as an unhandled rejection.
+      try { onImported?.() } catch (e) {
+        console.warn('[ImportFromAddress] onImported callback threw:', e)
+      }
     } catch (e) {
+      if (!isMounted.current) return
       if (!silent) setError(e instanceof Error ? e.message : String(e))
     } finally {
+      if (!isMounted.current) return
       if (!silent) setImporting(false)
       else setAutoSyncing(false)
     }

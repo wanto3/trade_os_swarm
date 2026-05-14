@@ -39,7 +39,7 @@ import {
   recomputePortfolioPnl,
   type ImportedPositionInput,
 } from '@/lib/services/polymarket-portfolio.service'
-import { computeCalibration, saveCalibration } from '@/lib/services/calibration.service'
+import { computeCalibration, saveCalibration, emitAutoLessons } from '@/lib/services/calibration.service'
 
 export const dynamic = 'force-dynamic'
 
@@ -318,6 +318,22 @@ export async function POST(request: NextRequest) {
       )
       await saveCalibration(summary)
       console.log(`[ImportFromAddress] Calibration saved: ${summary.totalResolved} resolved bets across ${summary.tiers.length} tiers, total PnL $${summary.totalPnl.toFixed(2)}`)
+
+      // RECURSIVE LEARNING STEP — the system writes its own lessons.
+      // When calibration shows a clear pattern (0-for-N on a tier,
+      // <30% hit rate, ≥70% hit rate), emit/refresh an auto-lesson
+      // tagged `auto-calibration`. These get injected into the next
+      // screening prompt alongside the user-curated lessons, so every
+      // resolved position cycles back into how Opus reasons about
+      // future picks. No human-in-the-loop required.
+      try {
+        const emitResult = await emitAutoLessons(summary)
+        if (emitResult.added + emitResult.refreshed > 0) {
+          console.log(`[ImportFromAddress] Auto-lessons: ${emitResult.added} new, ${emitResult.refreshed} refreshed, ${emitResult.skipped} skipped (not stale/significant enough)`)
+        }
+      } catch (e) {
+        console.warn('[ImportFromAddress] auto-lesson emit failed (non-fatal):', e instanceof Error ? e.message : e)
+      }
     } catch (e) {
       console.warn('[ImportFromAddress] calibration save failed (non-fatal):', e instanceof Error ? e.message : e)
     }

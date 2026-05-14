@@ -164,6 +164,103 @@ export async function loadCalibration(): Promise<CalibrationSummary | null> {
 }
 
 /**
+ * Auto-emit lessons from calibration patterns. The system watches its
+ * own track record per tier and writes synthetic lessons when patterns
+ * cross thresholds. This is the recursive-improvement engine: every
+ * sync feeds new data back into the prompt without user intervention.
+ *
+ *   Pattern detected         → lesson emitted (or refreshed)
+ *   ─────────────────────────────────────────────────────────
+ *   tier has 0W/≥3L          → "Always skip {tier} — algo has been 0-for-N"
+ *   tier has <30% w/ ≥4 samples → "Apply heavy skepticism to {tier} — algo has been wrong here repeatedly"
+ *   tier has ≥70% w/ ≥4 samples → "Trust {tier} edges — algo has been consistently right"
+ *
+ * Auto-lessons are tagged with category='auto-calibration' and a stable
+ * id derived from the tier so re-runs UPSERT rather than duplicate.
+ * They survive the same lifecycle as user-written lessons (capped at
+ * 100, persisted to disk, surfaced in the next screening prompt).
+ *
+ * Returns the count of lessons added/refreshed for diagnostics.
+ */
+export async function emitAutoLessons(summary: CalibrationSummary): Promise<{ added: number; refreshed: number; skipped: number }> {
+  if (summary.totalResolved < 3) {
+    return { added: 0, refreshed: 0, skipped: 0 }
+  }
+  // Lazy-load to avoid a dependency cycle (lessons-learned doesn't
+  // import calibration).
+  const { logLesson, getAllLessons, deleteLesson } = await import('./lessons-learned.service')
+
+  // Load existing auto-lessons so we can refresh vs duplicate.
+  const allLessons = await getAllLessons()
+  const existingAuto = new Map<string, { id: string; loggedAt: number }>()
+  for (const l of allLessons) {
+    if (l.category === 'auto-calibration' && l.positionId) {
+      // We re-use positionId as the stable "tier-key" so the upsert
+      // logic can find prior auto-lessons for the same tier.
+      existingAuto.set(l.positionId, { id: l.id, loggedAt: l.loggedAt })
+    }
+  }
+
+  let added = 0
+  let refreshed = 0
+  let skipped = 0
+
+  for (const t of summary.tiers) {
+    const total = t.wins + t.losses
+    if (total < 3) { skipped++; continue }
+
+    // Decide whether this tier warrants a lesson.
+    let takeaway = ''
+    let prediction = ''
+    let outcome = ''
+    if (t.wins === 0 && t.losses >= 3) {
+      takeaway = `Default to SKIP on ${t.tier} — algo has been 0-for-${t.losses} on this tier. The bar for recommending here is now "explicit quote-anchored grounding only".`
+      prediction = `Algo previously surfaced ${t.losses} ${t.tier} picks as actionable`
+      outcome = `All ${t.losses} resolved as losses. Cumulative PnL: ${t.totalPnl >= 0 ? '+' : ''}$${t.totalPnl.toFixed(2)}`
+    } else if (t.hitRate < 0.3 && total >= 4) {
+      takeaway = `${t.tier}: apply heavy skepticism. ${t.wins}W/${t.losses}L (${(t.hitRate * 100).toFixed(0)}%) — algo has been worse than random here. Require quote-anchored reasoning before recommending.`
+      prediction = `Algo recommended ${total} ${t.tier} picks recently`
+      outcome = `Only ${t.wins} won (${(t.hitRate * 100).toFixed(0)}% hit rate, PnL ${t.totalPnl >= 0 ? '+' : ''}$${t.totalPnl.toFixed(2)})`
+    } else if (t.hitRate >= 0.7 && total >= 4) {
+      takeaway = `${t.tier}: algo edge is real. ${t.wins}W/${t.losses}L (${(t.hitRate * 100).toFixed(0)}%) — trust apparent edges in this tier even with medium confidence.`
+      prediction = `Algo recommended ${total} ${t.tier} picks recently`
+      outcome = `${t.wins} won, hit rate ${(t.hitRate * 100).toFixed(0)}%, PnL +$${t.totalPnl.toFixed(2)}`
+    } else {
+      skipped++
+      continue
+    }
+
+    // Stable id per tier so we upsert (delete old + insert new) rather
+    // than duplicate across syncs.
+    const tierKey = `auto-${t.tier.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`
+    const existing = existingAuto.get(tierKey)
+
+    // Don't refresh if the existing auto-lesson is <12h old AND
+    // sample-count hasn't grown — same data, same lesson, skip the churn.
+    if (existing && Date.now() - existing.loggedAt < 12 * 3600_000) {
+      skipped++
+      continue
+    }
+    if (existing) {
+      await deleteLesson(existing.id)
+      refreshed++
+    } else {
+      added++
+    }
+    await logLesson({
+      question: `${t.tier} (${total} resolved)`,
+      opusPrediction: prediction,
+      actualOutcome: outcome,
+      takeaway,
+      category: 'auto-calibration',
+      positionId: tierKey,
+    })
+  }
+
+  return { added, refreshed, skipped }
+}
+
+/**
  * Format the calibration summary as a prompt block for Opus. Only
  * tiers with at least 2 resolved bets surface — single-sample tiers
  * are noise. Tiers with hit rate < 30% get an explicit "default to
