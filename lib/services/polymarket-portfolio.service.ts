@@ -49,6 +49,13 @@ export interface PolymarketPosition {
   pnl?: number
   pnlPercent?: number
   url: string
+  // Live mark-to-market fields, populated for positions imported from
+  // a Polymarket address. `currentMarketPrice` is the current price of
+  // the held side (0-1). `unrealizedPnl` is (currentMarketPrice -
+  // entryPrice) * quantity at the last sync. Both stay undefined on
+  // app-placed paper positions where we don't poll a live price.
+  currentMarketPrice?: number
+  unrealizedPnl?: number
 }
 
 export interface PolymarketPortfolio {
@@ -568,6 +575,16 @@ export interface ImportedPositionInput {
    *  Set true if you've already pre-matched the position OR if you
    *  explicitly want a manual-only position with no auto-resolution. */
   skipLookup?: boolean
+  /** Live market price for the held side at import time (0-1). When set,
+   *  the position records currentMarketPrice + unrealizedPnl so the
+   *  dashboard can display real PnL on open positions, not just
+   *  realized PnL after resolution. */
+  currentMarketPrice?: number
+  /** Live cashPnl reported by Polymarket for this position. If provided,
+   *  overrides the (curPrice − avgPrice) × size computation. Useful
+   *  because Polymarket's value includes fees / partial fills the naive
+   *  formula misses. */
+  livePnl?: number
 }
 
 // ─── Polymarket Gamma market lookup (for imported-position resolution) ─────
@@ -711,6 +728,18 @@ export async function addImportedPosition(input: ImportedPositionInput): Promise
     }
   }
 
+  // Compute unrealized PnL from live market price if we have one. Prefer
+  // Polymarket's reported cashPnl over the naive formula since it
+  // accounts for fees / partial fills.
+  const liveMark = typeof input.currentMarketPrice === 'number' && isFinite(input.currentMarketPrice)
+    ? Math.max(0, Math.min(1, input.currentMarketPrice))
+    : undefined
+  const unrealized = typeof input.livePnl === 'number' && isFinite(input.livePnl)
+    ? input.livePnl
+    : typeof liveMark === 'number'
+      ? (liveMark - input.entryPrice) * input.quantity
+      : undefined
+
   const position: PolymarketPosition = {
     id: `pm-import-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
     marketId: resolvedMarketId,
@@ -732,6 +761,8 @@ export async function addImportedPosition(input: ImportedPositionInput): Promise
     placedAt,
     status: 'open',
     url: resolvedUrl,
+    currentMarketPrice: liveMark,
+    unrealizedPnl: unrealized,
   }
 
   positions.push(position)
@@ -781,16 +812,25 @@ export async function reLookupImportedPositions(): Promise<{ relinked: number; s
  *  if the user wants to wipe slate and start from screenshot state. */
 export function clearAllPositions(): void {
   // Refund any currently-open positions' cost so the bankroll reflects
-  // pre-import state. Resolved positions stay (their PnL is already realized).
+  // pre-import state. Then ALSO reset the win/loss/PnL counters —
+  // those are tied to the position history we just wiped, so leaving
+  // them populated leaves the dashboard showing inflated counts. Bug
+  // history: auto-sync of imported positions in 'replace' mode kept
+  // re-resolving the same 3 already-resolved positions on every
+  // 5-min tick, so lostTrades climbed from 3 → 16 after several
+  // syncs while only 12 positions were actually present.
   const openCost = positions.filter(p => p.status === 'open').reduce((s, p) => s + p.cost, 0)
   positions = []
   portfolio.bankroll += openCost
   portfolio.totalTrades = 0
+  portfolio.wonTrades = 0
+  portfolio.lostTrades = 0
+  portfolio.totalPnl = 0
   portfolio.lastUpdate = Date.now()
   snapshotBankroll('init')
   recordDailySnapshot()
   savePortfolioData()
-  console.log(`[PolymarketPortfolio] Cleared all positions, refunded $${openCost.toFixed(2)}`)
+  console.log(`[PolymarketPortfolio] Cleared all positions + counters, refunded $${openCost.toFixed(2)}`)
 }
 
 /** Cancel an OPEN position — refunds the cost back to bankroll and removes
@@ -840,6 +880,29 @@ export function setBankroll(newBankroll: number, alsoSetStarting = false): Polym
   recordDailySnapshot()
   savePortfolioData()
   console.log(`[PolymarketPortfolio] Bankroll manually set to $${newBankroll.toFixed(2)}${alsoSetStarting ? ' (also reset starting)' : ''}`)
+  return portfolio
+}
+
+/**
+ * Recompute portfolio.totalPnl from current position state. Unlike the
+ * inline updates in resolvePosition (which only sum resolved pnl),
+ * this includes unrealizedPnl on open imported positions — so the
+ * dashboard headline shows live mark-to-market PnL, not just realized.
+ *
+ * Call after a bulk import to refresh the headline figure once all
+ * positions are loaded.
+ */
+export function recomputePortfolioPnl(): PolymarketPortfolio {
+  const realized = positions
+    .filter(p => p.status !== 'open' && typeof p.pnl === 'number')
+    .reduce((sum, p) => sum + (p.pnl ?? 0), 0)
+  const unrealized = positions
+    .filter(p => p.status === 'open' && typeof p.unrealizedPnl === 'number')
+    .reduce((sum, p) => sum + (p.unrealizedPnl ?? 0), 0)
+  portfolio.totalPnl = realized + unrealized
+  portfolio.lastUpdate = Date.now()
+  savePortfolioData()
+  console.log(`[PolymarketPortfolio] Total PnL recomputed: realized $${realized.toFixed(2)} + unrealized $${unrealized.toFixed(2)} = $${portfolio.totalPnl.toFixed(2)}`)
   return portfolio
 }
 

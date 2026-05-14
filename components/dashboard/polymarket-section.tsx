@@ -2515,8 +2515,33 @@ POLYMARKET_CLOB_API_SECRET=...`}
                           </td>
                           <td style={{ padding: '8px 12px' }}><StatusBadge status={pos.status} /></td>
                           <td style={{ padding: '8px 12px', fontSize: '0.65rem', color: '#e6edf3' }}>${pos.cost.toFixed(2)}</td>
-                          <td style={{ padding: '8px 12px', fontSize: '0.65rem', fontWeight: 600, color: pos.pnl === undefined ? '#6e7681' : pos.pnl >= 0 ? '#3fb950' : '#f85149' }}>
-                            {pos.pnl === undefined ? '—' : pos.pnl >= 0 ? `+$${pos.pnl.toFixed(2)}` : `-$${Math.abs(pos.pnl).toFixed(2)}`}
+                          <td
+                            style={{ padding: '8px 12px', fontSize: '0.65rem', fontWeight: 600 }}
+                            title={pos.status === 'open' ? 'Unrealized PnL — current market price vs your entry. Updates on every sync.' : 'Realized PnL — locked in at resolution.'}
+                          >
+                            {(() => {
+                              // For OPEN positions, prefer unrealizedPnl (live
+                              // mark-to-market from Polymarket). For resolved,
+                              // use realized pnl. Shows "—" only when neither
+                              // is available (legacy app-placed paper position
+                              // without a live mark).
+                              const effective = pos.status === 'open'
+                                ? (typeof (pos as PolymarketPosition & { unrealizedPnl?: number }).unrealizedPnl === 'number'
+                                    ? (pos as PolymarketPosition & { unrealizedPnl?: number }).unrealizedPnl
+                                    : pos.pnl)
+                                : pos.pnl
+                              if (typeof effective !== 'number') return <span style={{ color: '#6e7681' }}>—</span>
+                              const sign = effective >= 0 ? '+' : '-'
+                              const abs = Math.abs(effective).toFixed(2)
+                              const colorVal = effective >= 0 ? '#3fb950' : '#f85149'
+                              const liveTag = pos.status === 'open' && typeof (pos as PolymarketPosition & { unrealizedPnl?: number }).unrealizedPnl === 'number'
+                              return (
+                                <span style={{ color: colorVal }}>
+                                  {sign}${abs}
+                                  {liveTag && <span style={{ fontSize: '0.5rem', color: '#6e7681', marginLeft: '4px', fontWeight: 500 }}>live</span>}
+                                </span>
+                              )
+                            })()}
                           </td>
                           <td style={{ padding: '8px 12px', fontSize: '0.65rem', color: '#6e7681' }}>{daysHeld}d</td>
                           <td style={{ padding: '8px 12px' }}><CategoryBadge cat={pos.category} /></td>

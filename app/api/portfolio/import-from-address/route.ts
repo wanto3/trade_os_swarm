@@ -35,6 +35,7 @@ import {
   resolvePosition,
   getPortfolio,
   setBankroll,
+  recomputePortfolioPnl,
   type ImportedPositionInput,
 } from '@/lib/services/polymarket-portfolio.service'
 
@@ -224,6 +225,10 @@ export async function POST(request: NextRequest) {
         quantity: size,
         url: p.slug ? `https://polymarket.com/event/${p.eventSlug || p.slug}` : undefined,
         note: `Imported from Polymarket address ${address.slice(0, 8)}…${address.slice(-4)} on ${new Date().toISOString().slice(0, 10)}`,
+        // Capture live market price + Polymarket's reported PnL so open
+        // positions can render real mark-to-market PnL instead of "—".
+        currentMarketPrice: typeof p.curPrice === 'number' ? p.curPrice : undefined,
+        livePnl: typeof p.cashPnl === 'number' ? p.cashPnl : undefined,
       }
 
       const created = await addImportedPosition(input)
@@ -245,40 +250,43 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Reconcile bankroll with Polymarket's actual portfolio value.
-    // Without this step, the displayed balance was wrong: addImportedPosition
-    // decrements from the $1000 default bankroll on each import, leaving
-    // ~$988 instead of the user's real $4.12. Fix: pull Polymarket's
-    // own portfolio value (free USDC + open-position current value, the
-    // same number the user sees on polymarket.com) and split it into
-    //   bankroll (free)        = polymarketValue - sumOpenCurrentValue
-    //   open position values   = sumOpenCurrentValue
-    // so the dashboard total = polymarketValue, matching Polymarket exactly.
+    // Reconcile bankroll with Polymarket's actual portfolio value. This
+    // is the headline figure the user sees on polymarket.com — total
+    // portfolio value = free USDC + sum(open position current values).
+    //
+    // Previous version set bankroll to "free USDC only" (polymarketValue
+    // − lockedValue), which collapsed to ~$0 for a user who was fully
+    // invested. Display was technically accurate but didn't match the
+    // user's mental model — they expect "balance" to equal what
+    // Polymarket shows them. Now bankroll = polymarketValue directly,
+    // which means the dashboard headline matches Polymarket exactly.
+    //
+    // Kelly sizing on opportunity cards still works — the maxBetSizePercent
+    // cap keeps suggested stakes within reason (e.g. 15% of $4 = $0.60,
+    // not the whole stack).
     let polymarketValue: number | null = null
     let reconcileNote = ''
     try {
       polymarketValue = await fetchPolymarketValue(address)
       if (polymarketValue !== null) {
-        // Sum current value of OPEN positions only — won/lost positions
-        // either redeem to free USDC or are gone, neither contributes to
-        // "locked-in-positions" today.
-        const lockedValue = livePositions
-          .filter(p => isFinite(Number(p.curPrice)) && Number(p.curPrice) > 0.005 && Number(p.curPrice) < 0.995)
-          .reduce((acc, p) => acc + (Number(p.size) * Number(p.curPrice)), 0)
-        const freeUsdc = Math.max(0, polymarketValue - lockedValue)
-
-        // First import (we replaced everything and starting was the $1000
-        // default) — also lock starting bankroll to the live value so the
-        // compounding-growth chart has a meaningful baseline.
         const before = getPortfolio()
+        // First replace-mode import sets starting bankroll too so the
+        // compounding-growth chart has a meaningful baseline.
         const isFirstReplace = mode === 'replace' && before.startingBankroll === 1000
-        setBankroll(freeUsdc, isFirstReplace)
-        reconcileNote = `Bankroll set to $${freeUsdc.toFixed(2)} (Polymarket value $${polymarketValue.toFixed(2)} − $${lockedValue.toFixed(2)} locked in ${livePositions.filter(p => Number(p.curPrice) > 0.005 && Number(p.curPrice) < 0.995).length} open positions)`
+        setBankroll(polymarketValue, isFirstReplace)
+        reconcileNote = `Bankroll set to $${polymarketValue.toFixed(2)} (live Polymarket portfolio value, matches polymarket.com headline)`
         console.log(`[ImportFromAddress] ${reconcileNote}`)
       }
     } catch (e) {
       console.warn('[ImportFromAddress] bankroll reconcile failed (positions imported anyway):', e instanceof Error ? e.message : e)
     }
+
+    // Recompute totalPnl now that open positions carry unrealizedPnl
+    // from Polymarket's live cashPnl. Without this step the dashboard
+    // headline only reflects resolved-position PnL, missing the
+    // unrealized gain/loss on the open positions that dominate for a
+    // small bankroll heavily invested in current markets.
+    recomputePortfolioPnl()
 
     return NextResponse.json({
       success: true,
