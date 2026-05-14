@@ -270,12 +270,17 @@ export async function POST(request: NextRequest) {
       polymarketValue = await fetchPolymarketValue(address)
       if (polymarketValue !== null) {
         const before = getPortfolio()
-        // First replace-mode import sets starting bankroll too so the
-        // compounding-growth chart has a meaningful baseline.
-        const isFirstReplace = mode === 'replace' && before.startingBankroll === 1000
-        setBankroll(polymarketValue, isFirstReplace)
+        // Reset startingBankroll when it looks broken — either still at
+        // the $1000 default (never imported) OR stuck at the tiny
+        // freeUsdc value from a previous version of this endpoint that
+        // computed bankroll incorrectly. Without this reset, the
+        // "Started: $0.00017" footer on the dashboard never updates
+        // back to a sensible baseline.
+        const startingLooksBroken = before.startingBankroll === 1000 || before.startingBankroll < 0.01
+        const shouldResetStarting = mode === 'replace' && startingLooksBroken
+        setBankroll(polymarketValue, shouldResetStarting)
         reconcileNote = `Bankroll set to $${polymarketValue.toFixed(2)} (live Polymarket portfolio value, matches polymarket.com headline)`
-        console.log(`[ImportFromAddress] ${reconcileNote}`)
+        console.log(`[ImportFromAddress] ${reconcileNote}${shouldResetStarting ? ` (also reset startingBankroll from $${before.startingBankroll})` : ''}`)
       }
     } catch (e) {
       console.warn('[ImportFromAddress] bankroll reconcile failed (positions imported anyway):', e instanceof Error ? e.message : e)
