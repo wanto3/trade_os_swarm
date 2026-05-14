@@ -19,6 +19,7 @@
 import type { CategoryEvidence } from './category-research.service'
 import type { LLMMarketAnalysis, MarketForAnalysis } from './groq-market-analysis'
 import { callClaudeCode, ClaudeCodeRateLimitError, type ClaudeModel } from './claude-code-llm.service'
+import { callAnthropicAPI, isAnthropicAPIAvailable, AnthropicAPIRateLimitError, type AnthropicModel } from './anthropic-api.service'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -478,12 +479,22 @@ function applySafetyRules(
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
-export type ScreeningModel = 'opus' | 'sonnet' | 'haiku' | 'groq'
+export type ScreeningModel =
+  | 'opus'         // Claude Opus via `claude -p` subprocess (Max sub)
+  | 'sonnet'       // Claude Sonnet via `claude -p` subprocess (Max sub)
+  | 'haiku'        // Claude Haiku via `claude -p` subprocess (Max sub)
+  | 'anthropic-opus'    // Direct Anthropic API — pay-per-token, Max-runs-out path
+  | 'anthropic-sonnet'  // Direct Anthropic API — pay-per-token
+  | 'anthropic-haiku'   // Direct Anthropic API — pay-per-token
+  | 'groq'         // Groq HTTP (Llama 3.3) — free tier, last-resort fallback
 
 const MODEL_LABEL: Record<ScreeningModel, string> = {
   opus: 'Claude Opus 4.7',
   sonnet: 'Claude Sonnet 4.6',
   haiku: 'Claude Haiku 4.5',
+  'anthropic-opus': 'Claude Opus 4.7 (Anthropic API)',
+  'anthropic-sonnet': 'Claude Sonnet 4.6 (Anthropic API)',
+  'anthropic-haiku': 'Claude Haiku 4.5 (Anthropic API)',
   groq: 'Groq Llama 3.3 70B',
 }
 
@@ -593,13 +604,25 @@ async function screenSingleBatch(
   const FORCE_GROQ = process.env.PRIMARY_LLM === 'groq'
 
   // Build fallback chain so we never end up with 0 results from a transient
-  // failure on one provider. Order picked by speed — first success wins.
+  // failure on one provider. Order: Max subscription first (free per call),
+  // then Anthropic direct API (pay-per-token; only included when the user
+  // has set ANTHROPIC_API_KEY), then Groq (free Llama, last resort).
+  //
+  // Anthropic API tier is conditionally added — if the user sets
+  // ANTHROPIC_API_KEY in env (e.g. after Max sub runs out), the chain
+  // includes 'anthropic-opus' / 'anthropic-sonnet' / 'anthropic-haiku'
+  // automatically between the Max-sub Claude path and Groq.
+  const apiAvailable = isAnthropicAPIAvailable()
+  const apiTier: ScreeningModel[] = apiAvailable
+    ? ['anthropic-opus', 'anthropic-sonnet', 'anthropic-haiku']
+    : []
+
   const fallbackChain: ScreeningModel[] = (IS_SERVERLESS || FORCE_GROQ)
-    ? ['groq']  // serverless or forced: only Groq HTTP API
-    : model === 'haiku'  ? ['haiku', 'groq', 'sonnet']
-      : model === 'groq'   ? ['groq', 'haiku', 'sonnet']
-      : model === 'sonnet' ? ['sonnet', 'haiku', 'groq']
-      : ['opus', 'sonnet', 'haiku', 'groq']
+    ? (apiAvailable ? [...apiTier, 'groq'] : ['groq'])
+    : model === 'haiku'  ? ['haiku', ...apiTier, 'groq', 'sonnet']
+      : model === 'groq'   ? ['groq', 'haiku', ...apiTier, 'sonnet']
+      : model === 'sonnet' ? ['sonnet', 'haiku', ...apiTier, 'groq']
+      : ['opus', 'sonnet', 'haiku', ...apiTier, 'groq']
 
   let rawResponse: string | null = null
   // Track when Max sub is rate-limited so we can short-circuit remaining
@@ -622,15 +645,31 @@ async function screenSingleBatch(
             : 'claude-haiku-4-5'
         // Haiku is fastest (~10s for batched), Sonnet medium (~30-60s),
         // Opus slowest (~60-120s on a beefy machine, ~3-5min on Render
-        // free-tier). Bumped Opus to 8min to accommodate 55-market
-        // sequential batches (was 45-market max). Sonnet/Haiku timeouts
-        // unchanged — they're fallbacks, not the primary path.
+        // free-tier).
         const timeoutMs = tryModel === 'haiku' ? 90_000
           : tryModel === 'sonnet' ? 240_000
           : 480_000  // Opus: 8 min upper bound
         const parsed = await callClaudeCode<unknown>({
           prompt,
           model: claudeModel,
+          timeoutMs,
+        })
+        rawResponse = typeof parsed === 'string' ? parsed : JSON.stringify(parsed)
+      } else if (tryModel === 'anthropic-opus' || tryModel === 'anthropic-sonnet' || tryModel === 'anthropic-haiku') {
+        // Pay-per-token direct Anthropic API path. Activated when
+        // ANTHROPIC_API_KEY is set — the natural post-Max-subscription
+        // path. Identical model behavior to the subprocess version,
+        // just over HTTP with billing on the user's API account.
+        const apiModel: AnthropicModel =
+          tryModel === 'anthropic-opus' ? 'claude-opus-4-7'
+            : tryModel === 'anthropic-sonnet' ? 'claude-sonnet-4-6'
+            : 'claude-haiku-4-5'
+        const timeoutMs = tryModel === 'anthropic-haiku' ? 60_000
+          : tryModel === 'anthropic-sonnet' ? 180_000
+          : 300_000  // anthropic-opus: 5 min
+        const parsed = await callAnthropicAPI<unknown>({
+          prompt,
+          model: apiModel,
           timeoutMs,
         })
         rawResponse = typeof parsed === 'string' ? parsed : JSON.stringify(parsed)
@@ -650,6 +689,16 @@ async function screenSingleBatch(
       if (e instanceof ClaudeCodeRateLimitError && tryModel !== 'groq') {
         maxSubExhausted = true
         lastBatchErrors.push(`${MODEL_LABEL[tryModel]}: rate-limited — skipping remaining Claude models, jumping to Groq`)
+        continue
+      }
+      // Same short-circuit pattern for the direct Anthropic API — if
+      // one model returns 429, all others on the same API key will
+      // too (shared quota). Skip the rest of the anthropic-* tier and
+      // jump straight to Groq.
+      if (e instanceof AnthropicAPIRateLimitError && tryModel.startsWith('anthropic-')) {
+        lastBatchErrors.push(`${MODEL_LABEL[tryModel]}: API rate-limited — skipping remaining anthropic-* tiers, jumping to Groq`)
+        // Mark the whole anthropic-* tier as exhausted via a separate
+        // flag check below.
         continue
       }
       // Redact secrets before logging or surfacing in API response. The
