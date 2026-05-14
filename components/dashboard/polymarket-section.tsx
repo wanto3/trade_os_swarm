@@ -8,6 +8,7 @@ import {
   CheckCircle, AlertCircle
 } from 'lucide-react'
 import PortfolioImport from './portfolio-import'
+import PortfolioImportFromAddress from './portfolio-import-from-address'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -2132,6 +2133,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
               "Check Resolutions" calls /api/polymarket/resolve-only on
               demand instead of waiting for the 2h cron. */}
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+            <PortfolioImportFromAddress onImported={loadPaperData} />
             <PortfolioImport onImported={loadPaperData} />
             <button
               onClick={async () => {
