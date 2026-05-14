@@ -1023,7 +1023,18 @@ async function runFullPipeline(): Promise<any> {
     // 92-95% where small edges compound fast since resolution is imminent.
     // Longer-term markets stay 10-90% (extreme prices over months are rarely
     // mispriced enough to overcome lockup cost).
-    const inMeatyMiddleClosingSoon = (r: TradeRecommendation) => r.odds >= 0.05 && r.odds <= 0.95
+    // For closing-soon picks (t1/t2), allow nearly the full price range.
+    // The screening prompt has explicit rules for both heavy favorites
+    // ("safe scalp" — small reliable wins) and longshots ("Cat B big
+    // payouts"), so the algo NEEDS to see those tiers. Only skip the
+    // basically-resolved markets where no real payout is possible
+    // (<0.5¢ or >99.5¢). Previously we filtered at 5¢ / 95¢ which
+    // dropped ~80% of short-horizon markets — 24 of 30 hotNow picks
+    // never reached Opus including all favorites and longshots.
+    const inMeatyMiddleClosingSoon = (r: TradeRecommendation) => r.odds >= 0.005 && r.odds <= 0.995
+    // For long-tail (>7d) keep the tighter window — uncertainty is the
+    // main edge driver there, and locking capital for weeks on a
+    // 99%-resolved market is bad risk-adjusted return.
     const inMeatyMiddleLonger      = (r: TradeRecommendation) => r.odds >= 0.10 && r.odds <= 0.90
 
     // T1 (≤2d closing): preserve bracket variants. BTC price has ~10
