@@ -33,11 +33,13 @@ import {
   addImportedPosition,
   clearAllPositions,
   resolvePosition,
+  getPositions,
   getPortfolio,
   setBankroll,
   recomputePortfolioPnl,
   type ImportedPositionInput,
 } from '@/lib/services/polymarket-portfolio.service'
+import { computeCalibration, saveCalibration } from '@/lib/services/calibration.service'
 
 export const dynamic = 'force-dynamic'
 
@@ -292,6 +294,33 @@ export async function POST(request: NextRequest) {
     // unrealized gain/loss on the open positions that dominate for a
     // small bankroll heavily invested in current markets.
     recomputePortfolioPnl()
+
+    // Closed-loop learning step: compute per-tier W/L from the freshly
+    // imported & resolved positions and save it so the next screening
+    // run can inject calibration data into Opus's prompt. The result is
+    // "Opus sees its own track record per category" — when the user has
+    // lost 8/8 on lower-tier CS, the next screening tells Opus exactly
+    // that, so it defaults to skip on similar markets even when an
+    // apparent edge looks attractive.
+    try {
+      const allPositions = getPositions(false /* include closed */)
+      const summary = computeCalibration(
+        allPositions.map(p => ({
+          question: p.question,
+          category: p.category,
+          status: p.status,
+          pnl: p.pnl,
+          cost: p.cost,
+          outcome: p.outcome,
+          aiEdge: (p as { aiEdge?: 'strong' | 'user' | 'weak' }).aiEdge,
+          source: p.source,
+        }))
+      )
+      await saveCalibration(summary)
+      console.log(`[ImportFromAddress] Calibration saved: ${summary.totalResolved} resolved bets across ${summary.tiers.length} tiers, total PnL $${summary.totalPnl.toFixed(2)}`)
+    } catch (e) {
+      console.warn('[ImportFromAddress] calibration save failed (non-fatal):', e instanceof Error ? e.message : e)
+    }
 
     return NextResponse.json({
       success: true,

@@ -562,12 +562,25 @@ async function screenSingleBatch(
 ): Promise<Map<string, LLMMarketAnalysis>> {
   const results = new Map<string, LLMMarketAnalysis>()
   if (markets.length === 0) return results
-  // Inject the user-curated "lessons learned" block into the prompt so
-  // Opus pattern-matches new markets against past failures and skips
-  // similar fabrication patterns.
+  // Inject TWO learning blocks into the prompt so Opus learns from
+  // both subjective lessons and objective W/L data:
+  //
+  // 1. lessonsBlock — user-curated "I noticed Opus was wrong about X"
+  //    takeaways from the lessons-learned service. Editorial signal.
+  // 2. calibrationBlock — per-tier W/L stats computed from the user's
+  //    actual resolved Polymarket positions. Objective signal: if the
+  //    algo has been 0W/8L on lower-tier CS, Opus is told exactly that
+  //    so it defaults to skip on similar markets.
   const { getLessonsPromptBlock } = await import('./lessons-learned.service')
-  const lessonsBlock = await getLessonsPromptBlock()
-  const prompt = buildBatchScreeningPrompt(markets, lessonsBlock)
+  const { getCalibrationPromptBlock } = await import('./calibration.service')
+  const [lessonsBlock, calibrationBlock] = await Promise.all([
+    getLessonsPromptBlock(),
+    getCalibrationPromptBlock(),
+  ])
+  // Concat — both are empty strings when there's no data, so the prompt
+  // gracefully degrades to "no learning context yet" on first run.
+  const learningBlock = lessonsBlock + calibrationBlock
+  const prompt = buildBatchScreeningPrompt(markets, learningBlock)
 
   // Detect serverless environment — Vercel/Lambda can't spawn `claude -p`
   // subprocess (no Claude Code binary, no OAuth creds on their machines).

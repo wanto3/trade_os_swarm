@@ -33,8 +33,11 @@ const TIER_1_TOURNAMENTS = new RegExp(
   'valorant champions|valorant masters|' +
   // Dota 2
   'the international|ti\\d+|dpc|dreamleague|elite league|' +
-  // Generic top-tier markers
-  'grand finals|grand final|playoffs|main event' +
+  // Generic top-tier markers — "grand finals" and "main event" are
+  // specific enough to imply a major tournament. "playoffs" alone is
+  // too broad (regional cups have playoffs too) so it's intentionally
+  // not in this list.
+  'grand finals|grand final|main event' +
   ')\\b',
   'i',
 )
