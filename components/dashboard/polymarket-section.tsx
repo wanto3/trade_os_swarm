@@ -349,6 +349,13 @@ export function PolymarketSection() {
   const [activeTab, setActiveTab] = useState<TabKey>('opportunities')
   const [paperPositions, setPaperPositions] = useState<PolymarketPosition[]>([])
   const [paperPortfolio, setPaperPortfolio] = useState<Portfolio | null>(null)
+  // Paper-trades table sort + filter state. Click a column header to
+  // sort by it (toggles direction); filter chips above the table
+  // narrow to open / resolved / all positions. Default: most recent
+  // open first.
+  const [paperSortKey, setPaperSortKey] = useState<'placedAt' | 'cost' | 'pnl' | 'daysHeld' | 'safety' | 'status' | 'category' | 'outcome'>('placedAt')
+  const [paperSortDir, setPaperSortDir] = useState<'asc' | 'desc'>('desc')
+  const [paperFilter, setPaperFilter] = useState<'open' | 'resolved' | 'all'>('open')
   const [analytics, setAnalytics] = useState<Analytics | null>(null)
   const [autoConfig, setAutoConfig] = useState<AutoTraderConfig | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -2249,18 +2256,124 @@ POLYMARKET_CLOB_API_SECRET=...`}
                 </>
               )}
 
+              {/* Filter chips — narrow the table to open / resolved / all */}
+              {(() => {
+                const openCount = paperPositions.filter(p => p.status === 'open').length
+                const resolvedCount = paperPositions.filter(p => p.status !== 'open').length
+                const chips: Array<{ key: 'open' | 'resolved' | 'all'; label: string; count: number; color: string }> = [
+                  { key: 'open', label: 'Open', count: openCount, color: '#3fb950' },
+                  { key: 'resolved', label: 'Resolved', count: resolvedCount, color: '#a371f7' },
+                  { key: 'all', label: 'All', count: paperPositions.length, color: '#8b949e' },
+                ]
+                return (
+                  <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.55rem', color: '#6e7681', textTransform: 'uppercase', letterSpacing: '0.05em', marginRight: '4px' }}>
+                      Show:
+                    </span>
+                    {chips.map(c => (
+                      <button
+                        key={c.key}
+                        onClick={() => setPaperFilter(c.key)}
+                        style={{
+                          fontSize: '0.6rem', fontWeight: 700,
+                          padding: '0.3rem 0.6rem', borderRadius: '5px',
+                          background: paperFilter === c.key ? `${c.color}20` : 'transparent',
+                          border: `1px solid ${paperFilter === c.key ? c.color : '#30363d'}`,
+                          color: paperFilter === c.key ? c.color : '#8b949e',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {c.label} ({c.count})
+                      </button>
+                    ))}
+                    <span style={{ fontSize: '0.5rem', color: '#484f58', fontStyle: 'italic', marginLeft: 'auto' }}>
+                      click any column header to sort · arrow shows direction
+                    </span>
+                  </div>
+                )
+              })()}
+
               {/* Positions table */}
               <div style={{ backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '12px', overflow: 'hidden' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead>
                     <tr style={{ borderBottom: '1px solid #21262d' }}>
-                      {['Market', 'Outcome', 'Status', 'Cost', 'P&L', 'Hold Time', 'Category', 'Safety', ''].map((h, i) => (
-                        <th key={i} style={{ padding: '8px 12px', textAlign: 'left', fontSize: '0.6rem', fontWeight: 700, color: '#6e7681', textTransform: 'uppercase' }}>{h}</th>
-                      ))}
+                      {(() => {
+                        // Click-to-sort column headers. Same key clicked twice
+                        // flips direction; new key resets to descending.
+                        type Col = { key: typeof paperSortKey | null; label: string }
+                        const cols: Col[] = [
+                          { key: null, label: 'Market' },           // not meaningful to sort by question text
+                          { key: 'outcome', label: 'Outcome' },
+                          { key: 'status', label: 'Status' },
+                          { key: 'cost', label: 'Cost' },
+                          { key: 'pnl', label: 'P&L' },
+                          { key: 'daysHeld', label: 'Hold Time' },
+                          { key: 'category', label: 'Category' },
+                          { key: 'safety', label: 'Safety' },
+                          { key: null, label: '' },                  // actions column
+                        ]
+                        return cols.map((c, i) => {
+                          const active = c.key && paperSortKey === c.key
+                          const arrow = active ? (paperSortDir === 'asc' ? ' ▲' : ' ▼') : ''
+                          return (
+                            <th
+                              key={i}
+                              onClick={c.key ? () => {
+                                if (paperSortKey === c.key) {
+                                  setPaperSortDir(d => d === 'asc' ? 'desc' : 'asc')
+                                } else {
+                                  setPaperSortKey(c.key as typeof paperSortKey)
+                                  setPaperSortDir('desc')
+                                }
+                              } : undefined}
+                              style={{
+                                padding: '8px 12px', textAlign: 'left',
+                                fontSize: '0.6rem', fontWeight: 700,
+                                color: active ? '#a5d6ff' : '#6e7681',
+                                textTransform: 'uppercase',
+                                cursor: c.key ? 'pointer' : 'default',
+                                userSelect: 'none',
+                              }}
+                              title={c.key ? `Sort by ${c.label.toLowerCase()}` : undefined}
+                            >
+                              {c.label}{arrow}
+                            </th>
+                          )
+                        })
+                      })()}
                     </tr>
                   </thead>
                   <tbody>
-                    {[...paperPositions].sort((a, b) => b.placedAt - a.placedAt).map(pos => {
+                    {(() => {
+                      // Apply filter chip first, then sort by current key/direction
+                      const filtered = paperFilter === 'open'
+                        ? paperPositions.filter(p => p.status === 'open')
+                        : paperFilter === 'resolved'
+                          ? paperPositions.filter(p => p.status !== 'open')
+                          : paperPositions
+                      const sign = paperSortDir === 'asc' ? 1 : -1
+                      const valueOf = (p: PolymarketPosition): number | string => {
+                        switch (paperSortKey) {
+                          case 'placedAt':  return p.placedAt
+                          case 'cost':      return p.cost
+                          case 'pnl':       return p.pnl ?? -Infinity   // open positions sort last in desc
+                          case 'daysHeld':  return Math.floor((Date.now() - p.placedAt) / 86400_000)
+                          case 'safety':    return p.safetyScore
+                          case 'status':    return p.status    // string ordering: lost < open < won
+                          case 'category':  return p.category || ''
+                          case 'outcome':   return p.outcome || ''
+                          default:          return p.placedAt
+                        }
+                      }
+                      const sorted = [...filtered].sort((a, b) => {
+                        const va = valueOf(a)
+                        const vb = valueOf(b)
+                        if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * sign
+                        return String(va).localeCompare(String(vb)) * sign
+                      })
+                      return sorted
+                    })().map(pos => {
                       const daysHeld = Math.floor((Date.now() - pos.placedAt) / (1000 * 60 * 60 * 24))
                       const cancelPosition = async () => {
                         // Confirm before refunding — prevents fat-finger mistakes.
