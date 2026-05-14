@@ -342,8 +342,15 @@ export function PolymarketSection() {
   // Half Kelly default — slightly more aggressive sizing for $4 grow phase.
   // User picks Full or Quarter from the selector if they want to dial up/down.
   const [kellyMode, setKellyMode] = useState<KellyMode>('half')
-  const [bankroll, setBankroll] = useState<number>(500)
-  const [bankrollInput, setBankrollInput] = useState<string>('500')
+  // Header bankroll display (also drives Kelly sizing on opportunity
+  // cards). Initialized to 0 — the useEffect below syncs to the live
+  // Polymarket portfolio value as soon as paperPortfolio loads, which
+  // happens within ~1s of page mount via the auto-sync we wired up.
+  // User can still manually override by typing in the input box; their
+  // override persists until the next paperPortfolio refresh.
+  const [bankroll, setBankroll] = useState<number>(0)
+  const [bankrollInput, setBankrollInput] = useState<string>('0')
+  const [bankrollUserOverride, setBankrollUserOverride] = useState<boolean>(false)
 
   // Paper trades / analytics
   const [activeTab, setActiveTab] = useState<TabKey>('opportunities')
@@ -397,6 +404,22 @@ export function PolymarketSection() {
     loadPaperData()
     loadLiveTradingStatus()
   }, [fetchData])
+
+  // Auto-sync the header bankroll widget with the live Polymarket
+  // value (which paperPortfolio.bankroll now mirrors after our import-
+  // from-address flow reconciles it). Replaces the hardcoded $500
+  // default which was useless — it drove Kelly sizing for opportunity
+  // cards even when the user had pennies actually deposited. The
+  // override flag stops us from clobbering the user's manual edit if
+  // they typed a different number in the header input.
+  useEffect(() => {
+    if (bankrollUserOverride) return
+    const live = paperPortfolio?.bankroll
+    if (typeof live === 'number' && live >= 0) {
+      setBankroll(live)
+      setBankrollInput(live.toFixed(2))
+    }
+  }, [paperPortfolio?.bankroll, bankrollUserOverride])
 
   const loadLiveTradingStatus = async () => {
     try {
@@ -843,13 +866,54 @@ export function PolymarketSection() {
             <Settings style={{ width: 14, height: 14 }} />
           </button>
 
-          {/* Bankroll */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '8px', padding: '4px 10px' }}>
-            <DollarSign style={{ width: 12, height: 12, color: '#3fb950' }} />
-            <input type='number' value={bankrollInput}
-              onChange={e => { setBankrollInput(e.target.value); const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) setBankroll(val) }}
-              style={{ background: 'none', border: 'none', color: '#fff', fontSize: '0.75rem', fontWeight: 600, width: '80px', outline: 'none' }} placeholder="Bankroll" />
-            <button onClick={loadBalance} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6e7681', display: 'flex', alignItems: 'center', padding: '2px' }}>
+          {/* Bankroll — auto-syncs from your live Polymarket portfolio
+              value via the import-from-address flow. Manual edits set
+              the override flag so the auto-sync stops clobbering them
+              until you click the "reset to live" button. */}
+          <div
+            title={bankrollUserOverride
+              ? 'Manual override active — auto-sync paused. Click ↺ to resume tracking live Polymarket value.'
+              : `Live from Polymarket portfolio value. Updates on every Sync ${typeof paperPortfolio?.bankroll === 'number' ? `(currently $${paperPortfolio.bankroll.toFixed(2)})` : ''}.`}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '0.3rem',
+              backgroundColor: '#161b22',
+              border: `1px solid ${bankrollUserOverride ? 'rgba(240,136,62,0.4)' : '#30363d'}`,
+              borderRadius: '8px', padding: '4px 10px',
+            }}
+          >
+            <DollarSign style={{ width: 12, height: 12, color: bankrollUserOverride ? '#f0883e' : '#3fb950' }} />
+            <input
+              type='number'
+              value={bankrollInput}
+              onChange={e => {
+                setBankrollInput(e.target.value)
+                const val = parseFloat(e.target.value)
+                if (!isNaN(val) && val >= 0) {
+                  setBankroll(val)
+                  setBankrollUserOverride(true)  // pause auto-sync
+                }
+              }}
+              style={{ background: 'none', border: 'none', color: '#fff', fontSize: '0.75rem', fontWeight: 600, width: '80px', outline: 'none' }}
+              placeholder='Bankroll'
+            />
+            {bankrollUserOverride && (
+              <button
+                onClick={() => setBankrollUserOverride(false)}
+                title='Resume auto-sync from live Polymarket portfolio value'
+                style={{
+                  background: 'none', border: 'none', cursor: 'pointer',
+                  color: '#f0883e', fontSize: '0.7rem', fontWeight: 700,
+                  padding: '0 4px',
+                }}
+              >
+                ↺
+              </button>
+            )}
+            <button
+              onClick={loadBalance}
+              title='Refresh wallet balance (Polymarket + Gnosis + Polygon)'
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6e7681', display: 'flex', alignItems: 'center', padding: '2px' }}
+            >
               <Wallet style={{ width: 12, height: 12, animation: balanceLoading ? 'spin 1s linear infinite' : 'none' }} />
             </button>
           </div>
