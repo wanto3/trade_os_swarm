@@ -1,32 +1,47 @@
 'use client'
 
 /**
- * One-click portfolio import from a Polymarket wallet address.
+ * One-click portfolio import from a Polymarket wallet address, plus
+ * auto-sync every 5 min and a "Sync now" button once an address is saved.
  *
- * Replaces the screenshot+OCR flow for the common case where the user
- * has their address handy: paste it, click import, done. No vision
- * model burn, no manual review — Polymarket's public Data API IS the
- * source of truth.
+ * UX after first import:
+ *   - Saved address loaded on dashboard open
+ *   - One auto-sync runs in background if last sync > 5min ago
+ *   - A compact "💼 Synced 2m ago [🔄 Sync now]" strip stays visible
+ *     so the user can force-refresh without reopening the full panel
  *
- * Companion to portfolio-import.tsx (screenshot-based). Both buttons
- * live in the Paper Trades tab header. Address-based is the
- * recommended path; screenshot is the fallback for users who'd rather
- * not paste their wallet.
+ * No re-pasting the address ever. Disk wipes on Render still erase
+ * positions, but auto-sync re-populates them on the next page load
+ * within seconds.
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Wallet, RefreshCw, X, Check } from 'lucide-react'
 
 interface Props {
   onImported?: () => void
 }
 
+const AUTO_SYNC_INTERVAL_MS = 5 * 60_000
+
+function relativeTime(ms: number): string {
+  const dt = Date.now() - ms
+  if (dt < 30_000) return 'just now'
+  if (dt < 60_000) return `${Math.round(dt / 1000)}s ago`
+  if (dt < 3600_000) return `${Math.round(dt / 60_000)}m ago`
+  if (dt < 86400_000) return `${Math.round(dt / 3600_000)}h ago`
+  return `${Math.round(dt / 86400_000)}d ago`
+}
+
 export default function PortfolioImportFromAddress({ onImported }: Props) {
   const [open, setOpen] = useState(false)
   const [address, setAddress] = useState('')
   const [savedAddress, setSavedAddress] = useState<string | null>(null)
+  const [savedAt, setSavedAt] = useState<number | null>(null)
+  const [lastSyncAt, setLastSyncAt] = useState<number | null>(null)
   const [mode, setMode] = useState<'augment' | 'replace'>('replace')
   const [importing, setImporting] = useState(false)
+  const [autoSyncing, setAutoSyncing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<{
     inserted: number
@@ -34,20 +49,88 @@ export default function PortfolioImportFromAddress({ onImported }: Props) {
     resolved: number
     bankroll: number
   } | null>(null)
+  // Tick state used only to force a re-render so "Xm ago" updates live.
+  const [, setTick] = useState(0)
+  const autoSyncedThisMount = useRef(false)
 
-  // Prefill saved address on mount, so re-imports are zero-friction
+  // Load the saved address on first render so the "Sync now" strip can
+  // appear without the user opening the full panel. Auto-trigger a
+  // sync if it's been >5min since the last one.
   useEffect(() => {
-    if (!open) return
+    let cancelled = false
     fetch('/api/portfolio/import-from-address')
       .then(r => r.json())
       .then(j => {
-        if (j.success && j.address) {
-          setSavedAddress(j.address)
-          setAddress(j.address)
+        if (cancelled || !j.success || !j.address) return
+        setSavedAddress(j.address)
+        setAddress(j.address)
+        setSavedAt(j.savedAt ?? null)
+
+        // Auto-sync on mount if stale. Guard with a ref so the effect
+        // doesn't double-fire during dev-mode StrictMode double-render.
+        if (autoSyncedThisMount.current) return
+        autoSyncedThisMount.current = true
+        const last = j.savedAt ?? 0
+        if (Date.now() - last > AUTO_SYNC_INTERVAL_MS) {
+          syncNow(j.address, 'replace', /* silent */ true)
         }
       })
       .catch(() => { /* ignore */ })
-  }, [open])
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Recurring auto-sync while the page is open. Bypassed when a manual
+  // import is already in flight to avoid clobbering it.
+  useEffect(() => {
+    if (!savedAddress) return
+    const id = setInterval(() => {
+      if (importing || autoSyncing) return
+      syncNow(savedAddress, 'replace', /* silent */ true)
+    }, AUTO_SYNC_INTERVAL_MS)
+    return () => clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedAddress, importing, autoSyncing])
+
+  // Tick every 30s so the "Synced Xm ago" relative time stays current
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 30_000)
+    return () => clearInterval(id)
+  }, [])
+
+  const syncNow = useCallback(async (addr: string, syncMode: 'augment' | 'replace', silent = false) => {
+    if (!silent) setImporting(true)
+    else setAutoSyncing(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/portfolio/import-from-address', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address: addr, mode: syncMode }),
+      })
+      const json = await res.json()
+      if (!json.success) {
+        if (!silent) setError(json.error || 'Sync failed')
+        return
+      }
+      setLastSyncAt(Date.now())
+      setSavedAddress(addr)
+      if (!silent) {
+        setResult({
+          inserted: json.inserted,
+          skipped: json.skipped,
+          resolved: json.resolved,
+          bankroll: json.portfolio?.bankroll ?? 0,
+        })
+      }
+      onImported?.()
+    } catch (e) {
+      if (!silent) setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      if (!silent) setImporting(false)
+      else setAutoSyncing(false)
+    }
+  }, [onImported])
 
   const doImport = useCallback(async () => {
     const trimmed = address.trim()
@@ -55,34 +138,59 @@ export default function PortfolioImportFromAddress({ onImported }: Props) {
       setError('Address must be 0x + 40 hex chars. Find it on polymarket.com → profile.')
       return
     }
-    setImporting(true)
-    setError(null)
     setResult(null)
-    try {
-      const res = await fetch('/api/portfolio/import-from-address', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address: trimmed, mode }),
-      })
-      const json = await res.json()
-      if (!json.success) {
-        setError(json.error || 'Import failed')
-        return
-      }
-      setResult({
-        inserted: json.inserted,
-        skipped: json.skipped,
-        resolved: json.resolved,
-        bankroll: json.portfolio?.bankroll ?? 0,
-      })
-      setSavedAddress(trimmed)
-      onImported?.()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setImporting(false)
-    }
-  }, [address, mode, onImported])
+    await syncNow(trimmed, mode, /* silent */ false)
+  }, [address, mode, syncNow])
+
+  // Once an address is saved, the compact status strip replaces the
+  // big "Import" button — it shows last-sync time and a one-click
+  // refresh, with the full panel still reachable via "edit address".
+  if (!open && savedAddress) {
+    return (
+      <div style={{
+        display: 'inline-flex', alignItems: 'center', gap: '8px',
+        background: 'rgba(63,185,80,0.08)',
+        border: '1px solid rgba(63,185,80,0.3)',
+        borderRadius: '8px', padding: '0.4rem 0.7rem',
+        fontSize: '0.65rem', color: '#c9d1d9',
+      }}>
+        <Wallet size={11} color='#3fb950' />
+        <span style={{ color: '#3fb950', fontWeight: 700 }}>Live</span>
+        <span style={{ color: '#6e7681', fontFamily: 'monospace', fontSize: '0.6rem' }}>
+          {savedAddress.slice(0, 6)}…{savedAddress.slice(-4)}
+        </span>
+        <span style={{ color: '#6e7681' }}>
+          ·  Synced {lastSyncAt ? relativeTime(lastSyncAt) : (savedAt ? relativeTime(savedAt) : 'never')}
+        </span>
+        <button
+          onClick={() => syncNow(savedAddress, 'replace', /* silent */ false)}
+          disabled={importing || autoSyncing}
+          title='Force a re-sync from Polymarket now (bypasses the 5-min auto-sync cycle)'
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: '4px',
+            background: importing || autoSyncing ? 'rgba(63,185,80,0.06)' : 'rgba(63,185,80,0.18)',
+            border: '1px solid rgba(63,185,80,0.4)',
+            borderRadius: '5px', padding: '3px 8px',
+            fontSize: '0.6rem', fontWeight: 700, color: '#3fb950',
+            cursor: importing || autoSyncing ? 'not-allowed' : 'pointer',
+          }}
+        >
+          <RefreshCw size={9} style={importing || autoSyncing ? { animation: 'spin 1s linear infinite' } : undefined} />
+          {importing ? 'Syncing…' : autoSyncing ? 'Auto-syncing…' : 'Sync now'}
+        </button>
+        <button
+          onClick={() => setOpen(true)}
+          title='Change saved address or import options'
+          style={{
+            background: 'none', border: 'none', color: '#6e7681',
+            cursor: 'pointer', fontSize: '0.58rem', textDecoration: 'underline',
+          }}
+        >
+          edit
+        </button>
+      </div>
+    )
+  }
 
   if (!open) {
     return (
