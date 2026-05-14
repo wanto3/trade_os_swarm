@@ -34,6 +34,7 @@ import {
   clearAllPositions,
   resolvePosition,
   getPortfolio,
+  setBankroll,
   type ImportedPositionInput,
 } from '@/lib/services/polymarket-portfolio.service'
 
@@ -71,6 +72,30 @@ async function fetchPolymarketPositions(address: string): Promise<LivePosition[]
     throw new Error('Unexpected response shape from Polymarket Data API')
   }
   return arr as LivePosition[]
+}
+
+/**
+ * Fetch the user's total portfolio value from Polymarket. This is the
+ * number the user sees on their Polymarket profile — free USDC + sum of
+ * open position current values. We use it to reconcile our paper
+ * bankroll so the displayed balance matches Polymarket exactly.
+ *
+ * Returns null on failure so the caller can fall back to addImportedPosition's
+ * default bankroll math (not perfect, but acceptable).
+ */
+async function fetchPolymarketValue(address: string): Promise<number | null> {
+  try {
+    const res = await fetch(`https://data-api.polymarket.com/value?user=${address}`, {
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!res.ok) return null
+    const arr = await res.json()
+    if (!Array.isArray(arr) || arr.length === 0) return null
+    const v = Number(arr[0]?.value)
+    return isFinite(v) ? v : null
+  } catch {
+    return null
+  }
 }
 
 async function savePersistedAddress(address: string): Promise<void> {
@@ -204,12 +229,49 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Reconcile bankroll with Polymarket's actual portfolio value.
+    // Without this step, the displayed balance was wrong: addImportedPosition
+    // decrements from the $1000 default bankroll on each import, leaving
+    // ~$988 instead of the user's real $4.12. Fix: pull Polymarket's
+    // own portfolio value (free USDC + open-position current value, the
+    // same number the user sees on polymarket.com) and split it into
+    //   bankroll (free)        = polymarketValue - sumOpenCurrentValue
+    //   open position values   = sumOpenCurrentValue
+    // so the dashboard total = polymarketValue, matching Polymarket exactly.
+    let polymarketValue: number | null = null
+    let reconcileNote = ''
+    try {
+      polymarketValue = await fetchPolymarketValue(address)
+      if (polymarketValue !== null) {
+        // Sum current value of OPEN positions only — won/lost positions
+        // either redeem to free USDC or are gone, neither contributes to
+        // "locked-in-positions" today.
+        const lockedValue = livePositions
+          .filter(p => isFinite(Number(p.curPrice)) && Number(p.curPrice) > 0.005 && Number(p.curPrice) < 0.995)
+          .reduce((acc, p) => acc + (Number(p.size) * Number(p.curPrice)), 0)
+        const freeUsdc = Math.max(0, polymarketValue - lockedValue)
+
+        // First import (we replaced everything and starting was the $1000
+        // default) — also lock starting bankroll to the live value so the
+        // compounding-growth chart has a meaningful baseline.
+        const before = getPortfolio()
+        const isFirstReplace = mode === 'replace' && before.startingBankroll === 1000
+        setBankroll(freeUsdc, isFirstReplace)
+        reconcileNote = `Bankroll set to $${freeUsdc.toFixed(2)} (Polymarket value $${polymarketValue.toFixed(2)} − $${lockedValue.toFixed(2)} locked in ${livePositions.filter(p => Number(p.curPrice) > 0.005 && Number(p.curPrice) < 0.995).length} open positions)`
+        console.log(`[ImportFromAddress] ${reconcileNote}`)
+      }
+    } catch (e) {
+      console.warn('[ImportFromAddress] bankroll reconcile failed (positions imported anyway):', e instanceof Error ? e.message : e)
+    }
+
     return NextResponse.json({
       success: true,
       address,
       inserted,
       skipped,
       resolved: resolvedCount,
+      polymarketValue,
+      reconcileNote,
       portfolio: getPortfolio(),
       ...(skippedDetails.length > 0 ? { skippedDetails } : {}),
     })
