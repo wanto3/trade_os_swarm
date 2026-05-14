@@ -43,6 +43,22 @@ export const dynamic = 'force-dynamic'
 const ACCOUNT_FILE = path.resolve(process.cwd(), 'data/polymarket-account.json')
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/
 
+/**
+ * Default Polymarket address — used as a fallback when no address has
+ * been saved to disk yet. Single-user app; on Render's ephemeral disk
+ * the saved address gets wiped on every deploy, so without this
+ * fallback the user would have to re-paste after every push. The
+ * address is already public on-chain (read-only access from this
+ * endpoint anyway), so no security risk to hardcode.
+ *
+ * Override on a different machine / different wallet by setting the
+ * POLYMARKET_WALLET_ADDRESS env var.
+ */
+const DEFAULT_ADDRESS = (
+  process.env.POLYMARKET_WALLET_ADDRESS
+  || '0x4523A57E1D1D674c937c1e85C1e496fA60FD9146'
+).toLowerCase()
+
 interface LivePosition {
   conditionId: string
   asset?: string
@@ -292,6 +308,19 @@ export async function GET() {
   try {
     const raw = await fs.readFile(ACCOUNT_FILE, 'utf-8').catch(() => null)
     if (!raw) {
+      // No persisted address — fall back to the hardcoded/env-var
+      // default so the dashboard auto-syncs without requiring a paste
+      // after every Render redeploy (ephemeral disk wipes the json
+      // file each time). isDefault=true signals the frontend that
+      // this came from the fallback, not a user-confirmed save.
+      if (DEFAULT_ADDRESS && ADDRESS_RE.test(DEFAULT_ADDRESS)) {
+        return NextResponse.json({
+          success: true,
+          address: DEFAULT_ADDRESS,
+          savedAt: null,
+          isDefault: true,
+        })
+      }
       return NextResponse.json({ success: true, address: null })
     }
     const parsed = JSON.parse(raw) as { address?: string; savedAt?: number }
