@@ -1,8 +1,13 @@
 import { NextResponse } from 'next/server'
 
 const POLYMARKET_API_KEY = process.env.POLYMARKET_API_KEY
-const WALLET = process.env.POLYMARKET_WALLET || '0x4523a57e1d1d674c937c1e85C1e496fa60fd9146'
-const USDT_POLYGON = '0xdAC17F958D2ee523a2206206994597C13D831ec7'
+const WALLET = process.env.POLYMARKET_WALLET_ADDRESS
+  || process.env.POLYMARKET_WALLET
+  || '0x4523a57e1d1d674c937c1e85C1e496fa60fd9146'
+// Polymarket settles in USDC.e on Polygon (the bridged-USDC contract).
+// Previous version queried USDT — wrong token, always returned 0.
+const USDC_POLYGON_E = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'  // USDC.e bridged
+const USDC_POLYGON_NATIVE = '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359'  // Newer native USDC (some users)
 const USDC_GNOSIS = '0x2aC5e8a11415F16b6047C27aAEb94FdbB411C00C'
 
 const PAD = WALLET.toLowerCase().replace('0x', '')
@@ -72,8 +77,11 @@ export async function GET() {
     fetchPolymarketData('trades'),
   ])
 
-  // Try to get on-chain balances
-  const [gnosisUSDC, polygonUSDT] = await Promise.all([
+  // Try to get on-chain balances. Polymarket-relevant USDC lives on
+  // Polygon (USDC.e bridged is what most Polymarket users hold; some
+  // newer users have native USDC). Check both, sum, and that's the
+  // free cash sitting on top of any open-position values.
+  const [gnosisUSDC, polygonUSDCe, polygonUSDCnative] = await Promise.all([
     (async () => {
       for (const rpc of GNOSIS_RPCS) {
         const bal = await getTokenBalance(rpc, USDC_GNOSIS)
@@ -83,10 +91,17 @@ export async function GET() {
     })(),
     (async () => {
       for (const rpc of POLYGON_RPCS) {
-        const bal = await getTokenBalance(rpc, USDT_POLYGON)
+        const bal = await getTokenBalance(rpc, USDC_POLYGON_E)
         if (bal > 0) return { balance: bal, chain: 'polygon', rpc }
       }
       return { balance: 0, chain: 'polygon', rpc: 'unavailable' }
+    })(),
+    (async () => {
+      for (const rpc of POLYGON_RPCS) {
+        const bal = await getTokenBalance(rpc, USDC_POLYGON_NATIVE)
+        if (bal > 0) return { balance: bal, chain: 'polygon-native', rpc }
+      }
+      return { balance: 0, chain: 'polygon-native', rpc: 'unavailable' }
     })(),
   ])
 
@@ -94,7 +109,8 @@ export async function GET() {
     (sum, p) => sum + (p.balance || 0), 0
   )
 
-  const totalUSD = Math.round((polymarketBalance + gnosisUSDC.balance + polygonUSDT.balance) * 100) / 100
+  const polygonUSDCTotal = polygonUSDCe.balance + polygonUSDCnative.balance
+  const totalUSD = Math.round((polymarketBalance + gnosisUSDC.balance + polygonUSDCTotal) * 100) / 100
 
   return NextResponse.json({
     success: true,
@@ -102,14 +118,23 @@ export async function GET() {
     polymarket: {
       positions: (positions as unknown[]).length,
       trades: (trades as unknown[]).length,
-      balanceUSD: Math.round(polymarketBalance * 100) / 100
+      balanceUSD: Math.round(polymarketBalance * 100) / 100,
     },
     chains: {
       gnosisUSDC: Math.round(gnosisUSDC.balance * 100) / 100,
-      polygonUSDT: Math.round(polygonUSDT.balance * 100) / 100,
+      polygonUSDCe: Math.round(polygonUSDCe.balance * 100) / 100,
+      polygonUSDCNative: Math.round(polygonUSDCnative.balance * 100) / 100,
+      // Keep legacy key alive for any older consumer of this endpoint —
+      // it's the SUM of both USDC variants on Polygon now, since USDT
+      // was always 0 (wrong token).
+      polygonUSDT: Math.round(polygonUSDCTotal * 100) / 100,
     },
     totalUSD,
+    // Free USDC the user has access to outside open positions. This is
+    // what gets added to Polymarket's /value endpoint to compute the
+    // user's true total bankroll (cash + positions).
+    freeUSDC: Math.round(polygonUSDCTotal * 100) / 100,
     recommendedBankroll: Math.round(totalUSD * 0.3 * 100) / 100,
-    timestamp: Date.now()
+    timestamp: Date.now(),
   })
 }

@@ -117,6 +117,65 @@ async function fetchPolymarketValue(address: string): Promise<number | null> {
   }
 }
 
+/**
+ * Polymarket's /value endpoint returns ONLY the mark-to-market value of
+ * open positions. Free USDC sitting in the user's wallet (deposited but
+ * not deployed in positions) isn't included. To get the user's true
+ * total bankroll, we also need to query the USDC balance on Polygon
+ * directly at the user's address.
+ *
+ * Returns 0 on any failure — the bankroll math degrades to "positions
+ * only" which matches the old behavior.
+ */
+async function fetchFreeUSDC(address: string): Promise<number> {
+  // Polymarket settles in USDC.e (bridged) — most users have this.
+  // Newer accounts may have native USDC. Query both at the user's EOA.
+  const USDC_POLYGON_E = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'
+  const USDC_POLYGON_NATIVE = '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359'
+  const POLYGON_RPCS = [
+    'https://rpc.ankr.com/polygon',
+    'https://polygon.drpc.org',
+    'https://polygon.blockpi.network/v1/rpc/public',
+  ]
+  const PAD = address.toLowerCase().replace(/^0x/, '')
+  const balanceOfData = '0x70a08231' + '0'.repeat(24) + PAD
+
+  async function balanceOf(rpc: string, token: string): Promise<number> {
+    try {
+      const res = await fetch(rpc, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'eth_call',
+          params: [{ to: token, data: balanceOfData }, 'latest'],
+          id: 1,
+        }),
+        signal: AbortSignal.timeout(6000),
+      })
+      if (!res.ok) return 0
+      const data = await res.json() as { result?: string }
+      if (!data.result || data.result === '0x' || data.result === '0x0') return 0
+      // USDC has 6 decimals on Polygon
+      return Number(BigInt(data.result)) / 1e6
+    } catch {
+      return 0
+    }
+  }
+
+  let total = 0
+  for (const token of [USDC_POLYGON_E, USDC_POLYGON_NATIVE]) {
+    for (const rpc of POLYGON_RPCS) {
+      const bal = await balanceOf(rpc, token)
+      if (bal > 0) {
+        total += bal
+        break  // got a successful read for this token, no need to try other RPCs
+      }
+    }
+  }
+  return total
+}
+
 async function savePersistedAddress(address: string): Promise<void> {
   try {
     await fs.mkdir(path.dirname(ACCOUNT_FILE), { recursive: true })
@@ -267,21 +326,31 @@ export async function POST(request: NextRequest) {
     // cap keeps suggested stakes within reason (e.g. 15% of $4 = $0.60,
     // not the whole stack).
     let polymarketValue: number | null = null
+    let freeUsdc = 0
     let reconcileNote = ''
     try {
-      polymarketValue = await fetchPolymarketValue(address)
-      if (polymarketValue !== null) {
+      // Fetch in parallel: positions value + free cash on-chain. Both
+      // contribute to the real bankroll the user sees on Polymarket.
+      const [pmValue, cash] = await Promise.all([
+        fetchPolymarketValue(address),
+        fetchFreeUSDC(address),
+      ])
+      polymarketValue = pmValue
+      freeUsdc = cash
+
+      if (polymarketValue !== null || freeUsdc > 0) {
+        const positionsValue = polymarketValue ?? 0
+        const trueTotalBankroll = positionsValue + freeUsdc
+
         const before = getPortfolio()
         // Reset startingBankroll when it looks broken — either still at
-        // the $1000 default (never imported) OR stuck at the tiny
-        // freeUsdc value from a previous version of this endpoint that
-        // computed bankroll incorrectly. Without this reset, the
-        // "Started: $0.00017" footer on the dashboard never updates
-        // back to a sensible baseline.
+        // the $1000 default (never imported) OR stuck at the tiny value
+        // from a previous version of this endpoint that computed
+        // bankroll incorrectly.
         const startingLooksBroken = before.startingBankroll === 1000 || before.startingBankroll < 0.01
         const shouldResetStarting = mode === 'replace' && startingLooksBroken
-        setBankroll(polymarketValue, shouldResetStarting)
-        reconcileNote = `Bankroll set to $${polymarketValue.toFixed(2)} (live Polymarket portfolio value, matches polymarket.com headline)`
+        setBankroll(trueTotalBankroll, shouldResetStarting)
+        reconcileNote = `Bankroll set to $${trueTotalBankroll.toFixed(2)} = $${positionsValue.toFixed(2)} open positions + $${freeUsdc.toFixed(2)} free USDC on-chain (matches polymarket.com cash + portfolio total)`
         console.log(`[ImportFromAddress] ${reconcileNote}${shouldResetStarting ? ` (also reset startingBankroll from $${before.startingBankroll})` : ''}`)
       }
     } catch (e) {
@@ -345,6 +414,7 @@ export async function POST(request: NextRequest) {
       skipped,
       resolved: resolvedCount,
       polymarketValue,
+      freeUsdc,
       reconcileNote,
       portfolio: getPortfolio(),
       ...(skippedDetails.length > 0 ? { skippedDetails } : {}),
