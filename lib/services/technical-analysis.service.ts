@@ -83,29 +83,104 @@ const MOMENTUM_BULL = 55
 const MOMENTUM_BEAR = 45
 const SIGNAL_MARGIN = 2 // buyScore must exceed sellScore by this much
 
-async function fetchKlines(symbol: string, interval: string, limit = 100): Promise<Kline[]> {
+/**
+ * Fetch OHLC klines for `symbol` with a fallback chain:
+ *   1. CryptoCompare  — primary, free, reliable shape
+ *   2. Coinbase       — fallback when CryptoCompare returns an error
+ *                       shape (rate-limited / IP-blocked from Render)
+ *
+ * Binance is intentionally NOT in the chain — its API returns HTTP 403
+ * from data-center IPs (Render, AWS, etc.) due to geo / abuse policy.
+ *
+ * Bug history: production `/api/prices?symbol=BTCUSDT` started returning
+ * `Cannot read properties of undefined (reading 'map')` because the old
+ * code only checked `res.ok` (HTTP status) before accessing
+ * `json.Data.Data` — CryptoCompare returns HTTP 200 with
+ * `{"Response":"Error",...}` when rate-limited, so `json.Data` was
+ * undefined and the .map() crashed. Two-layer fix: validate
+ * `json.Response === 'Success'` before parsing, AND fall back to
+ * Coinbase when the primary source fails.
+ */
+async function fetchKlines(symbol: string, interval: string, _limit = 100): Promise<Kline[]> {
   const cfg = SYMBOL_MAP[symbol]
   if (!cfg) throw new Error(`Unknown symbol: ${symbol}`)
   const intCfg = INTERVAL_MAP[interval] || INTERVAL_MAP['1h']
-  const url = `https://min-api.cryptocompare.com/data/v2/histo${intCfg.cc}?fsym=${cfg.cc}&tsym=USDT&limit=${intCfg.limit}&aggregate=1`
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 10_000)
+  const errors: string[] = []
+
+  // 1. CryptoCompare
   try {
-    const res = await fetch(url, { signal: controller.signal })
-    if (!res.ok) throw new Error(`CryptoCompare API error: ${res.status}`)
-    const json = await res.json() as { Data: { Data: CryptoCompareKline[] } }
-    return json.Data.Data.map(k => ({
-      openTime: k.time * 1000,
-      open: k.open,
-      high: k.high,
-      low: k.low,
-      close: k.close,
-      volume: k.volumefrom,
-      closeTime: (k.time + (intCfg.cc === 'hour' ? 3600 : intCfg.cc === 'minute' ? 60 : 86400)) * 1000,
-    }))
-  } finally {
-    clearTimeout(timeout)
+    const url = `https://min-api.cryptocompare.com/data/v2/histo${intCfg.cc}?fsym=${cfg.cc}&tsym=USDT&limit=${intCfg.limit}&aggregate=1`
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10_000)
+    try {
+      const res = await fetch(url, { signal: controller.signal })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const json = await res.json() as { Response?: string; Message?: string; Data?: { Data?: CryptoCompareKline[] } }
+      // Validate API-level success — CryptoCompare returns HTTP 200 + a
+      // {"Response":"Error"} envelope when rate-limited or IP-blocked.
+      if (json.Response !== 'Success') {
+        throw new Error(`API error: ${json.Message || 'no message'}`)
+      }
+      const arr = json.Data?.Data
+      if (!Array.isArray(arr) || arr.length === 0) {
+        throw new Error('empty Data.Data array')
+      }
+      return arr.map(k => ({
+        openTime: k.time * 1000,
+        open: k.open,
+        high: k.high,
+        low: k.low,
+        close: k.close,
+        volume: k.volumefrom,
+        closeTime: (k.time + (intCfg.cc === 'hour' ? 3600 : intCfg.cc === 'minute' ? 60 : 86400)) * 1000,
+      }))
+    } finally {
+      clearTimeout(timeout)
+    }
+  } catch (e) {
+    errors.push(`CryptoCompare: ${e instanceof Error ? e.message : String(e)}`)
   }
+
+  // 2. Coinbase fallback
+  // Granularity in seconds: 60, 300, 900, 3600, 21600, 86400
+  const cbGranularity: Record<string, number> = {
+    '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 21600, '1d': 86400,
+  }
+  try {
+    const gran = cbGranularity[interval] || 3600
+    const url = `https://api.exchange.coinbase.com/products/${cfg.cc}-USD/candles?granularity=${gran}`
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10_000)
+    try {
+      const res = await fetch(url, { signal: controller.signal, headers: { 'User-Agent': 'trade-os-swarm/1.0' } })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      // Coinbase returns array of [time, low, high, open, close, volume]
+      const arr = await res.json() as Array<[number, number, number, number, number, number]>
+      if (!Array.isArray(arr) || arr.length === 0) {
+        throw new Error('empty candles array')
+      }
+      // Coinbase returns newest first; reverse to oldest-first to match
+      // the downstream indicator code's expectation.
+      const klines = arr.reverse().map(c => ({
+        openTime: c[0] * 1000,
+        open: c[3],
+        high: c[2],
+        low: c[1],
+        close: c[4],
+        volume: c[5],
+        closeTime: (c[0] + gran) * 1000,
+      }))
+      return klines
+    } finally {
+      clearTimeout(timeout)
+    }
+  } catch (e) {
+    errors.push(`Coinbase: ${e instanceof Error ? e.message : String(e)}`)
+  }
+
+  // Both sources failed — surface the chain so callers can see what
+  // broke instead of getting an opaque ".map of undefined".
+  throw new Error(`All kline sources failed: ${errors.join(' · ')}`)
 }
 
 async function fetchPriceAndChange(symbol: string): Promise<{ price: number; change24h: number }> {
