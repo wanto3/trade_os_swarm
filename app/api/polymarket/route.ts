@@ -1180,10 +1180,17 @@ async function runFullPipeline(): Promise<any> {
     // Slow (~60-120s for 25 markets) but deepest reasoning. Auto-fallback
     // chain on failure: Opus → Sonnet → Haiku → Groq so we never end up
     // with 0 results.
-    // Override with SCREENING_MODEL=sonnet | haiku | groq for faster paths.
+    // Override with SCREENING_MODEL=sonnet | haiku | groq for faster paths,
+    // OR via the dashboard's LLM toggle (writes data/llm-preference.json).
+    // The disk preference wins over the env var so the user can swap
+    // providers from the dashboard without redeploying.
     const marketIds = selectedForAnalysis.map(rec => rec.market.id)
     const screeningInputs = toScreeningInputs(marketsForAnalysis, marketIds, evidenceMap)
-    const screeningModel = (process.env.SCREENING_MODEL as 'opus' | 'sonnet' | 'haiku' | 'groq') || 'opus'
+    const { loadPreferredModel } = await import('@/lib/services/llm-preference.service')
+    const userPref = await loadPreferredModel()
+    const screeningModel = userPref
+      ?? (process.env.SCREENING_MODEL as 'opus' | 'sonnet' | 'haiku' | 'groq' | undefined)
+      ?? 'opus'
     const screeningResults = await screenMarketsBatch(screeningInputs, screeningModel)
 
     // Build llmResults keyed by question (downstream code expects this shape).

@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import PortfolioImport from './portfolio-import'
 import PortfolioImportFromAddress from './portfolio-import-from-address'
+import LLMModelSelector from './llm-model-selector'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -865,6 +866,11 @@ export function PolymarketSection() {
           >
             <Settings style={{ width: 14, height: 14 }} />
           </button>
+
+          {/* AI engine selector — collapsed by default to a tiny chip.
+              Stays out of the way until the user opens it to switch
+              providers (Max sub → Anthropic API → Groq, etc.) */}
+          <LLMModelSelector />
 
           {/* Bankroll — auto-syncs from your live Polymarket portfolio
               value via the import-from-address flow. Manual edits set
