@@ -93,6 +93,149 @@ async function fetchPolymarketPositions(address: string): Promise<LivePosition[]
   return arr as LivePosition[]
 }
 
+interface ActivityEntry {
+  type: 'TRADE' | 'REDEEM' | string
+  side?: 'BUY' | 'SELL' | string
+  conditionId: string
+  outcome?: string
+  outcomeIndex?: number
+  title?: string
+  size?: number
+  usdcSize?: number
+  price?: number
+  timestamp?: number
+  slug?: string
+  eventSlug?: string
+}
+
+async function fetchPolymarketActivity(address: string): Promise<ActivityEntry[]> {
+  // Pull all trade + redeem events the user has done. Polymarket Data
+  // API caps at 500 per request — plenty for normal use; very-heavy
+  // traders may need pagination later.
+  const url = `https://data-api.polymarket.com/activity?user=${address}&limit=500`
+  const res = await fetch(url, { signal: AbortSignal.timeout(15_000) })
+  if (!res.ok) {
+    // Non-fatal — positions still import without activity history.
+    return []
+  }
+  const arr = await res.json()
+  if (!Array.isArray(arr)) return []
+  return arr as ActivityEntry[]
+}
+
+/**
+ * Roll up activity into synthetic "historically resolved" positions.
+ *
+ * Why: Polymarket's /positions endpoint only returns currently-held
+ * positions. Once a user redeems a winning bet (cashes out), the
+ * position is gone from /positions — and any pre-resolution SELLs
+ * also remove the position. Result: the user's Resolved tab shows
+ * only their LOSSES (which stay in /positions as curPrice=0 entries),
+ * making the dashboard look like every bet they've made has lost.
+ *
+ * Fix: walk the activity feed (BUY/SELL/REDEEM), group by conditionId,
+ * compute realized PnL, and emit a synthetic resolved position per
+ * fully-closed market the user has touched. The currently-held
+ * positions (from /positions) take precedence — we skip any
+ * conditionId still actively held.
+ */
+interface SyntheticResolvedPosition {
+  question: string
+  outcome: string
+  entryPrice: number
+  quantity: number
+  cost: number
+  payout: number
+  pnl: number
+  resolvedStatus: 'won' | 'lost'
+  url?: string
+  resolvedAt?: number
+}
+
+function rollUpActivity(
+  activities: ActivityEntry[],
+  currentlyHeldConditionIds: Set<string>,
+): SyntheticResolvedPosition[] {
+  // Group by conditionId. Each conditionId = one market the user touched.
+  type Bucket = {
+    question: string
+    slug?: string
+    eventSlug?: string
+    buyUsdc: number       // total $ spent on BUYs across all outcomes
+    buyShares: number     // total shares bought
+    sellUsdc: number      // total $ received from SELLs
+    redeemUsdc: number    // total $ from REDEEMs (winning side cash-outs)
+    redeemShares: number  // total shares redeemed (= winning shares)
+    primaryOutcome: string // first non-empty outcome seen (for display)
+    lastTimestamp: number
+  }
+  const buckets = new Map<string, Bucket>()
+
+  for (const a of activities) {
+    if (!a.conditionId) continue
+    let b = buckets.get(a.conditionId)
+    if (!b) {
+      b = {
+        question: a.title || '',
+        slug: a.slug,
+        eventSlug: a.eventSlug,
+        buyUsdc: 0,
+        buyShares: 0,
+        sellUsdc: 0,
+        redeemUsdc: 0,
+        redeemShares: 0,
+        primaryOutcome: '',
+        lastTimestamp: 0,
+      }
+      buckets.set(a.conditionId, b)
+    }
+    if (a.title && !b.question) b.question = a.title
+    if (a.outcome && !b.primaryOutcome) b.primaryOutcome = a.outcome
+    if (a.timestamp && a.timestamp > b.lastTimestamp) b.lastTimestamp = a.timestamp
+
+    const usdc = Number(a.usdcSize) || 0
+    const size = Number(a.size) || 0
+
+    if (a.type === 'TRADE' && a.side === 'BUY') {
+      b.buyUsdc += usdc
+      b.buyShares += size
+    } else if (a.type === 'TRADE' && a.side === 'SELL') {
+      b.sellUsdc += usdc
+    } else if (a.type === 'REDEEM') {
+      b.redeemUsdc += usdc
+      b.redeemShares += size
+    }
+  }
+
+  const synthetic: SyntheticResolvedPosition[] = []
+  buckets.forEach((b, conditionId) => {
+    if (currentlyHeldConditionIds.has(conditionId)) return     // /positions handles this one
+    if (b.buyShares <= 0) return                                // no buys = nothing meaningful
+    if (b.redeemUsdc === 0 && b.sellUsdc === 0) return          // not closed out yet
+
+    const cost = b.buyUsdc - b.sellUsdc + 0  // net out-of-pocket after partial sells
+    const payout = b.redeemUsdc                // winnings received
+    const pnl = payout - cost
+    // entry price = average price per share across BUYs
+    const entryPrice = b.buyShares > 0 ? Math.min(0.99, Math.max(0.01, b.buyUsdc / b.buyShares)) : 0.5
+    const status: 'won' | 'lost' = pnl >= 0 ? 'won' : 'lost'
+
+    synthetic.push({
+      question: b.question || conditionId.slice(0, 16),
+      outcome: b.primaryOutcome || 'Yes',
+      entryPrice,
+      quantity: b.buyShares,
+      cost,
+      payout,
+      pnl,
+      resolvedStatus: status,
+      url: b.eventSlug ? `https://polymarket.com/event/${b.eventSlug}` : (b.slug ? `https://polymarket.com/event/${b.slug}` : undefined),
+      resolvedAt: b.lastTimestamp ? b.lastTimestamp * 1000 : undefined,
+    })
+  })
+  return synthetic
+}
+
 /**
  * Fetch the user's total portfolio value from Polymarket. This is the
  * number the user sees on their Polymarket profile — free USDC + sum of
@@ -212,10 +355,20 @@ export async function POST(request: NextRequest) {
     }
     const address = rawAddr.toLowerCase()
 
-    // Pull live positions
+    // Pull live positions + activity feed in parallel. Activity is
+    // what surfaces historically-resolved wins (REDEEM events) and
+    // pre-resolution sells — neither shows up in /positions after the
+    // user cashes out, so without /activity the dashboard's Resolved
+    // tab only ever shows losses.
     let livePositions: LivePosition[]
+    let activity: ActivityEntry[] = []
     try {
-      livePositions = await fetchPolymarketPositions(address)
+      const [posResult, actResult] = await Promise.all([
+        fetchPolymarketPositions(address),
+        fetchPolymarketActivity(address),
+      ])
+      livePositions = posResult
+      activity = actResult
     } catch (e) {
       return NextResponse.json({
         success: false,
@@ -309,6 +462,60 @@ export async function POST(request: NextRequest) {
         const settled = resolvePosition(created.id, mapped)
         if (settled) resolvedCount++
       }
+    }
+
+    // Backfill historically-resolved positions from the activity feed.
+    // /positions only returns currently-held positions; once a user
+    // redeems a win or sells out before resolution, the position is
+    // gone from /positions. Without this step the Resolved tab would
+    // only ever show LOSSES (which remain in /positions as curPrice=0).
+    let historicalAdded = 0
+    let historicalWon = 0
+    let historicalLost = 0
+    try {
+      // Build the set of conditionIds we've already imported from /positions
+      // so we don't double-count.
+      const heldConditionIds = new Set<string>(
+        livePositions.map(p => String(p.conditionId).toLowerCase()).filter(Boolean)
+      )
+      const synthetic = rollUpActivity(activity, heldConditionIds)
+      for (const s of synthetic) {
+        if (!s.question || s.question.length < 5) continue
+        if (!isFinite(s.entryPrice) || s.entryPrice <= 0 || s.entryPrice >= 1) continue
+        if (!isFinite(s.quantity) || s.quantity <= 0) continue
+
+        const input: ImportedPositionInput = {
+          question: s.question,
+          outcome: 'Yes',  // imported side — server stores actual outcome via setExtension later
+          entryPrice: s.entryPrice,
+          quantity: s.quantity,
+          url: s.url,
+          placedAtIso: s.resolvedAt ? new Date(s.resolvedAt - 24 * 3600_000).toISOString() : undefined,
+          note: `Historical from /activity (${s.resolvedStatus === 'won' ? 'redeemed win' : 'closed at loss'}): cost $${s.cost.toFixed(2)}, payout $${s.payout.toFixed(2)}, pnl ${s.pnl >= 0 ? '+' : ''}$${s.pnl.toFixed(2)}`,
+          // No live price — already resolved
+          currentMarketPrice: s.resolvedStatus === 'won' ? 1 : 0,
+          livePnl: s.pnl,
+        }
+        const created = await addImportedPosition(input)
+        if (!created) continue
+        historicalAdded++
+
+        // Immediately mark as resolved. 'yes' = the side they held won;
+        // 'no' = it lost. Our outcome='Yes' field above always means
+        // "the side they held" regardless of the literal market label,
+        // so this maps cleanly.
+        const resolution = s.resolvedStatus === 'won' ? 'yes' : 'no'
+        const settled = resolvePosition(created.id, resolution)
+        if (settled) {
+          if (s.resolvedStatus === 'won') historicalWon++
+          else historicalLost++
+        }
+      }
+      if (historicalAdded > 0) {
+        console.log(`[ImportFromAddress] Historical backfill from /activity: ${historicalAdded} resolved positions (${historicalWon}W / ${historicalLost}L)`)
+      }
+    } catch (e) {
+      console.warn('[ImportFromAddress] historical backfill failed (non-fatal):', e instanceof Error ? e.message : e)
     }
 
     // Reconcile bankroll with Polymarket's actual portfolio value. This
@@ -413,6 +620,11 @@ export async function POST(request: NextRequest) {
       inserted,
       skipped,
       resolved: resolvedCount,
+      historicalBackfill: {
+        added: historicalAdded,
+        wins: historicalWon,
+        losses: historicalLost,
+      },
       polymarketValue,
       freeUsdc,
       reconcileNote,
