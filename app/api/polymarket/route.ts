@@ -905,26 +905,40 @@ async function runFullPipeline(): Promise<any> {
       `https://gamma-api.polymarket.com/markets?${qs}`,
       { headers: { 'Accept': 'application/json' }, cache: 'no-store' },
     )
-    const [volumeRes, v24p0, v24p1, v24p2, endDateRes] = await Promise.all([
-      // Lifetime-volume order (one page enough — deep markets dominate)
+    const [volumeRes, v24p0, v24p1, v24p2, v24p3, v24p4, endDateRes, liqRes, compRes] = await Promise.all([
+      // Lifetime-volume order — captures deep markets with sustained activity
       gammaFetch('closed=false&accepting_orders=true&order=volumeNum&ascending=false&limit=100'),
-      // 24h-volume order paginated to capture short-horizon markets
+      // 24h-volume order paginated 5-deep — covers up to position 500 by
+      // 24h volume. Was 3 pages, extending to 5 to surface more
+      // mid-tier sports / esports / niche markets that get pushed past
+      // 300 by big political markets at the top.
       gammaFetch('closed=false&accepting_orders=true&order=volume24hr&ascending=false&limit=100&offset=0'),
       gammaFetch('closed=false&accepting_orders=true&order=volume24hr&ascending=false&limit=100&offset=100'),
       gammaFetch('closed=false&accepting_orders=true&order=volume24hr&ascending=false&limit=100&offset=200'),
-      // Closing-soon order (captures imminent low-volume markets)
+      gammaFetch('closed=false&accepting_orders=true&order=volume24hr&ascending=false&limit=100&offset=300'),
+      gammaFetch('closed=false&accepting_orders=true&order=volume24hr&ascending=false&limit=100&offset=400'),
+      // Closing-soon order — captures imminent low-volume markets
       gammaFetch('closed=false&accepting_orders=true&order=endDate&ascending=true&limit=100'),
+      // NEW: liquidity-ordered — surfaces markets with deep order books
+      // that don't show up in volume rankings (low-frequency trading
+      // but big books — e.g. less-popular but high-liquidity sports
+      // markets, niche prediction markets).
+      gammaFetch('closed=false&accepting_orders=true&order=liquidityNum&ascending=false&limit=100'),
+      // NEW: competitive-ordered — surfaces markets close to 50/50 where
+      // edge most often lives. Gamma exposes a `competitive` score
+      // (0..1, higher = closer to 50/50 + more recent activity).
+      // These are the "live debate" markets the algo can analyze.
+      gammaFetch('closed=false&accepting_orders=true&order=competitive&ascending=false&limit=100'),
     ])
 
     if (!volumeRes.ok) {
       throw new Error(`Gamma API error: ${volumeRes.status}`)
     }
 
-    // Merge the 3 volume24hr pages into a single equivalent of the
-    // old volume24Res. Any page that failed gets skipped without
-    // crashing the pipeline.
+    // Merge the 5 volume24hr pages into a single combined response.
+    // Any page that failed gets skipped without crashing the pipeline.
     const v24Combined: GammaMarket[] = []
-    for (const page of [v24p0, v24p1, v24p2]) {
+    for (const page of [v24p0, v24p1, v24p2, v24p3, v24p4]) {
       if (!page.ok) continue
       try {
         const arr = (await page.json()) as GammaMarket[]
@@ -933,7 +947,8 @@ async function runFullPipeline(): Promise<any> {
     }
     const volume24Res = { ok: true, json: async () => v24Combined }
 
-    // Merge markets from all queries, deduplicated by id
+    // Merge markets from all queries (5 vol24h pages, lifetime vol,
+    // end-date, liquidity, competitive), deduplicated by id
     const rawMarkets: GammaMarket[] = await volumeRes.json()
     const existingIds = new Set(rawMarkets.map(m => m.id))
 
@@ -956,6 +971,37 @@ async function runFullPipeline(): Promise<any> {
           existingIds.add(m.id)
         }
       }
+    }
+
+    // Merge liquidity-sorted markets — surfaces deep-order-book markets
+    // that don't show up in volume rankings (niche markets with big
+    // resting bids/asks but lower trading frequency).
+    if (liqRes.ok) {
+      try {
+        const liqMarkets = (await liqRes.json()) as GammaMarket[]
+        for (const m of liqMarkets) {
+          if (!existingIds.has(m.id)) {
+            rawMarkets.push(m)
+            existingIds.add(m.id)
+          }
+        }
+      } catch { /* skip */ }
+    }
+
+    // Merge competitive-sorted markets — Gamma's `competitive` score
+    // ranks markets close to 50/50 with recent activity. This is
+    // where Opus's edge most often surfaces (genuinely-uncertain
+    // questions with active price discovery).
+    if (compRes.ok) {
+      try {
+        const compMarkets = (await compRes.json()) as GammaMarket[]
+        for (const m of compMarkets) {
+          if (!existingIds.has(m.id)) {
+            rawMarkets.push(m)
+            existingIds.add(m.id)
+          }
+        }
+      } catch { /* skip */ }
     }
 
     const now = Date.now()
@@ -1045,10 +1091,14 @@ async function runFullPipeline(): Promise<any> {
     // the Opus timeout to 480s in claude-code-llm.service so this fits
     // with margin. Override MAX_ANALYSIS for more on a paid tier.
     const MAX_ANALYSIS = parseInt(process.env.MAX_ANALYSIS || '55', 10)
-    // Per-category cap. Was 8 (deliberately low to force diversity), but
-    // for closing-soon coverage we'd rather have 12 BTC-bracket safe-scalps
-    // than enforce hard diversity that leaves T1 budget unspent.
-    const CATEGORY_CAP = 12
+    // Per-category cap. User: "try to find more or explore different
+    // markets too". Tightened from 12 → 6 to spread the t1/t2 budget
+    // across MORE categories rather than letting one category (often
+    // box-office buckets or Eurovision country-bets) dominate. With
+    // more gamma sources feeding rawMarkets (vol24h 5-page paginated
+    // + liquidityNum + competitive orderings), the candidate pool is
+    // wider, so a lower cap exposes the user to broader market types.
+    const CATEGORY_CAP = 6
 
     // DPS info per market (cached in a side-Map keyed by question).
     const dpsInfo = new Map<string, { tier: 'high' | 'medium' | 'low'; category: string }>()
