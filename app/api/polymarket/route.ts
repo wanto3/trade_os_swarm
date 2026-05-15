@@ -856,21 +856,47 @@ async function runFullPipeline(): Promise<any> {
       }
     })()
 
-    // Fetch by volume, volume24hr, AND by endDate (for 24hr coverage)
-    const [volumeRes, volume24Res, endDateRes] = await Promise.all([
-      // Top-1000 by various sorts — earlier 500 was missing lower-volume but
-      // legitimate categories (esports LCK matches, niche events, smaller
-      // political races). 1000 captures the long tail.
-      fetch('https://gamma-api.polymarket.com/markets?closed=false&accepting_orders=true&order=volumeNum&ascending=false&limit=1000', { headers: { 'Accept': 'application/json' }, cache: 'no-store' }),
-      fetch('https://gamma-api.polymarket.com/markets?closed=false&accepting_orders=true&order=volume24hr&ascending=false&limit=1000', { headers: { 'Accept': 'application/json' }, cache: 'no-store' }),
-      fetch('https://gamma-api.polymarket.com/markets?closed=false&accepting_orders=true&order=endDate&ascending=true&limit=500', { headers: { 'Accept': 'application/json' }, cache: 'no-store' }),
+    // Gamma's per-request limit is silently capped at 100 regardless
+    // of the `limit=` parameter we send. To get full coverage we
+    // paginate the volume24hr query (offset=0/100/200 = positions
+    // 1..300 by 24h volume). Critical because short-horizon esports
+    // and sports markets sit at positions 50-200 by 24h volume — the
+    // single-page version dropped them entirely. Bug history: user
+    // reported "no esports anymore" with FURIA/MOUZ both at $250K+
+    // 24h volume but absent from our pipeline.
+    const gammaFetch = (qs: string) => fetch(
+      `https://gamma-api.polymarket.com/markets?${qs}`,
+      { headers: { 'Accept': 'application/json' }, cache: 'no-store' },
+    )
+    const [volumeRes, v24p0, v24p1, v24p2, endDateRes] = await Promise.all([
+      // Lifetime-volume order (one page enough — deep markets dominate)
+      gammaFetch('closed=false&accepting_orders=true&order=volumeNum&ascending=false&limit=100'),
+      // 24h-volume order paginated to capture short-horizon markets
+      gammaFetch('closed=false&accepting_orders=true&order=volume24hr&ascending=false&limit=100&offset=0'),
+      gammaFetch('closed=false&accepting_orders=true&order=volume24hr&ascending=false&limit=100&offset=100'),
+      gammaFetch('closed=false&accepting_orders=true&order=volume24hr&ascending=false&limit=100&offset=200'),
+      // Closing-soon order (captures imminent low-volume markets)
+      gammaFetch('closed=false&accepting_orders=true&order=endDate&ascending=true&limit=100'),
     ])
 
     if (!volumeRes.ok) {
       throw new Error(`Gamma API error: ${volumeRes.status}`)
     }
 
-    // Merge markets from all three queries, deduplicated by id
+    // Merge the 3 volume24hr pages into a single equivalent of the
+    // old volume24Res. Any page that failed gets skipped without
+    // crashing the pipeline.
+    const v24Combined: GammaMarket[] = []
+    for (const page of [v24p0, v24p1, v24p2]) {
+      if (!page.ok) continue
+      try {
+        const arr = (await page.json()) as GammaMarket[]
+        if (Array.isArray(arr)) v24Combined.push(...arr)
+      } catch { /* skip bad page */ }
+    }
+    const volume24Res = { ok: true, json: async () => v24Combined }
+
+    // Merge markets from all queries, deduplicated by id
     const rawMarkets: GammaMarket[] = await volumeRes.json()
     const existingIds = new Set(rawMarkets.map(m => m.id))
 
