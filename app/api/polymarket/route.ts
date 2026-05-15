@@ -962,37 +962,17 @@ async function runFullPipeline(): Promise<any> {
 
     const recommendations: TradeRecommendation[] = []
 
-    // Diagnostic: track esports markets through the pipeline. The user
-    // reported "no esports anymore" — this lets us see at which stage
-    // they're being dropped. Cheap inline counter; remove once the
-    // root cause is fixed and verified.
-    const esportsRe = /\b(counter-strike|cs2|cs:go|valorant|league of legends|lol[:\s]|dota|overwatch|esports|\bbo[35]\b)\b/i
-    const esportsTrace: Array<{ stage: string; question: string; reason?: string }> = []
-    for (const market of rawMarkets) {
-      if (esportsRe.test(market.question || '')) {
-        esportsTrace.push({ stage: 'rawMarkets', question: market.question })
-      }
-    }
-
     for (const market of rawMarkets) {
       // Skip markets past their end date — these have resolved. Use
-      // the helper so `endDateIso="2026-05-15"` doesn't get parsed as
-      // UTC midnight and incorrectly mark same-day markets as past.
+      // resolveEndTimeMs so date-only `endDateIso` doesn't get
+      // parsed as UTC midnight and incorrectly mark same-day markets
+      // as past. (Bug previously dropped every CS BO3 / LoL match
+      // closing later the same UTC day — see git blame on this line.)
       const endMs = resolveEndTimeMs(market)
       if (endMs !== null && endMs < now) {
-        if (esportsRe.test(market.question || '')) {
-          esportsTrace.push({ stage: 'dropped-past-enddate', question: market.question, reason: `endMs=${endMs} now=${now}` })
-        }
         continue
       }
       const recs = scoreMarket(market)
-      if (esportsRe.test(market.question || '')) {
-        if (recs.length === 0) {
-          esportsTrace.push({ stage: 'dropped-scoreMarket-returned-empty', question: market.question, reason: `liq=${market.liquidityNum} prices=${market.outcomePrices}` })
-        } else {
-          esportsTrace.push({ stage: `scoreMarket-yielded-${recs.length}`, question: market.question })
-        }
-      }
       for (const rec of recs) recommendations.push(rec)
     }
 
@@ -1724,9 +1704,6 @@ async function runFullPipeline(): Promise<any> {
       // parse failure, etc.). Empty array = healthy. Critical for diagnosing
       // "0 opportunities" on Render where we can't tail logs cheaply.
       screeningErrors: getLastBatchErrors(),
-      // Diagnostic trace: where esports markets get dropped in the
-      // pipeline. Remove once "no esports" issue is resolved.
-      esportsTrace,
       // Debug: market-selection funnel. Shows per-tier budget allocation
       // and how much of each universe was actually picked. Healthy run:
       // t1Selected≈t1Budget (closing-soon fully used), t3Selected≈t3Budget
