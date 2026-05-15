@@ -1739,6 +1739,22 @@ POLYMARKET_CLOB_API_SECRET=...`}
               if (filteredQuestions.has(r.market.question)) return false
               if (seen.has(r.market.question)) return false
               seen.add(r.market.question)
+              // Drop "no edge AND extreme price" cards — Opus agrees with
+              // the market AND the favorite is already at ≥90% (or ≤10%
+              // for the inverse). Betting $1 to win 1-10¢ on a 90%+
+              // favorite is awful risk/reward. User pushback: "ist
+              // already 95-99% there are no more edges then it would be
+              // too risky to bet $1 for 0.1-0.4 cents only".
+              //
+              // We KEEP small-edge extreme favorites IF Opus has a
+              // directional lean (e.g. "this 95% is actually 85%, NO
+              // side is undervalued") — those are real signal even at
+              // extreme prices.
+              const edgePts = Math.abs((r.estimatedProbability - r.odds) * 100)
+              const noLean = edgePts < 0.5
+              const favoritePrice = Math.max(r.odds, 1 - r.odds)
+              const isExtremePrice = favoritePrice >= 0.90
+              if (noLean && isExtremePrice) return false
               return true
             })
             if (watchList.length === 0) return null
@@ -1862,7 +1878,17 @@ POLYMARKET_CLOB_API_SECRET=...`}
 
                     const opusFavorsYes = aiLean === 'yes'
                     const suggestedSide = aiLean === 'yes' ? yesSideName : aiLean === 'no' ? noSideName : ''
-                    const suggestedPrice = aiLean === 'yes' ? rec.odds : aiLean === 'no' ? 1 - rec.odds : 0
+                    // For 'none' (no AI lean), default to the LONGSHOT side
+                    // for payout display — that's where the interesting math
+                    // is. Betting the favorite at 95% to win 1.05x is awful;
+                    // betting the underdog at 5% to win 20x is a lottery
+                    // ticket worth at least seeing. Previously this showed
+                    // payout=0.0x for no-lean cards which was a useless bug.
+                    const suggestedPrice = aiLean === 'yes'
+                      ? rec.odds
+                      : aiLean === 'no'
+                        ? 1 - rec.odds
+                        : Math.min(rec.odds, 1 - rec.odds)  // longshot side for no-lean
                     const payoutMultiple = suggestedPrice > 0 ? 1 / suggestedPrice : 0
                     // Generate a one-line "verdict" — most actionable interpretation
                     let verdict = ''
