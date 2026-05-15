@@ -740,8 +740,20 @@ async function refreshLivePrices(data: any): Promise<any> {
   }
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const now = Date.now()
+  const url = new URL(request.url)
+  // ?refresh=1 forces a fresh pipeline run, bypassing both the 1h fresh
+  // and 8h stale caches. Useful when:
+  //   - Markets have appeared in Polymarket that we want analyzed NOW
+  //   - Suspected bug in the pipeline output and want to see fresh
+  //   - User explicitly clicks a "force refresh" button
+  // Does NOT bypass the live-price refresh (that's per-call anyway).
+  const forceRefresh = url.searchParams.get('refresh') === '1'
+  if (forceRefresh) {
+    cachedResponse = null
+    console.log('[Pipeline] Force-refresh requested via ?refresh=1 — cache cleared, will rebuild')
+  }
 
   // FRESH: return immediately (with live-price refresh patched on top)
   if (cachedResponse && now < cachedResponse.freshExpiry) {
