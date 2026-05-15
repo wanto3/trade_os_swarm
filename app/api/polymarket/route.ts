@@ -127,7 +127,11 @@ interface GammaMarket {
   bestBid?: string | null
   bestAsk?: string | null
   spread?: string
+  // `endDateIso` is gamma's date-only field ("2026-05-15"). `endDate`
+  // is the full ISO timestamp ("2026-05-15T14:00:00Z"). Use `endDate`
+  // when you need exact-time comparisons — see helper resolveEndTimeMs.
   endDateIso?: string
+  endDate?: string
   slug?: string
   competitive?: number
   negRisk?: boolean
@@ -326,6 +330,35 @@ function getConvictionLabel(score: number): ConvictionLabel {
   return 'risky'
 }
 
+/**
+ * Resolve a market's actual close time to a Unix-ms timestamp.
+ *
+ * Bug history: gamma exposes both `endDateIso` (date-only, e.g.
+ * "2026-05-15") AND `endDate` (full ISO timestamp like
+ * "2026-05-15T14:00:00Z"). new Date("2026-05-15") parses to UTC
+ * MIDNIGHT, not end-of-day, so a market closing at 14:00 UTC same day
+ * looks like it's already past from 00:01 UTC onward — the whole CS
+ * BO3 schedule was being silently dropped because of this.
+ *
+ * Precedence:
+ *   1. `endDate` if it has a time component (preferred)
+ *   2. `endDateIso` shifted to end-of-day (23:59:59 UTC) — fallback
+ *   3. null if neither is present
+ */
+function resolveEndTimeMs(market: { endDate?: string; endDateIso?: string }): number | null {
+  if (market.endDate) {
+    const t = new Date(market.endDate).getTime()
+    if (isFinite(t)) return t
+  }
+  if (market.endDateIso) {
+    // Date-only fallback — shift to 23:59:59 UTC of that day so markets
+    // closing later in the day aren't treated as already-past.
+    const t = new Date(`${market.endDateIso}T23:59:59Z`).getTime()
+    if (isFinite(t)) return t
+  }
+  return null
+}
+
 function scoreMarket(market: GammaMarket): TradeRecommendation[] {
   // Note: negRisk sub-markets are NOT filtered out — they have their own individual pages
   // on Polymarket (e.g., /event/will-connecticut-win-the-2026-ncaa-tournament). Many
@@ -344,11 +377,15 @@ function scoreMarket(market: GammaMarket): TradeRecommendation[] {
     return []
   }
 
-  // Determine time tier early so it can be used for liquidity and price checks
-  const hasNoDate = !market.endDateIso
+  // Determine time tier early so it can be used for liquidity and price checks.
+  // Use the resolveEndTimeMs helper so date-only endDateIso doesn't get
+  // mis-parsed as UTC midnight (which would make a market closing at
+  // 14:00Z same day look already-past from 00:00Z onward).
+  const endMs = resolveEndTimeMs(market)
+  const hasNoDate = endMs === null
   const daysToClose = hasNoDate
     ? 0
-    : Math.max(0, Math.ceil((new Date(market.endDateIso!).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
+    : Math.max(0, Math.ceil((endMs - Date.now()) / (1000 * 60 * 60 * 24)))
   const isImminent = daysToClose <= 1 || hasNoDate
   const isClosingSoon = daysToClose <= 7 || hasNoDate
 
@@ -938,10 +975,13 @@ async function runFullPipeline(): Promise<any> {
     }
 
     for (const market of rawMarkets) {
-      // Skip markets past their end date — these have resolved
-      if (market.endDateIso && new Date(market.endDateIso).getTime() < now) {
+      // Skip markets past their end date — these have resolved. Use
+      // the helper so `endDateIso="2026-05-15"` doesn't get parsed as
+      // UTC midnight and incorrectly mark same-day markets as past.
+      const endMs = resolveEndTimeMs(market)
+      if (endMs !== null && endMs < now) {
         if (esportsRe.test(market.question || '')) {
-          esportsTrace.push({ stage: 'dropped-past-enddate', question: market.question, reason: market.endDateIso })
+          esportsTrace.push({ stage: 'dropped-past-enddate', question: market.question, reason: `endMs=${endMs} now=${now}` })
         }
         continue
       }
