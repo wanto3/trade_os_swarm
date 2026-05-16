@@ -1760,18 +1760,28 @@ POLYMARKET_CLOB_API_SECRET=...`}
               const favoritePrice = Math.max(r.odds, 1 - r.odds)
               if (noLean && favoritePrice >= 0.90) return false
 
-              // FILTER 2 — drop "tiny edge on an extreme-price bet".
-              // The suggested side is a longshot (≤10%) or extreme
-              // favorite (≥90%) AND the edge is smaller than ~3pt.
-              // Math: e.g. BTC NO at 3¢ with +0.9pt edge implies real
-              // win prob ~3.9%, payout 33x → Kelly fraction is
-              // essentially zero. The user shouldn't be staring at
-              // bets where the EV barely clears break-even and the
-              // variance dwarfs the edge. Surfaces as cards like
-              // "Bet NO anyway" for 40x on a 2% market that the
-              // user (correctly) reads as nonsense.
-              const isExtremeBet = suggestedSidePrice <= 0.10 || suggestedSidePrice >= 0.90
-              if (isExtremeBet && edgePts < 3) return false
+              // FILTER 2 — drop "tiny edge on an underdog or extreme
+              // favorite". When the suggested side is ≤40% win rate
+              // (underdog) OR ≥90% (extreme favorite), the EV math is
+              // sensitive to small mispricings — a 1-2pt edge sits
+              // inside Opus's normal estimation noise (±2pt) and the
+              // Kelly fraction comes out negligible.
+              //
+              // Examples this catches:
+              //   - BTC NO at 3¢ + 0.9pt edge      → 33x lottery, ~1% Kelly
+              //   - MOUZ underdog at 30% + 1.5pt   → 3.3x payout, ~2% Kelly
+              //   - Team WE underdog at 26% + 2.5pt → 3.9x payout, ~3% Kelly
+              //   - Eurovision 99% favorite + ANY tiny edge → no upside
+              //
+              // Examples kept:
+              //   - Spirit at 33% + 38.5pt edge   → real longshot signal
+              //   - Hanwha at 30% + 39.5pt edge   → real longshot signal
+              //   - Australia at 85% + 2.9pt edge → mid-range, not extreme
+              //   - Any 40-90% suggested side with any edge — meaty
+              //     middle where small edges still matter
+              const isUnderdogOrExtremeFavorite =
+                suggestedSidePrice <= 0.40 || suggestedSidePrice >= 0.90
+              if (isUnderdogOrExtremeFavorite && edgePts < 3) return false
 
               return true
             })
