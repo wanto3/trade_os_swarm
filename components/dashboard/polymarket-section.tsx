@@ -364,6 +364,10 @@ export function PolymarketSection() {
   const [paperSortKey, setPaperSortKey] = useState<'placedAt' | 'cost' | 'pnl' | 'daysHeld' | 'safety' | 'status' | 'category' | 'outcome'>('placedAt')
   const [paperSortDir, setPaperSortDir] = useState<'asc' | 'desc'>('desc')
   const [paperFilter, setPaperFilter] = useState<'open' | 'resolved' | 'all'>('open')
+  // Per-card expand-reasoning state for the watch list. Click a card's
+  // "Why this side?" button to see the full Opus reasoning + a derived
+  // plain-English breakdown of the recommended side's math.
+  const [expandedWatchIds, setExpandedWatchIds] = useState<Set<string>>(new Set())
   const [analytics, setAnalytics] = useState<Analytics | null>(null)
   const [autoConfig, setAutoConfig] = useState<AutoTraderConfig | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -2165,14 +2169,102 @@ POLYMARKET_CLOB_API_SECRET=...`}
                         }}>
                           {verdict}
                         </div>
-                        {rec.reasoning && (
-                          <div style={{
-                            fontSize: '0.55rem', color: '#6e7681',
-                            fontStyle: 'italic', lineHeight: 1.3,
-                          }}>
-                            {rec.reasoning.length > 110 ? rec.reasoning.substring(0, 110) + '…' : rec.reasoning}
-                          </div>
-                        )}
+                        {/* Expandable reasoning — collapsed shows a short
+                            snippet, expanded shows the full Opus prose +
+                            a derived "why this side" plain-English
+                            breakdown (helpful for underdog picks where
+                            the math isn't obvious at a glance). */}
+                        {rec.reasoning && (() => {
+                          const cardId = `watch-reason-${rec.market.id}`
+                          const isExpanded = expandedWatchIds.has(cardId)
+                          const fullReasoning = String(rec.reasoning || '')
+                          const showToggle = fullReasoning.length > 110
+
+                          // Derive a plain-English math explanation. Useful
+                          // because seeing "Bet underdog at 32% for 3.2x"
+                          // doesn't tell the user WHY that's a good bet
+                          // even when the algorithm thinks it is.
+                          const sidePrice = suggestedPrice > 0 ? suggestedPrice : 0.5
+                          const winRatePct = (sidePrice * 100).toFixed(0)
+                          const opusEstPctOnSide = aiLean === 'yes'
+                            ? rec.estimatedProbability * 100
+                            : aiLean === 'no'
+                              ? (1 - rec.estimatedProbability) * 100
+                              : Math.max(rec.estimatedProbability, 1 - rec.estimatedProbability) * 100
+                          const evDecimal = sidePrice > 0
+                            ? (opusEstPctOnSide / 100 - sidePrice) / (1 - sidePrice)
+                            : 0
+                          const evPct = (evDecimal * 100).toFixed(0)
+
+                          return (
+                            <>
+                              <div style={{
+                                fontSize: '0.55rem', color: '#6e7681',
+                                fontStyle: 'italic', lineHeight: 1.3,
+                              }}>
+                                {!isExpanded && showToggle
+                                  ? fullReasoning.substring(0, 110) + '…'
+                                  : fullReasoning}
+                              </div>
+
+                              {isExpanded && suggestedSide && (
+                                <div style={{
+                                  fontSize: '0.6rem', color: '#c9d1d9',
+                                  background: 'rgba(165,214,255,0.06)',
+                                  border: '1px solid rgba(165,214,255,0.18)',
+                                  borderRadius: '6px',
+                                  padding: '7px 10px', marginTop: '4px',
+                                  lineHeight: 1.5,
+                                }}>
+                                  <div style={{ color: '#a5d6ff', fontWeight: 700, marginBottom: '3px' }}>
+                                    📖 Why bet {suggestedSide}?
+                                  </div>
+                                  <div>
+                                    Market prices <strong>{suggestedSide}</strong> at <strong>{winRatePct}¢</strong> (so {winRatePct}% implied win probability). Opus estimates the true probability is <strong>~{opusEstPctOnSide.toFixed(0)}%</strong>.
+                                    {edgeAbs >= 1 && opusEstPctOnSide > sidePrice * 100 && (
+                                      <span> That gap ({edgeAbs.toFixed(1)}pt) means the side is <strong>undervalued</strong> — bet $1, win ${(payoutMultiple - 1).toFixed(2)} on a {winRatePct}% chance.</span>
+                                    )}
+                                    {edgeAbs >= 1 && opusEstPctOnSide < sidePrice * 100 && (
+                                      <span> That gap ({edgeAbs.toFixed(1)}pt) means the OTHER side is overvalued — bet $1 on {suggestedSide}, win ${(payoutMultiple - 1).toFixed(2)} when {suggestedSide} comes through.</span>
+                                    )}
+                                  </div>
+                                  {Number(evPct) > 0 && (
+                                    <div style={{ marginTop: '4px', color: '#3fb950' }}>
+                                      Implied EV: <strong>+{evPct}%</strong> per $1 bet (based on Opus&apos;s estimate). Real-world EV depends on how calibrated Opus is — this tier&apos;s historical hit rate matters more than the headline number.
+                                    </div>
+                                  )}
+                                  {Number(evPct) <= 0 && (
+                                    <div style={{ marginTop: '4px', color: '#f0883e' }}>
+                                      Implied EV: <strong>{evPct}%</strong> per $1 bet. Opus actually thinks this side is fairly priced or slightly overvalued — surfaces here only because of your scene-knowledge override territory.
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {showToggle && (
+                                <button
+                                  onClick={e => {
+                                    e.stopPropagation()
+                                    setExpandedWatchIds(prev => {
+                                      const next = new Set(prev)
+                                      if (next.has(cardId)) next.delete(cardId)
+                                      else next.add(cardId)
+                                      return next
+                                    })
+                                  }}
+                                  style={{
+                                    background: 'none', border: 'none',
+                                    color: '#58a6ff', fontSize: '0.55rem',
+                                    cursor: 'pointer', padding: '2px 0',
+                                    textAlign: 'left', textDecoration: 'underline',
+                                  }}
+                                >
+                                  {isExpanded ? '▲ Hide reasoning' : `▼ Why ${suggestedSide || 'this side'}? · show full reasoning`}
+                                </button>
+                              )}
+                            </>
+                          )
+                        })()}
                         <div style={{ display: 'flex', gap: '6px', marginTop: '0.3rem' }}>
                           <a
                             href={rec.market.url}
