@@ -2,6 +2,9 @@
   "name": "crypto-trader-os",
   "version": "1.0.0",
   "description": "Real-time crypto trading operating system",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
