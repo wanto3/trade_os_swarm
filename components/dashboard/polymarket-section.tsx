@@ -1739,22 +1739,40 @@ POLYMARKET_CLOB_API_SECRET=...`}
               if (filteredQuestions.has(r.market.question)) return false
               if (seen.has(r.market.question)) return false
               seen.add(r.market.question)
-              // Drop "no edge AND extreme price" cards — Opus agrees with
-              // the market AND the favorite is already at ≥90% (or ≤10%
-              // for the inverse). Betting $1 to win 1-10¢ on a 90%+
-              // favorite is awful risk/reward. User pushback: "ist
-              // already 95-99% there are no more edges then it would be
-              // too risky to bet $1 for 0.1-0.4 cents only".
-              //
-              // We KEEP small-edge extreme favorites IF Opus has a
-              // directional lean (e.g. "this 95% is actually 85%, NO
-              // side is undervalued") — those are real signal even at
-              // extreme prices.
+
               const edgePts = Math.abs((r.estimatedProbability - r.odds) * 100)
+              // Determine which side Opus actually leans toward + its
+              // price (this is the side the "Bet X anyway" button
+              // would place on). 'none' fallback = favorite side.
+              const opusLeansYes = r.estimatedProbability > r.odds + 0.005
+              const opusLeansNo  = r.estimatedProbability < r.odds - 0.005
+              const suggestedSidePrice = opusLeansYes
+                ? r.odds
+                : opusLeansNo
+                  ? (1 - r.odds)
+                  : Math.min(r.odds, 1 - r.odds)
+
+              // FILTER 1 — drop "no edge, extreme favorite" noise. Opus
+              // agrees with market AND favorite is at ≥90% → only bets
+              // are 1¢-cost favorite (wins 1¢) or 1¢-cost longshot
+              // (3% win rate, brutal variance). Not worth showing.
               const noLean = edgePts < 0.5
               const favoritePrice = Math.max(r.odds, 1 - r.odds)
-              const isExtremePrice = favoritePrice >= 0.90
-              if (noLean && isExtremePrice) return false
+              if (noLean && favoritePrice >= 0.90) return false
+
+              // FILTER 2 — drop "tiny edge on an extreme-price bet".
+              // The suggested side is a longshot (≤10%) or extreme
+              // favorite (≥90%) AND the edge is smaller than ~3pt.
+              // Math: e.g. BTC NO at 3¢ with +0.9pt edge implies real
+              // win prob ~3.9%, payout 33x → Kelly fraction is
+              // essentially zero. The user shouldn't be staring at
+              // bets where the EV barely clears break-even and the
+              // variance dwarfs the edge. Surfaces as cards like
+              // "Bet NO anyway" for 40x on a 2% market that the
+              // user (correctly) reads as nonsense.
+              const isExtremeBet = suggestedSidePrice <= 0.10 || suggestedSidePrice >= 0.90
+              if (isExtremeBet && edgePts < 3) return false
+
               return true
             })
             if (watchList.length === 0) return null
