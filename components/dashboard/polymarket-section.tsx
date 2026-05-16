@@ -1764,28 +1764,41 @@ POLYMARKET_CLOB_API_SECRET=...`}
               const favoritePrice = Math.max(r.odds, 1 - r.odds)
               if (noLean && favoritePrice >= 0.90) return false
 
-              // FILTER 2 — drop "tiny edge on an underdog or extreme
-              // favorite". When the suggested side is ≤40% win rate
-              // (underdog) OR ≥90% (extreme favorite), the EV math is
-              // sensitive to small mispricings — a 1-2pt edge sits
-              // inside Opus's normal estimation noise (±2pt) and the
-              // Kelly fraction comes out negligible.
+              // FILTER 2 — UNDERDOG bets now require ≥5pt edge (was 3pt).
+              // User just lost real money on a 1.5pt-edge MOUZ underdog
+              // pick that the previous threshold let through. Underdog
+              // bets need a substantial edge because:
+              //   - 60-70% loss rate per pick → variance dominates
+              //   - 3-4x payout is small relative to bankroll impact
+              //   - Opus's typical estimation noise is ±2-3pt, so a
+              //     3pt "edge" is likely noise, not signal
+              // Bumping to ≥5pt forces the algorithm to only surface
+              // underdog picks where Opus is CONFIDENT enough that the
+              // edge survives its own noise floor.
+              const isUnderdog = suggestedSidePrice <= 0.40
+              if (isUnderdog && edgePts < 5) return false
+
+              // FILTER 3 — EXTREME FAVORITES (≥90%) still need ≥3pt edge.
+              // Less aggressive than underdogs because favorites have
+              // high win rate, so even tiny edges compound; but at
+              // ≥90% the payout is so small (1.05-1.10x) that you
+              // need a real read.
+              const isExtremeFavorite = suggestedSidePrice >= 0.90
+              if (isExtremeFavorite && edgePts < 3) return false
+
+              // FILTER 4 — CALIBRATION GUARD. If this pick is in a tier
+              // the algorithm has been consistently wrong about (per
+              // the auto-calibration system), suppress it entirely
+              // unless the edge is overwhelming (≥10pt). Stops the
+              // closed-loop learning from being undermined by users
+              // ignoring the "default skip" auto-lesson.
               //
-              // Examples this catches:
-              //   - BTC NO at 3¢ + 0.9pt edge      → 33x lottery, ~1% Kelly
-              //   - MOUZ underdog at 30% + 1.5pt   → 3.3x payout, ~2% Kelly
-              //   - Team WE underdog at 26% + 2.5pt → 3.9x payout, ~3% Kelly
-              //   - Eurovision 99% favorite + ANY tiny edge → no upside
-              //
-              // Examples kept:
-              //   - Spirit at 33% + 38.5pt edge   → real longshot signal
-              //   - Hanwha at 30% + 39.5pt edge   → real longshot signal
-              //   - Australia at 85% + 2.9pt edge → mid-range, not extreme
-              //   - Any 40-90% suggested side with any edge — meaty
-              //     middle where small edges still matter
-              const isUnderdogOrExtremeFavorite =
-                suggestedSidePrice <= 0.40 || suggestedSidePrice >= 0.90
-              if (isUnderdogOrExtremeFavorite && edgePts < 3) return false
+              // Tiers tagged 'weak' by aiEdge are the lower-tier ones
+              // where calibration says skip; same for 'untagged'
+              // (uncategorized) lower-tier sports.
+              const aiEdgeTier = (r as TradeRecommendation & { aiEdge?: string }).aiEdge
+              const isWeakOrUntagged = aiEdgeTier === 'weak' || !aiEdgeTier
+              if (isUnderdog && isWeakOrUntagged && edgePts < 10) return false
 
               return true
             })
@@ -1922,20 +1935,30 @@ POLYMARKET_CLOB_API_SECRET=...`}
                         ? 1 - rec.odds
                         : Math.min(rec.odds, 1 - rec.odds)  // longshot side for no-lean
                     const payoutMultiple = suggestedPrice > 0 ? 1 / suggestedPrice : 0
-                    // Generate a one-line "verdict" — most actionable interpretation
+                    // Generate a one-line "verdict" — most actionable interpretation.
+                    // For underdog bets (suggested side ≤ 40% win rate), prepend
+                    // an explicit danger warning showing the loss probability,
+                    // because users (including the dev) have repeatedly lost on
+                    // these and reading "+edge" buries the real risk.
                     let verdict = ''
                     let verdictColor = '#6e7681'
+                    const isUnderdogBet = suggestedPrice > 0 && suggestedPrice <= 0.40
+                    const lossRatePct = isUnderdogBet ? ((1 - suggestedPrice) * 100).toFixed(0) : ''
+                    const underdogWarning = isUnderdogBet
+                      ? `⚠️ UNDERDOG — you lose ${lossRatePct}% of the time. `
+                      : ''
+
                     if (edgeAbs < 1) {
                       verdict = 'No edge — Opus agrees with market. Skip unless you have personal conviction.'
                     } else if (edgeAbs < 3) {
-                      verdict = `Tiny ${edgePts >= 0 ? '+' : ''}${edgePts.toFixed(1)}pt edge → bet $1 ${suggestedSide} → win $${(payoutMultiple - 1).toFixed(2)} if right`
-                      verdictColor = '#f0883e'
+                      verdict = `${underdogWarning}Tiny ${edgePts >= 0 ? '+' : ''}${edgePts.toFixed(1)}pt edge → bet $1 ${suggestedSide} → win $${(payoutMultiple - 1).toFixed(2)} if right`
+                      verdictColor = isUnderdogBet ? '#f85149' : '#f0883e'
                     } else if (recExt.aiEdge === 'user') {
-                      verdict = `${edgePts >= 0 ? '+' : ''}${edgePts.toFixed(1)}pt edge — ${recExt.aiEdge === 'user' ? '👤 your scene knowledge applies' : 'judgment call'}. Bet ${suggestedSide} for ${payoutMultiple.toFixed(1)}x payout.`
-                      verdictColor = '#a371f7'
+                      verdict = `${underdogWarning}${edgePts >= 0 ? '+' : ''}${edgePts.toFixed(1)}pt edge — 👤 your scene knowledge applies. Bet ${suggestedSide} for ${payoutMultiple.toFixed(1)}x payout.`
+                      verdictColor = isUnderdogBet ? '#f85149' : '#a371f7'
                     } else {
-                      verdict = `${edgePts >= 0 ? '+' : ''}${edgePts.toFixed(1)}pt — Opus skipped (${recExt.llmDirection === 'skip' ? 'low conf' : 'tiny edge'}). Override if you disagree.`
-                      verdictColor = '#a09060'
+                      verdict = `${underdogWarning}${edgePts >= 0 ? '+' : ''}${edgePts.toFixed(1)}pt — Opus skipped (${recExt.llmDirection === 'skip' ? 'low conf' : 'tiny edge'}). Override if you disagree.`
+                      verdictColor = isUnderdogBet ? '#f85149' : '#a09060'
                     }
                     // Parameterized placement helper — accepts the side the
                     // user explicitly chose. Side is the literal outcome
