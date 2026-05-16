@@ -2207,39 +2207,110 @@ POLYMARKET_CLOB_API_SECRET=...`}
                                   : fullReasoning}
                               </div>
 
-                              {isExpanded && suggestedSide && (
-                                <div style={{
-                                  fontSize: '0.6rem', color: '#c9d1d9',
-                                  background: 'rgba(165,214,255,0.06)',
-                                  border: '1px solid rgba(165,214,255,0.18)',
-                                  borderRadius: '6px',
-                                  padding: '7px 10px', marginTop: '4px',
-                                  lineHeight: 1.5,
-                                }}>
-                                  <div style={{ color: '#a5d6ff', fontWeight: 700, marginBottom: '3px' }}>
-                                    📖 Why bet {suggestedSide}?
-                                  </div>
-                                  <div>
-                                    Market prices <strong>{suggestedSide}</strong> at <strong>{winRatePct}¢</strong> (so {winRatePct}% implied win probability). Opus estimates the true probability is <strong>~{opusEstPctOnSide.toFixed(0)}%</strong>.
-                                    {edgeAbs >= 1 && opusEstPctOnSide > sidePrice * 100 && (
-                                      <span> That gap ({edgeAbs.toFixed(1)}pt) means the side is <strong>undervalued</strong> — bet $1, win ${(payoutMultiple - 1).toFixed(2)} on a {winRatePct}% chance.</span>
-                                    )}
-                                    {edgeAbs >= 1 && opusEstPctOnSide < sidePrice * 100 && (
-                                      <span> That gap ({edgeAbs.toFixed(1)}pt) means the OTHER side is overvalued — bet $1 on {suggestedSide}, win ${(payoutMultiple - 1).toFixed(2)} when {suggestedSide} comes through.</span>
-                                    )}
-                                  </div>
-                                  {Number(evPct) > 0 && (
-                                    <div style={{ marginTop: '4px', color: '#3fb950' }}>
-                                      Implied EV: <strong>+{evPct}%</strong> per $1 bet (based on Opus&apos;s estimate). Real-world EV depends on how calibrated Opus is — this tier&apos;s historical hit rate matters more than the headline number.
+                              {isExpanded && suggestedSide && (() => {
+                                // Risk-of-ruin math — what the user actually
+                                // wants to see when staring at "Bet underdog
+                                // for 3x payout" cards. The naive "+EV"
+                                // framing misses that losing the bet costs
+                                // a meaningful slice of bankroll. For a
+                                // small bankroll grinder this is THE
+                                // question: how much can I afford to lose?
+                                const bankroll = paperPortfolio?.bankroll ?? 0
+                                const winProb = opusEstPctOnSide / 100
+                                const sidePriceNum = sidePrice
+                                const decimalOdds = sidePriceNum > 0 ? 1 / sidePriceNum : 0
+                                const b = decimalOdds - 1
+                                const fullKellyFraction = b > 0
+                                  ? Math.max(0, (b * winProb - (1 - winProb)) / b)
+                                  : 0
+                                const halfKellyFraction = fullKellyFraction / 2
+                                const halfKellyStake = bankroll * halfKellyFraction
+                                const fullKellyStake = bankroll * fullKellyFraction
+                                // Cap at 15% of bankroll regardless of what
+                                // Kelly says (matches the bankroll-guard cap).
+                                const cappedHalfKelly = Math.min(halfKellyStake, bankroll * 0.15)
+
+                                const bankrollIfLose = Math.max(0, bankroll - cappedHalfKelly)
+                                const bankrollIfWin = bankroll + (cappedHalfKelly * (payoutMultiple - 1))
+                                const lossPctOfBankroll = bankroll > 0 ? (cappedHalfKelly / bankroll) * 100 : 0
+
+                                // Streak risk — what 3 losses in a row at
+                                // this size leaves you with. Useful sanity
+                                // check for underdog picks (where you'll
+                                // lose 60-70% of the time individually,
+                                // so a 3-loss streak is very plausible).
+                                const after3Losses = Math.max(0, bankroll - 3 * cappedHalfKelly)
+
+                                return (
+                                  <div style={{
+                                    fontSize: '0.6rem', color: '#c9d1d9',
+                                    background: 'rgba(165,214,255,0.06)',
+                                    border: '1px solid rgba(165,214,255,0.18)',
+                                    borderRadius: '6px',
+                                    padding: '7px 10px', marginTop: '4px',
+                                    lineHeight: 1.5,
+                                  }}>
+                                    <div style={{ color: '#a5d6ff', fontWeight: 700, marginBottom: '3px' }}>
+                                      📖 Why bet {suggestedSide}?
                                     </div>
-                                  )}
-                                  {Number(evPct) <= 0 && (
-                                    <div style={{ marginTop: '4px', color: '#f0883e' }}>
-                                      Implied EV: <strong>{evPct}%</strong> per $1 bet. Opus actually thinks this side is fairly priced or slightly overvalued — surfaces here only because of your scene-knowledge override territory.
+                                    <div>
+                                      Market prices <strong>{suggestedSide}</strong> at <strong>{winRatePct}¢</strong> (so {winRatePct}% implied win probability). Opus estimates the true probability is <strong>~{opusEstPctOnSide.toFixed(0)}%</strong>.
+                                      {edgeAbs >= 1 && opusEstPctOnSide > sidePrice * 100 && (
+                                        <span> That gap ({edgeAbs.toFixed(1)}pt) means the side is <strong>undervalued</strong> per Opus&apos;s read.</span>
+                                      )}
+                                      {edgeAbs >= 1 && opusEstPctOnSide < sidePrice * 100 && (
+                                        <span> That gap ({edgeAbs.toFixed(1)}pt) means the OTHER side is overvalued per Opus&apos;s read.</span>
+                                      )}
                                     </div>
-                                  )}
-                                </div>
-                              )}
+
+                                    {/* THE risk-of-ruin section — what the user
+                                        asked about. Frames the bet in terms of
+                                        bankroll impact, not just $1-vs-payout. */}
+                                    <div style={{
+                                      marginTop: '8px',
+                                      paddingTop: '6px',
+                                      borderTop: '1px solid rgba(165,214,255,0.15)',
+                                    }}>
+                                      <div style={{ color: '#f0c000', fontWeight: 700, marginBottom: '3px' }}>
+                                        💸 Risk math (your bankroll: ${bankroll.toFixed(2)})
+                                      </div>
+                                      {fullKellyFraction <= 0 ? (
+                                        <div style={{ color: '#f85149' }}>
+                                          <strong>Kelly says NOT to bet this</strong> — Opus&apos;s estimate doesn&apos;t support the payout/win-rate math at any size. If you bet anyway, you&apos;re relying on personal conviction beyond the algorithm.
+                                        </div>
+                                      ) : (
+                                        <>
+                                          <div>
+                                            <strong>Kelly-suggested stake: ${cappedHalfKelly.toFixed(2)}</strong> ({lossPctOfBankroll.toFixed(0)}% of bankroll · ½ Kelly, capped at 15%)
+                                          </div>
+                                          <div style={{ marginTop: '3px' }}>
+                                            <span style={{ color: '#3fb950' }}>If you WIN ({(winProb * 100).toFixed(0)}% chance):</span> bankroll ${bankroll.toFixed(2)} → <strong>${bankrollIfWin.toFixed(2)}</strong> (+${(bankrollIfWin - bankroll).toFixed(2)})
+                                          </div>
+                                          <div>
+                                            <span style={{ color: '#f85149' }}>If you LOSE ({((1 - winProb) * 100).toFixed(0)}% chance):</span> bankroll ${bankroll.toFixed(2)} → <strong>${bankrollIfLose.toFixed(2)}</strong> (-${cappedHalfKelly.toFixed(2)})
+                                          </div>
+                                          {sidePrice < 0.5 && (
+                                            <div style={{ marginTop: '3px', color: '#f0883e' }}>
+                                              ⚠️ Underdog warning: 3 losses in a row at this size leaves you with <strong>${after3Losses.toFixed(2)}</strong>. At {((1 - winProb) * 100).toFixed(0)}% loss rate per bet, that&apos;s a {((1 - winProb) ** 3 * 100).toFixed(0)}% chance.
+                                            </div>
+                                          )}
+                                        </>
+                                      )}
+                                    </div>
+
+                                    {Number(evPct) > 0 && (
+                                      <div style={{ marginTop: '6px', color: '#3fb950', fontSize: '0.55rem' }}>
+                                        Implied EV: <strong>+{evPct}%</strong> per $1 bet. Real-world depends on Opus calibration — check the tier&apos;s hit rate before trusting the headline.
+                                      </div>
+                                    )}
+                                    {Number(evPct) <= 0 && (
+                                      <div style={{ marginTop: '6px', color: '#f0883e', fontSize: '0.55rem' }}>
+                                        Implied EV: <strong>{evPct}%</strong> — Opus doesn&apos;t support the math. Surfaces only because the watch list shows skipped picks for user override.
+                                      </div>
+                                    )}
+                                  </div>
+                                )
+                              })()}
 
                               {showToggle && (
                                 <button
