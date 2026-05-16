@@ -1,5 +1,13 @@
 import { NextResponse } from 'next/server'
 
+// Must be force-dynamic — this route makes multi-chain on-chain RPC
+// calls (Polygon, Gnosis) and hits Polymarket's Data API. If Next
+// prerenders it during `npm run build`, those calls run on the build
+// container which can hang (RPC timeout) or fail (missing env vars,
+// network policy), making the deploy probabilistic. Defer to
+// request-time only.
+export const dynamic = 'force-dynamic'
+
 const POLYMARKET_API_KEY = process.env.POLYMARKET_API_KEY
 const WALLET = process.env.POLYMARKET_WALLET_ADDRESS
   || process.env.POLYMARKET_WALLET

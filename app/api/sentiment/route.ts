@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { calculateSentiment, updateSentimentPriceHistory } from '@/lib/services/sentiment.service';
 import { getCurrentPrice, getSupportedSymbols } from '@/lib/services/crypto-data.service';
 
+// Must be force-dynamic — calls getCurrentPrice which fetches live
+// crypto prices over HTTP. If Next prerenders this at build time the
+// fetch runs in the build container, which can hang on slow network
+// or block on geo-restricted exchange APIs (Binance 403s from some
+// regions). Defer to request-time only.
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: NextRequest) {
   try {
     const symbols = getSupportedSymbols();

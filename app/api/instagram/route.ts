@@ -2,8 +2,23 @@ import { NextResponse } from 'next/server'
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 
+// CRITICAL — must be force-dynamic. Without this, Next prerenders this
+// route at BUILD TIME which triggers the live Instagram scrape during
+// `npm run build`. On Render's Linux container the scrape can't work
+// (GSTACK_BIN is a Mac-local path that doesn't exist there), so the
+// scrape hangs/errors and breaks the deploy. force-dynamic defers
+// execution to request-time only.
+//
+// Bug history: every deploy was hanging at "Generating static pages
+// (29/29)" because Next was actually invoking this route during the
+// build. Render's build timeout (~10min) was getting eaten up.
+export const dynamic = 'force-dynamic'
+
 const CACHE_FILE = join(process.cwd(), 'data', 'instagram-cache.json')
 const CACHE_TTL_MS = 30 * 60 * 1000 // 30 min cache
+// Local-Mac scraper binary path. Only exists on the dev machine —
+// production should return cached data or a graceful empty response
+// instead of attempting the scrape.
 const GSTACK_BIN = join(process.env.HOME || '/Users/michalwanto', '.claude', 'skills', 'gstack', 'browse', 'dist', 'browse')
 
 interface Post {
