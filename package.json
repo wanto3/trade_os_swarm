@@ -12,7 +12,8 @@
     "test:coverage": "vitest run --coverage",
     "test:unit": "vitest run src/tests/cryptoDataService.test.ts src/tests/positionCalculator.test.ts",
     "test:integration": "vitest run src/tests/apiIntegration.test.ts",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "preflight": "bash scripts/preflight.sh"
   },
   "keywords": [
     "crypto",
