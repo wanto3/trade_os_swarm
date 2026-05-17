@@ -17,9 +17,13 @@ WORKDIR /app
 # Install Claude Code globally so `claude` is on PATH for subprocess use
 RUN npm install -g @anthropic-ai/claude-code
 
-# Install app dependencies (cached layer when package.json doesn't change)
+# Install app dependencies (cached layer when package.json doesn't change).
+# `npm ci` installs ALL deps (including devDeps) — needed at this stage
+# because the build step uses TypeScript, ESLint, Tailwind, etc. which
+# are in devDependencies. Previous version had `--omit=dev=false` which
+# is invalid npm syntax (npm 10 expects `dev|optional|peer` values).
 COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev=false
+RUN npm ci --no-audit --no-fund --loglevel=warn
 
 # ── Build stage ────────────────────────────────────────────────────────────
 FROM deps AS build
