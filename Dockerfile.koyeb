@@ -1,0 +1,73 @@
+# Koyeb-optimized Dockerfile for Trade-OS Polymarket dashboard.
+#
+# Tailored for Koyeb's free tier (512MB RAM, 2GB ephemeral disk).
+# Render uses the sibling `Dockerfile` — keep both in sync feature-wise.
+#
+# Differences from Dockerfile (Render):
+#   - Claude Code CLI installed ONLY in runtime stage (Render's installs it
+#     twice — once in deps + once in runtime — which doubles image weight)
+#   - Separate `prod-deps` stage so the runtime image carries only
+#     production node_modules, not devDependencies
+#   - apt-get only in the stage that actually needs the tooling
+#   - HEALTHCHECK directive so Koyeb's liveness probe has a target
+#
+# Auth: at runtime, set CLAUDE_CODE_OAUTH_TOKEN (generate via
+#       `claude setup-token` on a machine logged into your Max account).
+
+# ── Build deps (full, includes devDeps needed for `next build`) ────────────
+FROM node:20-bookworm-slim AS build-deps
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm ci --no-audit --no-fund --loglevel=warn
+
+# ── Build stage ────────────────────────────────────────────────────────────
+FROM build-deps AS build
+COPY . .
+# Skip Next telemetry to keep build deterministic & quiet
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+
+# ── Production-only deps (slim node_modules for runtime image) ─────────────
+FROM node:20-bookworm-slim AS prod-deps
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev --no-audit --no-fund --loglevel=warn
+
+# ── Runtime stage ──────────────────────────────────────────────────────────
+FROM node:20-bookworm-slim AS runtime
+
+# System tools needed by Claude Code subprocess (some skills shell out to
+# curl/git). Install once, here only.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates git \
+  && rm -rf /var/lib/apt/lists/* \
+  && npm install -g @anthropic-ai/claude-code
+
+WORKDIR /app
+
+# Build artifacts + production deps only
+COPY --from=build      /app/.next            ./.next
+COPY --from=prod-deps  /app/node_modules     ./node_modules
+COPY --from=build      /app/package.json     ./package.json
+COPY --from=build      /app/next.config.js   ./next.config.js
+COPY --from=build      /app/instrumentation.ts ./instrumentation.ts
+
+ENV NODE_ENV=production
+ENV PORT=3000
+EXPOSE 3000
+
+# Claude Code expects writable HOME for session/cache state
+RUN mkdir -p /home/nextjs/.claude && chown -R 1001:1001 /home/nextjs
+ENV HOME=/home/nextjs
+
+# Koyeb pings this for liveness checks
+HEALTHCHECK --interval=30s --timeout=10s --start-period=45s --retries=3 \
+  CMD curl -fsS http://localhost:${PORT}/ || exit 1
+
+# At runtime, Koyeb env vars provide:
+#   - CLAUDE_CODE_OAUTH_TOKEN (your `claude setup-token` output)
+#   - ANTHROPIC_API_KEY (Max-runs-out fallback)
+#   - GROQ_API_KEY (cheap-fast fallback)
+#   - POLYMARKET_API_KEY (read-only public data, optional)
+#   - PORT (Koyeb injects this)
+CMD ["npm", "start"]
