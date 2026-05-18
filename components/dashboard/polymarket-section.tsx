@@ -455,8 +455,11 @@ export function PolymarketSection() {
     setBalanceLoading(false)
   }
 
-  const loadPaperData = async () => {
-    setPaperLoading(true)
+  // `silent` mode skips the loading-state flicker — used by the 60s
+  // background poll that keeps the dashboard fresh after live calibration
+  // updates fire from resolvePosition() on the backend.
+  const loadPaperData = async (silent = false) => {
+    if (!silent) setPaperLoading(true)
     try {
       const [posRes, configRes, analyticsRes] = await Promise.all([
         fetch('/api/polymarket/positions'),
@@ -479,8 +482,39 @@ export function PolymarketSection() {
         setAnalytics(analyticsJson.data)
       }
     } catch { /* ignore */ }
-    setPaperLoading(false)
+    if (!silent) setPaperLoading(false)
   }
+
+  // Live recursive-learning poll. Every 60s we silently re-fetch
+  // positions + analytics so the AI-Edge Tier card + underdog-floor
+  // badges + equity curve update as new resolutions land — without
+  // requiring the user to click "Sync now" or reload the page.
+  //
+  // Cost: 3 cheap HTTP GETs/min (positions + config + analytics, all
+  // disk-read no-LLM endpoints). $0 in tokens. Negligible bandwidth.
+  // Pauses when the tab is hidden (visibilitychange API) so a stale
+  // background tab doesn't keep polling.
+  useEffect(() => {
+    let intervalId: ReturnType<typeof setInterval> | null = null
+    const start = () => {
+      if (intervalId) return
+      intervalId = setInterval(() => loadPaperData(/* silent */ true), 60_000)
+    }
+    const stop = () => {
+      if (intervalId) { clearInterval(intervalId); intervalId = null }
+    }
+    const onVis = () => {
+      if (document.visibilityState === 'visible') start()
+      else stop()
+    }
+    if (document.visibilityState === 'visible') start()
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      stop()
+      document.removeEventListener('visibilitychange', onVis)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const saveConfig = async (updates: Partial<AutoTraderConfig>) => {
     try {

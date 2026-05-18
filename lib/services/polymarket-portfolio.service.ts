@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import { join } from 'path';
 import type { TradeRecommendation } from '@/app/api/polymarket/route';
 import * as dpsServiceImport from './dps.service';
+import { computeCalibration, saveCalibration, emitAutoLessons } from './calibration.service';
 
 export interface PolymarketPosition {
   id: string
@@ -365,6 +366,54 @@ function snapshotBankroll(trigger: 'init' | 'placed' | 'won' | 'lost' | 'invalid
   if (portfolio.bankrollHistory.length > 500) {
     portfolio.bankrollHistory = portfolio.bankrollHistory.slice(-500)
   }
+}
+
+/** Debounced calibration recompute.
+ *
+ * Called after every position resolution so the recursive-learning loop
+ * stays current. Debounced because bulk operations (e.g. import-from-
+ * address backfilling 20+ historical resolutions in a row) would
+ * otherwise recompute calibration 20 times in <1s — wasteful but
+ * correct. With a 500ms debounce, bulk imports collapse into a single
+ * recompute after the burst settles.
+ *
+ * **Token cost: $0.** computeCalibration is pure JS math over the
+ * positions array. saveCalibration writes JSON to disk. emitAutoLessons
+ * writes JSON to disk. No LLM calls anywhere in this path. The auto-
+ * lessons get injected into the NEXT screening run's prompt, but that
+ * screening run was going to happen anyway — calibration just changes
+ * WHAT the prompt contains, not WHEN it fires.
+ *
+ * Safe to call freely. Fire-and-forget — never blocks the caller. */
+let calibrationDebounceTimer: NodeJS.Timeout | null = null
+function scheduleCalibrationUpdate(): void {
+  if (calibrationDebounceTimer) {
+    clearTimeout(calibrationDebounceTimer)
+  }
+  calibrationDebounceTimer = setTimeout(async () => {
+    calibrationDebounceTimer = null
+    try {
+      const summary = computeCalibration(
+        positions.map(p => ({
+          question: p.question,
+          category: p.category,
+          status: p.status,
+          pnl: p.pnl,
+          cost: p.cost,
+          outcome: p.outcome,
+          aiEdge: p.aiEdge,
+          source: p.source,
+        }))
+      )
+      await saveCalibration(summary)
+      const emitResult = await emitAutoLessons(summary)
+      console.log(`[PolymarketPortfolio] Live calibration updated: ${summary.totalResolved} resolved across ${summary.tiers.length} tiers (auto-lessons: ${emitResult.added} new, ${emitResult.refreshed} refreshed)`)
+    } catch (e) {
+      // Non-fatal — calibration failing should never break a user-facing
+      // resolution. Just log and continue. Next sync will re-attempt.
+      console.warn('[PolymarketPortfolio] Live calibration update failed (non-fatal):', e instanceof Error ? e.message : e)
+    }
+  }, 500)
 }
 
 function classifyCategory(question: string): PolymarketPosition['category'] {
@@ -950,6 +999,13 @@ export function resolvePosition(
   snapshotBankroll(snapTrigger)
   recordDailySnapshot()
   savePortfolioData()
+
+  // Live recursive-learning hook: kick off a debounced calibration
+  // recompute so per-tier W/L stats + auto-lessons refresh immediately
+  // after every resolution. Fire-and-forget — never blocks. Token-free
+  // (pure JS math + disk writes, zero LLM calls). See
+  // scheduleCalibrationUpdate() for the full rationale.
+  scheduleCalibrationUpdate()
 
   console.log(`[PolymarketPortfolio] Resolved: ${pos.question} | ${resolution} | PnL: $${pos.pnl?.toFixed(2)}`)
   return pos
