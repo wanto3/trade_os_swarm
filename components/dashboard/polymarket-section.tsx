@@ -1786,19 +1786,44 @@ POLYMARKET_CLOB_API_SECRET=...`}
               const isExtremeFavorite = suggestedSidePrice >= 0.90
               if (isExtremeFavorite && edgePts < 3) return false
 
-              // FILTER 4 — CALIBRATION GUARD. If this pick is in a tier
-              // the algorithm has been consistently wrong about (per
-              // the auto-calibration system), suppress it entirely
-              // unless the edge is overwhelming (≥10pt). Stops the
-              // closed-loop learning from being undermined by users
-              // ignoring the "default skip" auto-lesson.
+              // FILTER 4 — TIER-AWARE UNDERDOG LADDER + CALIBRATION OVERRIDE.
               //
-              // Tiers tagged 'weak' by aiEdge are the lower-tier ones
-              // where calibration says skip; same for 'untagged'
-              // (uncategorized) lower-tier sports.
+              // Different aiEdge tiers face different edge thresholds for
+              // underdog bets, because Opus's track record varies by tier:
+              //   - 'strong' (politics, M&A, geopolitics): ≥5pt — Opus is
+              //              reliable here, base-rate reasoning works.
+              //   - 'user'   (top-tier esports — MOUZ, Vitality, etc.):
+              //              ≥8pt — the user's scene knowledge is real but
+              //              historically not enough to overcome the 60%+
+              //              loss-rate variance of underdog bets at this
+              //              tier. The MOUZ-shaped pick that burned the
+              //              user lived in this bucket — 5pt let it through.
+              //   - 'weak'   (live sports, props, coin flips): ≥10pt —
+              //              algorithm is at-random or worse per past
+              //              calibration; only overwhelming edges allowed.
+              //   - untagged: ≥10pt — uncategorized = unproven, treat as weak.
+              //
+              // CALIBRATION OVERRIDE: if `byAiEdge` shows this tier has
+              // ≥3 losses AND <30% win rate live, bump the floor one rung
+              // tighter (5→8, 8→10, 10→skip-entirely). This closes the
+              // recursive-learning loop — as resolved positions accumulate,
+              // the filter auto-adapts to where the algorithm is actually
+              // failing without requiring code changes.
               const aiEdgeTier = (r as TradeRecommendation & { aiEdge?: string }).aiEdge
-              const isWeakOrUntagged = aiEdgeTier === 'weak' || !aiEdgeTier
-              if (isUnderdog && isWeakOrUntagged && edgePts < 10) return false
+              let underdogFloor: number
+              if (aiEdgeTier === 'strong')      underdogFloor = 5
+              else if (aiEdgeTier === 'user')   underdogFloor = 8
+              else                              underdogFloor = 10  // weak + untagged
+
+              const tierKey = aiEdgeTier ?? 'untagged'
+              const tierStats = analytics?.byAiEdge?.find(t => t.edge === tierKey)
+              if (tierStats && tierStats.losses >= 3 && tierStats.winRate < 30) {
+                if (underdogFloor <= 5)      underdogFloor = 8
+                else if (underdogFloor <= 8) underdogFloor = 10
+                else                          return false  // already 10 → drop entirely
+              }
+
+              if (isUnderdog && edgePts < underdogFloor) return false
 
               return true
             })
