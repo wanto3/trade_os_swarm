@@ -2942,14 +2942,47 @@ POLYMARKET_CLOB_API_SECRET=...`}
             </div>
           ) : (
             <>
-              {/* Stats row */}
+              {/* Stats row.
+                  Empty-state honesty: when there are no resolved trades, show
+                  "—" instead of "0.0%" so a fresh portfolio doesn't look like
+                  it's failing. Misleading zeros were undermining trust in the
+                  performance section. */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.75rem', marginBottom: '1rem' }}>
-                {[
-                  { label: 'Win Rate', value: `${analytics.winRate.toFixed(1)}%`, sub: `${analytics.wonTrades}W / ${analytics.lostTrades}L`, color: '#3fb950' },
-                  { label: 'Total P&L', value: analytics.totalPnl >= 0 ? `+$${analytics.totalPnl.toFixed(2)}` : `-$${Math.abs(analytics.totalPnl).toFixed(2)}`, sub: `ROI: ${analytics.roi.toFixed(1)}%`, color: analytics.totalPnl >= 0 ? '#3fb950' : '#f85149' },
-                  { label: 'EV Accuracy', value: `${analytics.evAccuracy.toFixed(1)}%`, sub: `${analytics.evAccuracyTrades} trades analyzed`, color: '#8b5cf6' },
-                  { label: 'Avg Hold Time', value: analytics.avgHoldTimeDays > 0 ? `${analytics.avgHoldTimeDays.toFixed(1)}d` : 'N/A', sub: `Total: ${analytics.totalTrades} trades`, color: '#58a6ff' },
-                ].map((stat, i) => (
+                {(() => {
+                  const resolvedCount = analytics.wonTrades + analytics.lostTrades
+                  const hasResolved = resolvedCount > 0
+                  const hasEvSample = analytics.evAccuracyTrades > 0
+                  return [
+                    {
+                      label: 'Win Rate',
+                      value: hasResolved ? `${analytics.winRate.toFixed(1)}%` : '—',
+                      sub: hasResolved
+                        ? `${analytics.wonTrades}W / ${analytics.lostTrades}L`
+                        : 'No resolved trades yet',
+                      color: hasResolved ? '#3fb950' : '#6e7681',
+                    },
+                    {
+                      label: 'Total P&L',
+                      value: analytics.totalPnl >= 0 ? `+$${analytics.totalPnl.toFixed(2)}` : `-$${Math.abs(analytics.totalPnl).toFixed(2)}`,
+                      sub: hasResolved ? `ROI: ${analytics.roi.toFixed(1)}%` : 'Includes unrealized PnL',
+                      color: analytics.totalPnl >= 0 ? '#3fb950' : '#f85149',
+                    },
+                    {
+                      label: 'EV Accuracy',
+                      value: hasEvSample ? `${analytics.evAccuracy.toFixed(1)}%` : '—',
+                      sub: hasEvSample
+                        ? `${analytics.evAccuracyTrades} EV+ trades analyzed`
+                        : 'Need resolved EV+ picks to validate',
+                      color: hasEvSample ? '#8b5cf6' : '#6e7681',
+                    },
+                    {
+                      label: 'Avg Hold Time',
+                      value: analytics.avgHoldTimeDays > 0 ? `${analytics.avgHoldTimeDays.toFixed(1)}d` : '—',
+                      sub: `Total: ${analytics.totalTrades} trades`,
+                      color: analytics.avgHoldTimeDays > 0 ? '#58a6ff' : '#6e7681',
+                    },
+                  ]
+                })().map((stat, i) => (
                   <div key={i} style={{ backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '12px', padding: '0.75rem 1rem' }}>
                     <div style={{ fontSize: '0.9rem', fontWeight: 700, color: stat.color }}>{stat.value}</div>
                     <div style={{ fontSize: '0.6rem', color: '#6e7681' }}>{stat.label}</div>
@@ -3191,32 +3224,94 @@ POLYMARKET_CLOB_API_SECRET=...`}
                 )
               })()}
 
-              {/* Equity Curve */}
-              {analytics.equityCurve.length > 1 && (
-                <div style={{ backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '12px', padding: '1rem' }}>
-                  <h4 style={{ fontSize: '0.7rem', fontWeight: 700, color: '#e6edf3', margin: '0 0 0.75rem 0' }}>Equity Curve</h4>
-                  <div style={{ height: '80px', display: 'flex', alignItems: 'flex-end', gap: '2px' }}>
-                    {analytics.equityCurve.map((point, i) => {
-                      const min = Math.min(...analytics.equityCurve.map(p => p.value))
-                      const max = Math.max(...analytics.equityCurve.map(p => p.value))
-                      const range = max - min || 1
-                      const height = ((point.value - min) / range) * 100
-                      return (
-                        <div key={i} title={`${point.date}: $${point.value.toFixed(2)}`} style={{
-                          flex: 1, height: `${Math.max(4, height)}%`,
-                          backgroundColor: point.value >= (analytics.equityCurve[0]?.value || 0) ? '#3fb950' : '#f85149',
-                          borderRadius: '2px 2px 0 0',
-                          opacity: 0.7 + (i / analytics.equityCurve.length) * 0.3,
-                        }} />
-                      )
-                    })}
+              {/* Equity Curve.
+                  Service-side `analytics.equityCurve` only snapshots resolved
+                  positions, so a heavily-open portfolio shows a stale tail:
+                  the chart ends at the last resolution date, even if open
+                  positions have moved significantly since. Append a synthetic
+                  "today" point (marked separately) reflecting current bankroll
+                  — which already includes unrealized mark-to-market from the
+                  import-from-address sync. Closes the gap between "last
+                  resolved" and "what you actually hold right now". */}
+              {(() => {
+                const base = analytics.equityCurve
+                const currentValue = paperPortfolio?.bankroll
+                const startingValue = paperPortfolio?.startingBankroll
+                const today = new Date().toISOString().split('T')[0]
+                // Build extended curve: base curve + current-state point
+                // (or starting → current 2-point curve when no resolutions yet).
+                type CurvePoint = { date: string; value: number; live?: boolean }
+                let curve: CurvePoint[] = base.map(p => ({ ...p }))
+                if (typeof currentValue === 'number') {
+                  const lastPoint = curve[curve.length - 1]
+                  const sameAsLast = lastPoint && lastPoint.date === today && Math.abs(lastPoint.value - currentValue) < 0.01
+                  if (!sameAsLast) {
+                    if (curve.length === 0 && typeof startingValue === 'number' && Math.abs(startingValue - currentValue) >= 0.01) {
+                      curve = [
+                        { date: 'start', value: startingValue },
+                        { date: today, value: currentValue, live: true },
+                      ]
+                    } else if (curve.length > 0) {
+                      curve.push({ date: today, value: currentValue, live: true })
+                    }
+                  }
+                }
+                if (curve.length < 2) return null
+                const baselineValue = curve[0]?.value || 0
+                const min = Math.min(...curve.map(p => p.value))
+                const max = Math.max(...curve.map(p => p.value))
+                const range = max - min || 1
+                const hasLivePoint = curve.some(p => p.live)
+                return (
+                  <div style={{ backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '12px', padding: '1rem' }}>
+                    <h4 style={{ fontSize: '0.7rem', fontWeight: 700, color: '#e6edf3', margin: '0 0 0.75rem 0', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      Equity Curve
+                      {hasLivePoint && (
+                        <span
+                          title="Last bar is your CURRENT total value (incl. unrealized PnL on open positions). All other bars are resolved-position snapshots."
+                          style={{
+                            fontSize: '0.5rem',
+                            padding: '0.1rem 0.35rem',
+                            borderRadius: '4px',
+                            border: '1px dashed #58a6ff',
+                            color: '#58a6ff',
+                            fontWeight: 600,
+                            cursor: 'help',
+                          }}
+                        >
+                          incl. live mark-to-market
+                        </span>
+                      )}
+                    </h4>
+                    <div style={{ height: '80px', display: 'flex', alignItems: 'flex-end', gap: '2px' }}>
+                      {curve.map((point, i) => {
+                        const height = ((point.value - min) / range) * 100
+                        const isUp = point.value >= baselineValue
+                        return (
+                          <div
+                            key={i}
+                            title={`${point.live ? 'NOW (live): ' : `${point.date}: `}$${point.value.toFixed(2)}`}
+                            style={{
+                              flex: 1, height: `${Math.max(4, height)}%`,
+                              backgroundColor: point.live ? '#58a6ff' : (isUp ? '#3fb950' : '#f85149'),
+                              borderRadius: '2px 2px 0 0',
+                              opacity: point.live ? 1 : 0.7 + (i / curve.length) * 0.3,
+                              outline: point.live ? '1px dashed rgba(88,166,255,0.5)' : undefined,
+                              outlineOffset: point.live ? '1px' : undefined,
+                            }}
+                          />
+                        )
+                      })}
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.25rem' }}>
+                      <span style={{ fontSize: '0.55rem', color: '#484f58' }}>{curve[0]?.date}</span>
+                      <span style={{ fontSize: '0.55rem', color: curve[curve.length - 1]?.live ? '#58a6ff' : '#484f58' }}>
+                        {curve[curve.length - 1]?.live ? 'now' : curve[curve.length - 1]?.date}
+                      </span>
+                    </div>
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.25rem' }}>
-                    <span style={{ fontSize: '0.55rem', color: '#484f58' }}>{analytics.equityCurve[0]?.date}</span>
-                    <span style={{ fontSize: '0.55rem', color: '#484f58' }}>{analytics.equityCurve[analytics.equityCurve.length - 1]?.date}</span>
-                  </div>
-                </div>
-              )}
+                )
+              })()}
 
               {/* ── Algorithm Validation: per-AI-edge hit rate ──
                   Most actionable cut: tells us where Opus is reliable.
