@@ -17,11 +17,16 @@ interface Position {
   margin: number
 }
 
-const FALLBACK_POSITIONS: Position[] = [
-  { id: '1', symbol: 'BTC', side: 'LONG', size: 0.5, entryPrice: 68200, markPrice: 70650, pnl: 1225, pnlPct: 3.59, leverage: 5, liqPrice: 54400, margin: 6820 },
-  { id: '2', symbol: 'ETH', side: 'LONG', size: 3.2, entryPrice: 1820, markPrice: 1845, pnl: 80, pnlPct: 1.37, leverage: 3, liqPrice: 1210, margin: 1941 },
-  { id: '3', symbol: 'SOL', side: 'SHORT', size: 150, entryPrice: 132, markPrice: 128.5, pnl: 525, pnlPct: 2.65, leverage: 8, liqPrice: 148, margin: 2400 },
-]
+// Crypto leverage trading (LONG/SHORT margin positions) isn't wired
+// to a real exchange yet — this panel is scaffolding for the future
+// crypto-trading feature on the user's roadmap. Showing 3 hardcoded
+// mock positions (BTC/ETH/SOL with $1,830 fake PnL) used to mislead
+// the user into thinking the panel was live. Now it renders an
+// honest empty state until a real crypto trading API is connected.
+//
+// To wire this panel up later: replace the empty `[]` initial state
+// with a fetch to whatever crypto-position endpoint we add.
+const FALLBACK_POSITIONS: Position[] = []
 
 export function PositionManager() {
   const [positions, setPositions] = useState<Position[]>(FALLBACK_POSITIONS)
@@ -64,6 +69,49 @@ export function PositionManager() {
           </div>
         </div>
         <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Click to expand →</div>
+      </div>
+    )
+  }
+
+  // Honest empty state: no real crypto-trading API is wired up yet,
+  // so showing fake LONG/SHORT mock data was actively misleading.
+  // When the user opens the Trading tab they now see what the panel
+  // actually is: scaffolding for a feature that's coming.
+  if (positions.length === 0) {
+    return (
+      <div style={{
+        padding: '20px 16px',
+        background: 'rgba(10,10,18,0.5)',
+        borderRadius: '8px',
+        border: '1px dashed rgba(42,42,74,0.7)',
+        textAlign: 'center',
+      }}>
+        <div style={{
+          fontSize: '10px',
+          color: 'var(--text-muted)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.08em',
+          marginBottom: '6px',
+        }}>
+          No active crypto positions
+        </div>
+        <div style={{
+          fontSize: '11px',
+          color: 'var(--text-secondary)',
+          lineHeight: 1.5,
+          maxWidth: '420px',
+          margin: '0 auto',
+        }}>
+          Crypto leverage trading isn&apos;t connected yet — this panel is reserved for
+          future LONG/SHORT margin positions.
+        </div>
+        <div style={{
+          fontSize: '10px',
+          color: 'var(--text-muted)',
+          marginTop: '8px',
+        }}>
+          Your Polymarket positions are visible in the <strong style={{ color: 'var(--cyan)' }}>MARKETS</strong> tab.
+        </div>
       </div>
     )
   }

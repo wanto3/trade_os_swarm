@@ -3241,6 +3241,23 @@ POLYMARKET_CLOB_API_SECRET=...`}
                         : t.winRate >= 75 ? '#3fb950'
                         : t.winRate >= 55 ? '#f0c000'
                         : '#f85149'
+                      // Mirror the FILTER 4 logic so the UI shows what
+                      // threshold is currently being applied per tier.
+                      // This makes the recursive-learning loop visible:
+                      // when a tier auto-tightens after losses, the
+                      // user can SEE the system adapting.
+                      let baseFloor: number
+                      if (t.edge === 'strong')      baseFloor = 5
+                      else if (t.edge === 'user')   baseFloor = 8
+                      else                          baseFloor = 10  // weak + untagged
+                      let currentFloor: number | 'skip' = baseFloor
+                      let autoTightened = false
+                      if (t.losses >= 3 && t.winRate < 30) {
+                        autoTightened = true
+                        if (baseFloor <= 5)      currentFloor = 8
+                        else if (baseFloor <= 8) currentFloor = 10
+                        else                     currentFloor = 'skip'
+                      }
                       return (
                         <div key={t.edge} style={{
                           padding: '0.6rem 0.5rem',
@@ -3260,23 +3277,61 @@ POLYMARKET_CLOB_API_SECRET=...`}
                           <div style={{ fontSize: '0.5rem', color: t.pnl >= 0 ? '#3fb950' : '#f85149', marginTop: '0.15rem' }}>
                             ${t.pnl >= 0 ? '+' : ''}{t.pnl.toFixed(2)} ({t.avgRoi >= 0 ? '+' : ''}{t.avgRoi.toFixed(1)}% ROI)
                           </div>
+                          {/* Recursive-learning visibility: show the
+                              current underdog edge floor for this tier
+                              and badge if calibration auto-tightened it. */}
+                          <div
+                            title={autoTightened
+                              ? `Auto-tightened from base ${baseFloor}pt → ${currentFloor === 'skip' ? 'SKIP ALL' : `${currentFloor}pt`} because tier shows ${t.wins}W/${t.losses}L (${t.winRate.toFixed(0)}% win rate, <30% threshold)`
+                              : `Underdog picks in this tier require ≥${baseFloor}pt edge (base floor — no auto-tightening triggered)`}
+                            style={{
+                              fontSize: '0.5rem',
+                              marginTop: '0.35rem',
+                              padding: '0.15rem 0.3rem',
+                              borderRadius: '4px',
+                              backgroundColor: autoTightened ? 'rgba(248,81,73,0.12)' : 'rgba(110,118,129,0.10)',
+                              border: `1px solid ${autoTightened ? 'rgba(248,81,73,0.3)' : '#30363d'}`,
+                              color: autoTightened ? '#f85149' : '#8b949e',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '3px',
+                              cursor: 'help',
+                            }}
+                          >
+                            <span>Underdog: {currentFloor === 'skip' ? '⛔ SKIP' : `≥${currentFloor}pt`}</span>
+                            {autoTightened && <span style={{ fontSize: '0.45rem', opacity: 0.85 }}>⚡auto</span>}
+                          </div>
                         </div>
                       )
                     })}
                   </div>
-                  <div style={{ fontSize: '0.55rem', color: '#6e7681', marginTop: '0.5rem', fontStyle: 'italic' }}>
+                  <div style={{ fontSize: '0.55rem', color: '#6e7681', marginTop: '0.5rem', fontStyle: 'italic', lineHeight: 1.4 }}>
                     {(() => {
                       const total = analytics.byAiEdge.reduce((s, t) => s + t.bets, 0)
                       const need = analytics.sampleSizeNeeded || 20
+                      const tightened = analytics.byAiEdge.filter(t => t.losses >= 3 && t.winRate < 30)
+                      // When calibration has auto-tightened any tier,
+                      // surface it prominently — that's the recursive
+                      // learning loop firing in real time.
+                      if (tightened.length > 0) {
+                        const tierNames = tightened.map(t => {
+                          const label = t.edge === 'strong' ? 'AI Strong'
+                            : t.edge === 'user' ? 'Your Edge'
+                            : t.edge === 'weak' ? 'Limited'
+                            : 'Untagged'
+                          return label
+                        }).join(', ')
+                        return `⚡ Recursive learning active: ${tierNames} tier${tightened.length > 1 ? 's' : ''} auto-tightened from your loss record. Underdog floors raised — fewer high-variance picks will surface here until win rate recovers.`
+                      }
                       if (total < need) {
-                        return `Need ${need - total} more resolved bets for statistical confidence (${total}/${need}). Place picks across all tiers to validate.`
+                        return `Edge thresholds: Strong ≥5pt, User ≥8pt, Weak/Untagged ≥10pt. Auto-tighten triggers at ≥3 losses + <30% win rate. Need ${need - total} more resolved bets for statistical confidence (${total}/${need}).`
                       }
                       const strong = analytics.byAiEdge.find(t => t.edge === 'strong')
                       if (strong && strong.bets >= 5) {
-                        if (strong.winRate >= 85) return `🤖 AI Strong validated — ${strong.winRate.toFixed(0)}% hit rate. Consider larger bets in strong-tier picks.`
+                        if (strong.winRate >= 85) return `🤖 AI Strong validated — ${strong.winRate.toFixed(0)}% hit rate. Consider larger bets in strong-tier picks. Edge thresholds: Strong ≥5pt, User ≥8pt, Weak ≥10pt.`
                         if (strong.winRate < 60) return `🤖 AI Strong underperforming (${strong.winRate.toFixed(0)}%). Investigate prompt or category tagging.`
                       }
-                      return `Sample valid. Tune Kelly fraction up where hit rate ≥85%; exclude tiers ≤55%.`
+                      return `Sample valid. Edge thresholds: Strong ≥5pt, User ≥8pt, Weak ≥10pt. Tune Kelly fraction up where hit rate ≥85%; exclude tiers ≤55%.`
                     })()}
                   </div>
                 </div>
