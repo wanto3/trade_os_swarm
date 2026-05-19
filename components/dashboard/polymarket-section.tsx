@@ -341,6 +341,7 @@ export function PolymarketSection() {
   // follows), or Limited Edge (sports/coin-flips for personal-judgment
   // bets only). Default 'all' shows everything sorted by edge magnitude.
   const [watchTierFilter, setWatchTierFilter] = useState<'all' | 'strong' | 'user' | 'weak' | 'untagged'>('all')
+  const [watchCategoryFilter, setWatchCategoryFilter] = useState<string>('all')
   // Half Kelly default — slightly more aggressive sizing for $4 grow phase.
   // User picks Full or Quarter from the selector if they want to dial up/down.
   const [kellyMode, setKellyMode] = useState<KellyMode>('half')
@@ -1935,6 +1936,12 @@ POLYMARKET_CLOB_API_SECRET=...`}
                 const e = (r as TradeRecommendation & { aiEdge?: string }).aiEdge ?? 'untagged'
                 return e === watchTierFilter
               })
+            const watchListAfterCategory = watchCategoryFilter === 'all'
+              ? watchListFiltered
+              : watchListFiltered.filter(r => {
+                const cat = (r as TradeRecommendation & { dpsCategory?: string }).dpsCategory ?? 'other'
+                return cat === watchCategoryFilter
+              })
             // Count by AI-edge tier so the user sees the breakdown at a glance:
             // "3 👤 your edge / 2 🤖 AI / 5 ⚠️ weak"
             const edgeCounts = { strong: 0, user: 0, weak: 0, untagged: 0 }
@@ -1991,11 +1998,54 @@ POLYMARKET_CLOB_API_SECRET=...`}
                   </span>
                 </div>
                 <div style={{
+                  display: 'flex', alignItems: 'center', gap: '0.4rem',
+                  marginBottom: '0.5rem',
+                  flexWrap: 'wrap',
+                  fontSize: '0.6rem',
+                }}>
+                  <span style={{ color: '#6e7681', marginRight: '0.3rem' }}>Category:</span>
+                  {(() => {
+                    const counts = new Map<string, number>()
+                    for (const r of watchListFiltered) {
+                      const cat = (r as TradeRecommendation & { dpsCategory?: string }).dpsCategory ?? 'other'
+                      counts.set(cat, (counts.get(cat) ?? 0) + 1)
+                    }
+                    const allCount = watchListFiltered.length
+                    const chips: Array<{ key: string; label: string; count: number }> = [
+                      { key: 'all', label: 'All', count: allCount },
+                    ]
+                    for (const [cat, count] of Array.from(counts.entries()).sort((a, b) => b[1] - a[1])) {
+                      chips.push({ key: cat, label: cat, count })
+                    }
+                    return chips.map(c => {
+                      const isActive = watchCategoryFilter === c.key
+                      return (
+                        <button
+                          key={c.key}
+                          onClick={() => setWatchCategoryFilter(c.key)}
+                          style={{
+                            padding: '0.2rem 0.55rem',
+                            background: isActive ? 'rgba(88,166,255,0.18)' : 'transparent',
+                            border: `1px solid ${isActive ? 'rgba(88,166,255,0.5)' : '#30363d'}`,
+                            borderRadius: '5px',
+                            color: isActive ? '#58a6ff' : '#8b949e',
+                            cursor: 'pointer',
+                            fontSize: '0.55rem',
+                            fontWeight: 600,
+                          }}
+                        >
+                          {c.label} {c.count}
+                        </button>
+                      )
+                    })
+                  })()}
+                </div>
+                <div style={{
                   display: 'grid',
                   gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
                   gap: '0.5rem',
                 }}>
-                  {watchListFiltered.map((rec) => {
+                  {watchListAfterCategory.map((rec) => {
                     const liveDaysToClose = liveDays(rec)
                     const recExt = rec as TradeRecommendation & { aiEdge?: 'strong' | 'user' | 'weak'; aiEdgeReason?: string; llmDirection?: string }
                     const edgePts = (rec.estimatedProbability - rec.odds) * 100  // signed edge
