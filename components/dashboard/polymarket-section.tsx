@@ -1927,7 +1927,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
             // Count by AI-edge tier so the user sees the breakdown at a glance:
             // "3 👤 your edge / 2 🤖 AI / 5 ⚠️ weak"
             const edgeCounts = { strong: 0, user: 0, weak: 0, untagged: 0 }
-            for (const r of watchList) {
+            for (const r of watchListMain) {
               const e = (r as TradeRecommendation & { aiEdge?: string }).aiEdge ?? 'untagged'
               if (e === 'strong') edgeCounts.strong++
               else if (e === 'user') edgeCounts.user++
@@ -1937,7 +1937,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
             // Category filter chip configs
             type TierChip = { key: typeof watchTierFilter; label: string; color: string; count: number }
             const tierChipsAll: TierChip[] = [
-              { key: 'all', label: `All ${watchList.length}`, color: '#8b949e', count: watchList.length },
+              { key: 'all', label: `All ${watchListMain.length}`, color: '#8b949e', count: watchListMain.length },
               { key: 'strong', label: `🤖 AI Strong`, color: '#3fb950', count: edgeCounts.strong },
               { key: 'user', label: `👤 Your Edge`, color: '#a371f7', count: edgeCounts.user },
               { key: 'weak', label: `⚠️ Limited`, color: '#a09060', count: edgeCounts.weak },
