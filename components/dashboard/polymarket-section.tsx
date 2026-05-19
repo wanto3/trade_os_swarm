@@ -1792,7 +1792,21 @@ POLYMARKET_CLOB_API_SECRET=...`}
             // (those are real opportunities, no need to duplicate).
             const filteredQuestions = new Set(filtered.map(f => f.market.question))
             const seen = new Set<string>()
+            // Funnel telemetry — count how many picks each filter stage
+            // dropped, so we can see in devtools where good opportunities
+            // are being filtered out. Helps tune thresholds based on
+            // actual data instead of guesses.
+            const funnelCounts = {
+              total: 0,
+              dropped_no_edge_extreme: 0,    // FILTER 1
+              dropped_underdog_floor: 0,      // FILTER 2
+              dropped_extreme_favorite: 0,    // FILTER 3
+              dropped_tier_ladder: 0,         // FILTER 4
+              dropped_conviction: 0,          // FILTER 5
+              passed: 0,
+            }
             const watchList = watchRaw.filter(r => {
+              funnelCounts.total++
               if (filteredQuestions.has(r.market.question)) return false
               if (seen.has(r.market.question)) return false
               seen.add(r.market.question)
@@ -1815,7 +1829,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
               // (3% win rate, brutal variance). Not worth showing.
               const noLean = edgePts < 0.5
               const favoritePrice = Math.max(r.odds, 1 - r.odds)
-              if (noLean && favoritePrice >= 0.90) return false
+              if (noLean && favoritePrice >= 0.90) { funnelCounts.dropped_no_edge_extreme++; return false }
 
               // FILTER 2 — UNDERDOG bets now require ≥5pt edge (was 3pt).
               // User just lost real money on a 1.5pt-edge MOUZ underdog
@@ -1829,7 +1843,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
               // underdog picks where Opus is CONFIDENT enough that the
               // edge survives its own noise floor.
               const isUnderdog = suggestedSidePrice <= 0.40
-              if (isUnderdog && edgePts < 5) return false
+              if (isUnderdog && edgePts < 5) { funnelCounts.dropped_underdog_floor++; return false }
 
               // FILTER 3 — EXTREME FAVORITES (≥90%) still need ≥3pt edge.
               // Less aggressive than underdogs because favorites have
@@ -1837,7 +1851,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
               // ≥90% the payout is so small (1.05-1.10x) that you
               // need a real read.
               const isExtremeFavorite = suggestedSidePrice >= 0.90
-              if (isExtremeFavorite && edgePts < 3) return false
+              if (isExtremeFavorite && edgePts < 3) { funnelCounts.dropped_extreme_favorite++; return false }
 
               // FILTER 4 — TIER-AWARE UNDERDOG LADDER + CALIBRATION OVERRIDE.
               //
@@ -1873,10 +1887,10 @@ POLYMARKET_CLOB_API_SECRET=...`}
               if (tierStats && tierStats.losses >= 3 && tierStats.winRate < 30) {
                 if (underdogFloor <= 5)      underdogFloor = 8
                 else if (underdogFloor <= 8) underdogFloor = 10
-                else                          return false  // already 10 → drop entirely
+                else                          { funnelCounts.dropped_tier_ladder++; return false }  // already 10 → drop entirely
               }
 
-              if (isUnderdog && edgePts < underdogFloor) return false
+              if (isUnderdog && edgePts < underdogFloor) { funnelCounts.dropped_tier_ladder++; return false }
 
               // FILTER 5 — MULTI-SIGNAL CONVICTION.
               // Require 2 of 3 signals to agree before surfacing in the
@@ -1897,9 +1911,11 @@ POLYMARKET_CLOB_API_SECRET=...`}
               // Stash on the rec for downstream UI. Mutation is fine —
               // the watch list rec objects are scoped to this render only.
               ;(r as TradeRecExtended).conviction = conviction
-              if (conviction.level === 'suppress') return false
+              if (conviction.level === 'suppress') { funnelCounts.dropped_conviction++; return false }
+              funnelCounts.passed++
               return true
             })
+            console.log(`[WatchList Funnel] ${funnelCounts.total} total → F1:${funnelCounts.dropped_no_edge_extreme} drop · F2:${funnelCounts.dropped_underdog_floor} drop · F3:${funnelCounts.dropped_extreme_favorite} drop · F4:${funnelCounts.dropped_tier_ladder} drop · F5:${funnelCounts.dropped_conviction} drop → ${funnelCounts.passed} passed`)
             if (watchList.length === 0) return null
             // Sort by win probability of the suggested side, NOT by edge.
             // Rationale: "being right" beats "claimed edge". A pick at 84%
