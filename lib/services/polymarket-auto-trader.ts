@@ -140,6 +140,78 @@ async function runPollCycle(): Promise<{ placed: number; resolved: number; error
   return result
 }
 
+/**
+ * Place qualifying recommendations as paper auto-trades.
+ *
+ * Used by the "Algorithm Test Mode" — the API route calls this after
+ * each screening cycle when test mode is enabled. Filters to picks
+ * that the LLM is confident enough about that a hands-off test should
+ * place them (high/medium confidence + ≥5pt edge + shouldBet=true).
+ *
+ * Returns placed/skipped counts so the caller can log/display them.
+ * Never throws — individual createPosition failures are collected as
+ * errors and reported, but the function continues processing the rest.
+ */
+export async function placeOpportunitiesAsPaper(
+  opportunities: TradeRecommendation[]
+): Promise<{ placed: number; skipped: number; errors: string[] }> {
+  await ensureInitialized()
+  const result: { placed: number; skipped: number; errors: string[] } = {
+    placed: 0,
+    skipped: 0,
+    errors: [],
+  }
+
+  const openPositions = getPositions(true)
+  const openMarketIds = new Set(openPositions.map(p => p.marketId))
+
+  for (const rec of opportunities) {
+    // Filter 1: LLM must have emitted a concrete direction (yes/no), not 'skip'
+    // 'skip' means the model declined to bet; undefined means pre-LLM rec (rare).
+    if (!rec.llmDirection || rec.llmDirection === 'skip') {
+      result.skipped++
+      continue
+    }
+    // Filter 2: high or medium confidence only (no low)
+    if (rec.confidence !== 'high' && rec.confidence !== 'medium') {
+      result.skipped++
+      continue
+    }
+    // Filter 3: ≥5pt edge floor (mirrors FILTER 2 in the UI)
+    const edgePts = Math.abs((rec.estimatedProbability - rec.odds) * 100)
+    if (edgePts < 5) {
+      result.skipped++
+      continue
+    }
+    // Already-placed guard
+    if (openMarketIds.has(rec.market.id)) {
+      result.skipped++
+      continue
+    }
+    // Place it
+    try {
+      const position = createPosition(rec)
+      if (position) {
+        result.placed++
+        openMarketIds.add(rec.market.id)
+      } else {
+        result.skipped++
+      }
+    } catch (e) {
+      result.errors.push(
+        `${rec.market.id}: ${e instanceof Error ? e.message : String(e)}`
+      )
+    }
+  }
+
+  if (result.placed > 0 || result.errors.length > 0) {
+    console.log(
+      `[PolymarketAutoTrader] Test mode: placed ${result.placed}, skipped ${result.skipped}, errors ${result.errors.length}`
+    )
+  }
+  return result
+}
+
 export function startAutoTrader(): void {
   // Per project decision (2026-05-03): no background polling at all.
   // Operating model is bet-cycle driven:
