@@ -2129,6 +2129,11 @@ POLYMARKET_CLOB_API_SECRET=...`}
                         {(() => {
                           const conv = (rec as TradeRecommendation & { conviction?: ConvictionResult }).conviction
                           if (!conv) return null
+                          // Defense: this badge is for the main watch list only. Speculative
+                          // picks have their own section (Task 6) with their own rendering;
+                          // returning null here prevents accidental "MODERATE CONVICTION"
+                          // labeling if a speculative rec ever leaks into this code path.
+                          if (conv.level !== 'strong' && conv.level !== 'moderate') return null
                           const cfg = conv.level === 'strong'
                             ? { color: '#3fb950', bg: 'rgba(63,185,80,0.12)', icon: '🟢', label: 'STRONG CONVICTION' }
                             : { color: '#f0c000', bg: 'rgba(240,192,0,0.12)', icon: '🟡', label: 'MODERATE CONVICTION' }
