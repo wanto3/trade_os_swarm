@@ -878,6 +878,77 @@ export async function GET(request: Request) {
 }
 
 /**
+ * Per-DPS-category fetch quotas. The screener used to grab top-N by
+ * volume globally, which means on a tournament day 80% of picks were
+ * sports/esports. These quotas force a minimum allocation to each
+ * category so the watch list always has diverse coverage.
+ *
+ * Total target: ~180 markets per cycle (vs ~100 previously). 1.5-2× the
+ * screening token cost — trivial on Max sub, ~$0.005-0.01 extra on
+ * Anthropic API fallback. Worth it for diversification.
+ */
+const CATEGORY_FETCH_QUOTAS: Array<{ category: string; quota: number }> = [
+  { category: 'politics', quota: 30 },
+  { category: 'geopolitics', quota: 30 },
+  { category: 'crypto-milestone', quota: 20 },
+  { category: 'policy', quota: 20 },
+  { category: 'corporate-ma', quota: 15 },
+  { category: 'tech-launch', quota: 15 },
+  { category: 'esports', quota: 20 },
+  { category: 'live-sports', quota: 10 },
+  { category: 'crypto-price', quota: 10 },
+  { category: 'creator-economy', quota: 10 },
+  { category: 'box-office', quota: 10 },
+]
+
+/**
+ * Fetch top-N Polymarket markets for a specific DPS category, ordered
+ * by volume. Uses the existing Gamma API but filters via post-fetch
+ * DPS classification (Polymarket itself doesn't expose our DPS taxonomy).
+ *
+ * Strategy: fetch a wider pool (quota * 5, capped at 200), classify
+ * each via dps.service, keep the first `quota` matches. Returns raw
+ * GammaMarket objects so they can be merged into the existing rawMarkets
+ * pipeline (which calls scoreMarket() on each GammaMarket).
+ */
+async function fetchMarketsForCategory(
+  targetCategory: string,
+  quota: number,
+  signal: AbortSignal,
+  scoreDomainPredictability: (question: string) => { category: string; tier: string }
+): Promise<GammaMarket[]> {
+  const params = new URLSearchParams({
+    closed: 'false',
+    accepting_orders: 'true',
+    order: 'volume24hr',
+    ascending: 'false',
+    limit: String(Math.min(quota * 5, 200)),
+  })
+
+  try {
+    const res = await fetch(
+      `https://gamma-api.polymarket.com/markets?${params}`,
+      { signal, headers: { 'Accept': 'application/json' }, cache: 'no-store' }
+    )
+    if (!res.ok) return []
+    const data = await res.json()
+    const raw: GammaMarket[] = Array.isArray(data) ? data : []
+    const matched: GammaMarket[] = []
+    for (const m of raw) {
+      if (!m || !m.question) continue
+      const dps = scoreDomainPredictability(m.question)
+      if (dps.category === targetCategory) {
+        matched.push(m)
+        if (matched.length >= quota) break
+      }
+    }
+    return matched
+  } catch {
+    return []
+  }
+}
+
+/**
  * Full Polymarket pipeline — fetch markets, score, run LLM screening, build
  * response. Refactored out of GET so SWR can call it as a fire-and-forget
  * background task.
@@ -1008,6 +1079,36 @@ async function runFullPipeline(): Promise<any> {
           }
         }
       } catch { /* skip */ }
+    }
+
+    // Per-category parallel fetch (Layer 2 of the rigor-and-diversification spec).
+    // Runs AFTER the standard fetches so it can backfill any categories that are
+    // under-represented in the global volume/liquidity/competitive pools.
+    // On tournament days the global vol24hr pool can be 80% sports/esports;
+    // these per-category fetches guarantee minimum coverage for politics,
+    // geopolitics, crypto-milestones, etc.
+    {
+      const { scoreDomainPredictability: scoreDPS } = await import('@/lib/services/dps.service')
+      const catController = new AbortController()
+      const catTimeoutId = setTimeout(() => catController.abort(), 15_000)
+      const fetchPromises = CATEGORY_FETCH_QUOTAS.map(({ category, quota }) =>
+        fetchMarketsForCategory(category, quota, catController.signal, scoreDPS)
+      )
+      const perCategoryResults = await Promise.allSettled(fetchPromises)
+      clearTimeout(catTimeoutId)
+
+      let catAdded = 0
+      for (const result of perCategoryResults) {
+        if (result.status !== 'fulfilled') continue
+        for (const m of result.value) {
+          if (!existingIds.has(m.id)) {
+            rawMarkets.push(m)
+            existingIds.add(m.id)
+            catAdded++
+          }
+        }
+      }
+      console.log(`[Polymarket] Per-category fetch: ${catAdded} new markets added across ${CATEGORY_FETCH_QUOTAS.length} categories (total pool: ${rawMarkets.length})`)
     }
 
     const now = Date.now()
