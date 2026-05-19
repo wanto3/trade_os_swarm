@@ -118,6 +118,39 @@ ${marketLines}
 
   - For genuinely 50/50 coin-flips with no signal either way: return direction="skip" with yourEstimate = the market's yesPrice (DON'T fabricate a number like 0.79 when you actually mean "I don't know").
 
+🔍 EDGE-FINDING FRAMEWORK — for each market, mentally check these five patterns BEFORE deciding direction:
+
+  1. BASE-RATE VIOLATION — does the market price disagree with the historical frequency of similar events?
+     * E.g. "incumbent re-election" markets at 70% when historical base rate is 85%+ — incumbent bias structurally underpriced.
+     * E.g. "regulatory approval" markets where typical approval rates for this drug/agency are well-documented.
+
+  2. RECENCY-BIAS CONTRARIAN — is the market overreacting to a single recent narrative event?
+     * E.g. a sports team loses one game and market drops 15pt despite season-long form being unchanged.
+     * E.g. a candidate has one bad debate, market overreacts, but structural fundamentals haven't shifted.
+
+  3. ASYMMETRIC PAYOFF — does small downside + large upside create positive EV even with mid-confidence?
+     * E.g. a 15%-priced longshot where your real estimate is 25% — 6.6x payout × 25% = 1.65 expected, edge of 67% on the bet.
+     * Don't skip these just because confidence is "medium" — Kelly sizing handles the variance.
+
+  4. INFORMATION ASYMMETRY — what do you (Opus 4.7) know that the market may not have integrated?
+     * Training-data knowledge of base rates, structural patterns, comparable historical events.
+     * Public-record facts that are well-known to experts but easy to overlook for casual bettors.
+
+  5. NARRATIVE-VS-FUNDAMENTALS SPLIT — is the market price driven by a compelling story that's NOT supported by hard evidence?
+     * "This candidate is the future" vs actual polling/registration data.
+     * "This team has momentum" vs actual head-to-head/talent gap.
+     * Fade the story, follow the fundamentals.
+
+  If a market matches one or more of these patterns AND you can articulate WHICH pattern in your reasoning, that's a real edge — surface it. If it matches NONE, skip more honestly.
+
+⚠️ TRAPS TO AVOID — these are the failure modes that have cost the user money:
+
+  - PERSONALITY-DRIVEN MARKETS where the "obvious" answer is the celebrity/charismatic option. Markets often price these reasonably; your gut may be wrong because of media saturation.
+  - "OBVIOUS FAVORITE" trap — heavy favorites (≥85%) where you reflexively want to bet YES because "of course they'll win". The market has already priced this in. Need a specific reason to push higher than 85%.
+  - HINDSIGHT-BIAS extrapolation — extrapolating recent results too far. "Team A won 3 in a row" doesn't mean 80% on game 4 if their underlying talent gap with Team B is small.
+  - UNDERDOG NARRATIVE trap — rooting for the scrappy underdog. The market has often priced "upset chance" correctly. Need specific structural reason (key injury, format change, matchup) to disagree.
+  - CONFIDENCE INFLATION from "I can reason about this" — being able to articulate a theory ≠ having predictive edge. If your reasoning is "X seems more likely because of vague sociological/psychological reasons", that's confidence='low'.
+
 🎯 DAILY COMPOUND TARGET — the user is compounding $4 toward $100 in 30 days. This requires ~11%/day growth from picks closing within 24h to 3 DAYS so capital recycles fast enough. Their primary trading window is ≤3d markets, so:
 
   - HUNT EDGE in EVERY ≤72h market — don't reflexively skip. Every closing-soon market deserves a real read:
@@ -141,7 +174,7 @@ Don't fabricate either of these — if you don't see the edge, skip honestly. Bu
 
 For EACH market, output:
 - yourEstimate: YES probability (0.0-1.0). NOT a percentage. Use 0.05 for "5% likely YES", 0.85 for "85% likely YES", etc.
-- direction: "yes" if you think YES is undervalued (bet YES); "no" if YES is overvalued (bet NO); "skip" if within ~5% of market price (or ~3% for closing-soon)
+- direction: "yes" if you think YES is undervalued (bet YES); "no" if YES is overvalued (bet NO); "skip" ONLY if (a) you're within 3% of the market price AND have no directional lean, OR (b) the bet structure has no asymmetric upside even with your edge. Default toward picking a direction when you have any prior — even medium-confidence directional bets carry information.
 - confidence — calibrate honestly, not defensively:
     * "high": specific public-record facts strongly support your direction (named polls, reported result, official announcement, base rate from historical data)
     * "medium": you have a reasonable directional prior even if not airtight — partial info, comparable historical patterns, sector knowledge from training data, observable trends. THIS IS THE DEFAULT for markets you can reason about even if you can't cite a specific source.
