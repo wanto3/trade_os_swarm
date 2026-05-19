@@ -933,6 +933,51 @@ export function setBankroll(newBankroll: number, alsoSetStarting = false): Polym
 }
 
 /**
+ * Algorithm Test Mode reset.
+ *
+ * Wipes auto-placed paper trades and resets bankroll to the specified
+ * starting amount. Used when the user wants to start a clean test run
+ * of the algorithm's performance (typically $10 for a tight sample).
+ *
+ * Preserves:
+ *   - Manual ('app') and imported ('imported') positions — those reflect
+ *     the user's real Polymarket activity and shouldn't be wiped
+ *   - bankrollHistory (so the curve shows the reset event in context)
+ *
+ * Resets:
+ *   - bankroll + startingBankroll to the amount
+ *   - All 'auto' positions removed
+ *   - wonTrades / lostTrades counters cleared (test starts at 0/0)
+ *
+ * Snapshots an 'init' event so the equity curve renders the reset point.
+ */
+export function resetTestMode(amount: number): PolymarketPortfolio {
+  if (!isFinite(amount) || amount <= 0) {
+    throw new Error(`Invalid test bankroll amount: ${amount}`)
+  }
+  // Drop only the auto-placed positions; keep app/imported intact.
+  const beforeCount = positions.length
+  for (let i = positions.length - 1; i >= 0; i--) {
+    if (positions[i].source === 'auto') {
+      positions.splice(i, 1)
+    }
+  }
+  const removedCount = beforeCount - positions.length
+
+  portfolio.bankroll = amount
+  portfolio.startingBankroll = amount
+  portfolio.wonTrades = 0
+  portfolio.lostTrades = 0
+  portfolio.totalPnl = positions.reduce((sum, p) => sum + (p.pnl ?? 0), 0)
+  portfolio.lastUpdate = Date.now()
+  snapshotBankroll('init')
+  recordDailySnapshot()
+  savePortfolioData()
+  console.log(`[PolymarketPortfolio] Test mode reset: bankroll → $${amount}, removed ${removedCount} auto-placed positions, won/lost counters cleared`)
+  return portfolio
+}
+
+/**
  * Recompute portfolio.totalPnl from current position state. Unlike the
  * inline updates in resolvePosition (which only sum resolved pnl),
  * this includes unrealizedPnl on open imported positions — so the
