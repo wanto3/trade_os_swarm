@@ -35,5 +35,40 @@ export interface ConvictionResult {
 }
 
 export function computeConviction(input: ConvictionInput): ConvictionResult {
-  throw new Error('not implemented')
+  // Signal 1: Opus edge — already filtered by FILTER 2-4 upstream;
+  // this flag just relays the result so we can count it as a signal.
+  const opus: ConvictionSignal = input.edgePassesFloor ? 'agrees' : 'disagrees'
+
+  // Signal 2: DPS classifier tier. high/medium = the category is
+  // predictable enough that Opus's call has structural backing.
+  // low/unknown/undefined = treat as disagree (conservative).
+  const dps: ConvictionSignal =
+    input.dpsTier === 'high' || input.dpsTier === 'medium' ? 'agrees' : 'disagrees'
+
+  // Signal 3: Calibration. Agree by default when there's no negative
+  // track record (losses < 3). Disagree only when we have ≥3 losses
+  // AND the hit rate is below 50%. This prevents the system from
+  // vetoing brand-new tiers (where calibration data is empty) while
+  // still blocking tiers proven to be losing for the user.
+  const losses = input.tierLosses ?? 0
+  let calibration: ConvictionSignal
+  if (losses < 3) {
+    calibration = 'agrees'
+  } else {
+    const wr = input.tierWinRate ?? 0
+    calibration = wr >= 50 ? 'agrees' : 'disagrees'
+  }
+
+  const agreeCount =
+    (opus === 'agrees' ? 1 : 0) +
+    (dps === 'agrees' ? 1 : 0) +
+    (calibration === 'agrees' ? 1 : 0)
+
+  const level: ConvictionLevel =
+    agreeCount === 3 ? 'strong'
+      : agreeCount === 2 ? 'moderate'
+      : agreeCount === 1 ? 'speculative'
+      : 'suppress'
+
+  return { level, signals: { opus, dps, calibration } }
 }
