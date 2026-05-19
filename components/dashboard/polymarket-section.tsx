@@ -369,6 +369,7 @@ export function PolymarketSection() {
   // "Why this side?" button to see the full Opus reasoning + a derived
   // plain-English breakdown of the recommended side's math.
   const [expandedWatchIds, setExpandedWatchIds] = useState<Set<string>>(new Set())
+  const [speculativeOpen, setSpeculativeOpen] = useState(false)
   const [analytics, setAnalytics] = useState<Analytics | null>(null)
   const [autoConfig, setAutoConfig] = useState<AutoTraderConfig | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -2569,6 +2570,69 @@ POLYMARKET_CLOB_API_SECRET=...`}
                 }}>
                   These markets close soon but Opus flagged low confidence or tiny edge. If you have your own read (e.g. you follow the team / event), use your judgment.
                 </div>
+                {watchListSpeculative.length > 0 && (
+                  <div style={{ marginTop: '1.5rem' }}>
+                    <button
+                      onClick={() => setSpeculativeOpen(v => !v)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        width: '100%',
+                        background: 'rgba(110,118,129,0.08)',
+                        border: '1px dashed rgba(110,118,129,0.4)',
+                        borderRadius: '8px',
+                        padding: '0.6rem 0.9rem',
+                        cursor: 'pointer',
+                        color: '#8b949e',
+                        fontSize: '0.65rem',
+                        fontWeight: 600,
+                        textAlign: 'left',
+                      }}
+                    >
+                      <span>{speculativeOpen ? '▼' : '▶'}</span>
+                      <span>SPECULATIVE — {watchListSpeculative.length} pick{watchListSpeculative.length === 1 ? '' : 's'} only 1 of 3 signals agreed</span>
+                      <span style={{ marginLeft: 'auto', fontSize: '0.55rem', color: '#6e7681', fontStyle: 'italic' }}>
+                        Higher variance — read the breakdown before betting
+                      </span>
+                    </button>
+                    {speculativeOpen && (
+                      <div style={{ marginTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', opacity: 0.85 }}>
+                        {watchListSpeculative.map((rec, idx) => (
+                          <div
+                            key={`spec-${idx}-${rec.market.id}`}
+                            style={{
+                              padding: '0.75rem',
+                              backgroundColor: '#161b22',
+                              border: '1px dashed #30363d',
+                              borderRadius: '8px',
+                              fontSize: '0.7rem',
+                              color: '#c9d1d9',
+                            }}
+                          >
+                            <div style={{ fontSize: '0.65rem', fontWeight: 700, marginBottom: '0.35rem', color: '#e6edf3' }}>
+                              {rec.market.question}
+                            </div>
+                            <div style={{ fontSize: '0.55rem', color: '#8b949e' }}>
+                              {(() => {
+                                const conv = (rec as TradeRecommendation & { conviction?: ConvictionResult }).conviction
+                                if (!conv) return null
+                                const o = conv.signals.opus === 'agrees' ? '✓' : '✗'
+                                const d = conv.signals.dps === 'agrees' ? '✓' : '✗'
+                                const c = conv.signals.calibration === 'agrees' ? '✓' : '✗'
+                                return `Opus ${o} · DPS ${d} · Calibration ${c}`
+                              })()}
+                              {' · '}
+                              Edge {((rec.estimatedProbability - rec.odds) * 100).toFixed(1)}pt
+                              {' · '}
+                              Side {rec.outcome} @ {(rec.odds * 100).toFixed(0)}¢
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )
           })()}
