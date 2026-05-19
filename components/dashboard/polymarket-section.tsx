@@ -10,6 +10,7 @@ import {
 import PortfolioImport from './portfolio-import'
 import PortfolioImportFromAddress from './portfolio-import-from-address'
 import LLMModelSelector from './llm-model-selector'
+import { computeConviction, type ConvictionResult } from '@/lib/services/conviction.service'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -1859,6 +1860,29 @@ POLYMARKET_CLOB_API_SECRET=...`}
 
               if (isUnderdog && edgePts < underdogFloor) return false
 
+              // FILTER 5 — MULTI-SIGNAL CONVICTION.
+              // Require 2 of 3 signals to agree before surfacing in the
+              // main watch list. 1-of-3 picks get tagged 'speculative'
+              // and rendered in a separate section. 0-of-3 dropped.
+              //
+              // Compute once, attach to the rec via a sidecar property
+              // so the badge renderer can read it without recomputing.
+              const recExt = r as TradeRecommendation & {
+                aiEdge?: 'strong' | 'user' | 'weak'
+                dpsTier?: 'high' | 'medium' | 'low' | 'unknown'
+              }
+              const tierKeyForConv = recExt.aiEdge ?? 'untagged'
+              const tierStatsForConv = analytics?.byAiEdge?.find(t => t.edge === tierKeyForConv)
+              const conviction = computeConviction({
+                edgePassesFloor: true,  // reached here = FILTER 2-4 passed
+                dpsTier: recExt.dpsTier,
+                tierWinRate: tierStatsForConv?.winRate ?? null,
+                tierLosses: tierStatsForConv?.losses ?? 0,
+              })
+              // Stash on the rec for downstream UI. Mutation is fine —
+              // the watch list rec objects are scoped to this render only.
+              ;(r as TradeRecommendation & { conviction?: ConvictionResult }).conviction = conviction
+              if (conviction.level === 'suppress') return false
               return true
             })
             if (watchList.length === 0) return null
@@ -1883,10 +1907,20 @@ POLYMARKET_CLOB_API_SECRET=...`}
             const watchListSorted = [...watchList].sort((a, b) => {
               return winProbOfSide(b) - winProbOfSide(a)  // high win prob first
             })
+            // Split into main (strong + moderate) and speculative (1-of-3).
+            // suppress picks were already dropped by FILTER 5 above.
+            const watchListMain = watchListSorted.filter(r => {
+              const conv = (r as TradeRecommendation & { conviction?: ConvictionResult }).conviction
+              return conv?.level === 'strong' || conv?.level === 'moderate'
+            })
+            const watchListSpeculative = watchListSorted.filter(r => {
+              const conv = (r as TradeRecommendation & { conviction?: ConvictionResult }).conviction
+              return conv?.level === 'speculative'
+            })
             // Apply category filter from watchTierFilter state
             const watchListFiltered = watchTierFilter === 'all'
-              ? watchListSorted
-              : watchListSorted.filter(r => {
+              ? watchListMain
+              : watchListMain.filter(r => {
                 const e = (r as TradeRecommendation & { aiEdge?: string }).aiEdge ?? 'untagged'
                 return e === watchTierFilter
               })
