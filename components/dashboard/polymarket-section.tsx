@@ -1906,7 +1906,17 @@ POLYMARKET_CLOB_API_SECRET=...`}
               return edge > 0 ? r.odds : 1 - r.odds
             }
             const watchListSorted = [...watchList].sort((a, b) => {
-              return winProbOfSide(b) - winProbOfSide(a)  // high win prob first
+              // Diversification boost: non-sports/esports get +0.02
+              // win-prob equivalent so politics/crypto/geopolitics
+              // float higher on tie-breaks. Small enough not to invert
+              // genuinely better picks, large enough to surface variety.
+              const aExt = a as TradeRecommendation & { dpsCategory?: string }
+              const bExt = b as TradeRecommendation & { dpsCategory?: string }
+              const isSportsA = aExt.dpsCategory === 'esports' || aExt.dpsCategory === 'live-sports'
+              const isSportsB = bExt.dpsCategory === 'esports' || bExt.dpsCategory === 'live-sports'
+              const boostA = isSportsA ? 0 : 0.02
+              const boostB = isSportsB ? 0 : 0.02
+              return (winProbOfSide(b) + boostB) - (winProbOfSide(a) + boostA)
             })
             // Split into main (strong + moderate) and speculative (1-of-3).
             // suppress picks were already dropped by FILTER 5 above.
