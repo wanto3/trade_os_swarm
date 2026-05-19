@@ -68,6 +68,22 @@ interface TradeRecommendation {
   }
 }
 
+// Server-side TradeRecommendation in app/api/polymarket/route.ts carries
+// more optional fields than the local subset above. Plus FILTER 5 stashes
+// a runtime `conviction` property on each rec. This alias is the single
+// source of truth for "everything the UI might read off a rec" — replaces
+// 27 inline `(rec as TradeRecommendation & { ... })` casts.
+type TradeRecExtended = TradeRecommendation & {
+  aiEdge?: 'strong' | 'user' | 'weak'
+  aiEdgeReason?: string
+  dpsCategory?: string
+  dpsTier?: 'high' | 'medium' | 'low' | 'unknown'
+  dailyRoi?: number
+  compoundable?: boolean
+  llmDirection?: string
+  conviction?: ConvictionResult
+}
+
 interface ApiResponse {
   success: boolean
   timestamp: number
@@ -670,7 +686,7 @@ export function PolymarketSection() {
     // Edge picks (live sports, props, crypto-price etc.) crowd the main view
     // with low-trust EV claims. Watch List still surfaces them for user
     // judgment trades.
-    const recExtGlobal = rec as TradeRecommendation & { aiEdge?: string }
+    const recExtGlobal = rec as TradeRecExtended
     if (hideLimitedEdge && recExtGlobal.aiEdge === 'weak') return false
 
     if (filterKey === 'high') return rec.confidence === 'high'
@@ -690,7 +706,7 @@ export function PolymarketSection() {
     if (filterKey === 'compound') {
       // Server-tagged compoundable picks: ≤30d resolution, AI Strong, win prob
       // ≥55%, EV >5%. These are the picks that actually let small bankroll grow.
-      return Boolean((rec as TradeRecommendation & { compoundable?: boolean }).compoundable)
+      return Boolean((rec as TradeRecExtended).compoundable)
     }
     if (filterKey === 'dailyTarget') {
       // "$4 → $100" daily-compound shape, widened to capture two paths:
@@ -701,7 +717,7 @@ export function PolymarketSection() {
       // The dailyRoi >= 1%/day threshold filters both honestly: anything
       // below that won't compound to $100 in any reasonable timeframe.
       const days = liveDays(rec)
-      const recExt = rec as TradeRecommendation & { aiEdge?: string; dailyRoi?: number }
+      const recExt = rec as TradeRecExtended
       const edgePts = rec.estimatedProbability - rec.odds
       const dailyRoi = recExt.dailyRoi ?? (rec.expectedValue / Math.max(0.5, days))
       // Tier-aware short-cycle threshold: AI-Strong + your-edge get the
@@ -731,7 +747,7 @@ export function PolymarketSection() {
       // Cat B longshot mispricings — secondary high-variance path. Market
       // ≤25% YES OR ≥75% NO-favorite, Opus disagrees by ≥15pts. $1 → $4-10
       // if right. Lose entirely if wrong. Single big winner = month's growth.
-      const recExt = rec as TradeRecommendation & { aiEdge?: string }
+      const recExt = rec as TradeRecExtended
       const longshotYes = rec.outcome === 'Yes' && rec.odds <= 0.25 && rec.estimatedProbability - rec.odds >= 0.15
       const longshotNo = rec.outcome === 'No' && rec.odds <= 0.25 && rec.estimatedProbability - rec.odds >= 0.15
       return (longshotYes || longshotNo) && recExt.aiEdge !== 'weak'
@@ -752,7 +768,7 @@ export function PolymarketSection() {
     // Match server-side tier-trust multiplier in calculateKellyBetSize so the
     // displayed bet matches what gets placed. AI-Strong+high → 1.5×,
     // AI-Strong+medium → 1.2×, AI-weak → 0.6×, else 1.0×.
-    const recExt = rec as TradeRecommendation & { aiEdge?: 'strong' | 'user' | 'weak' }
+    const recExt = rec as TradeRecExtended
     let tierMul = 1.0
     if (recExt.aiEdge === 'strong' && rec.confidence === 'high') tierMul = 1.5
     else if (recExt.aiEdge === 'strong' && rec.confidence === 'medium') tierMul = 1.2
@@ -1340,7 +1356,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
             const opps = data?.opportunities ?? []
             const dailyTargets = opps.filter(r => {
               const days = liveDays(r)
-              const recExt = r as TradeRecommendation & { aiEdge?: string; dailyRoi?: number }
+              const recExt = r as TradeRecExtended
               const edgePts = r.estimatedProbability - r.odds
               const dailyRoi = recExt.dailyRoi ?? (r.expectedValue / Math.max(0.5, days))
               // Tier-aware: AI-weak picks need 15pt edge + high confidence
@@ -1357,7 +1373,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
                      (isShortCycle || isMidHorizonHighEdge)
             })
             const longshots = opps.filter(r => {
-              const recExt = r as TradeRecommendation & { aiEdge?: string }
+              const recExt = r as TradeRecExtended
               return r.odds <= 0.25 &&
                 r.estimatedProbability - r.odds >= 0.15 &&
                 recExt.aiEdge !== 'weak'
@@ -1374,8 +1390,8 @@ POLYMARKET_CLOB_API_SECRET=...`}
             // Top picks for one-click deployment: highest daily-ROI from
             // daily-target lane, capped at 4 (matches $4 bankroll → $1/pick).
             const topPicks = [...dailyTargets].sort((a, b) => {
-              const aRoi = (a as TradeRecommendation & { dailyRoi?: number }).dailyRoi ?? a.expectedValue / Math.max(1, liveDays(a))
-              const bRoi = (b as TradeRecommendation & { dailyRoi?: number }).dailyRoi ?? b.expectedValue / Math.max(1, liveDays(b))
+              const aRoi = (a as TradeRecExtended).dailyRoi ?? a.expectedValue / Math.max(1, liveDays(a))
+              const bRoi = (b as TradeRecExtended).dailyRoi ?? b.expectedValue / Math.max(1, liveDays(b))
               return bRoi - aRoi
             }).slice(0, 4)
             const alreadyPlacedIds = new Set(openPositions.map(p => p.marketId))
@@ -1536,8 +1552,8 @@ POLYMARKET_CLOB_API_SECRET=...`}
                           {rec.confidence.toUpperCase()}
                         </span>
                         {/* Compoundable tag — fast-cycling capital, key for $4 bankroll */}
-                        {(rec as TradeRecommendation & { compoundable?: boolean; dailyRoi?: number }).compoundable && (() => {
-                          const r = rec as TradeRecommendation & { dailyRoi?: number }
+                        {(rec as TradeRecExtended).compoundable && (() => {
+                          const r = rec as TradeRecExtended
                           const dailyPct = ((r.dailyRoi || 0) * 100).toFixed(1)
                           return (
                             <span
@@ -1561,8 +1577,8 @@ POLYMARKET_CLOB_API_SECRET=...`}
                         })()}
                         {/* AI-edge tag — tells you whether Opus is the right brain
                             for this category. Hover for the why. */}
-                        {(rec as TradeRecommendation & { aiEdge?: 'strong' | 'user' | 'weak'; aiEdgeReason?: string }).aiEdge && (() => {
-                          const r = rec as TradeRecommendation & { aiEdge?: 'strong' | 'user' | 'weak'; aiEdgeReason?: string }
+                        {(rec as TradeRecExtended).aiEdge && (() => {
+                          const r = rec as TradeRecExtended
                           const edge = r.aiEdge!
                           const cfg = edge === 'strong'
                             ? { label: '🤖 AI Strong', color: '#3fb950', bg: 'rgba(63,185,80,0.12)' }
@@ -1846,7 +1862,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
               // recursive-learning loop — as resolved positions accumulate,
               // the filter auto-adapts to where the algorithm is actually
               // failing without requiring code changes.
-              const aiEdgeTier = (r as TradeRecommendation & { aiEdge?: string }).aiEdge
+              const aiEdgeTier = (r as TradeRecExtended).aiEdge
               let underdogFloor: number
               if (aiEdgeTier === 'strong')      underdogFloor = 5
               else if (aiEdgeTier === 'user')   underdogFloor = 8
@@ -1869,10 +1885,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
               //
               // Compute once, attach to the rec via a sidecar property
               // so the badge renderer can read it without recomputing.
-              const recExt = r as TradeRecommendation & {
-                aiEdge?: 'strong' | 'user' | 'weak'
-                dpsTier?: 'high' | 'medium' | 'low' | 'unknown'
-              }
+              const recExt = r as TradeRecExtended
               const tierKeyForConv = recExt.aiEdge ?? 'untagged'
               const tierStatsForConv = analytics?.byAiEdge?.find(t => t.edge === tierKeyForConv)
               const conviction = computeConviction({
@@ -1883,7 +1896,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
               })
               // Stash on the rec for downstream UI. Mutation is fine —
               // the watch list rec objects are scoped to this render only.
-              ;(r as TradeRecommendation & { conviction?: ConvictionResult }).conviction = conviction
+              ;(r as TradeRecExtended).conviction = conviction
               if (conviction.level === 'suppress') return false
               return true
             })
@@ -1911,8 +1924,8 @@ POLYMARKET_CLOB_API_SECRET=...`}
               // win-prob equivalent so politics/crypto/geopolitics
               // float higher on tie-breaks. Small enough not to invert
               // genuinely better picks, large enough to surface variety.
-              const aExt = a as TradeRecommendation & { dpsCategory?: string }
-              const bExt = b as TradeRecommendation & { dpsCategory?: string }
+              const aExt = a as TradeRecExtended
+              const bExt = b as TradeRecExtended
               const isSportsA = aExt.dpsCategory === 'esports' || aExt.dpsCategory === 'live-sports'
               const isSportsB = bExt.dpsCategory === 'esports' || bExt.dpsCategory === 'live-sports'
               const boostA = isSportsA ? 0 : 0.02
@@ -1922,31 +1935,31 @@ POLYMARKET_CLOB_API_SECRET=...`}
             // Split into main (strong + moderate) and speculative (1-of-3).
             // suppress picks were already dropped by FILTER 5 above.
             const watchListMain = watchListSorted.filter(r => {
-              const conv = (r as TradeRecommendation & { conviction?: ConvictionResult }).conviction
+              const conv = (r as TradeRecExtended).conviction
               return conv?.level === 'strong' || conv?.level === 'moderate'
             })
             const watchListSpeculative = watchListSorted.filter(r => {
-              const conv = (r as TradeRecommendation & { conviction?: ConvictionResult }).conviction
+              const conv = (r as TradeRecExtended).conviction
               return conv?.level === 'speculative'
             })
             // Apply category filter from watchTierFilter state
             const watchListFiltered = watchTierFilter === 'all'
               ? watchListMain
               : watchListMain.filter(r => {
-                const e = (r as TradeRecommendation & { aiEdge?: string }).aiEdge ?? 'untagged'
+                const e = (r as TradeRecExtended).aiEdge ?? 'untagged'
                 return e === watchTierFilter
               })
             const watchListAfterCategory = watchCategoryFilter === 'all'
               ? watchListFiltered
               : watchListFiltered.filter(r => {
-                const cat = (r as TradeRecommendation & { dpsCategory?: string }).dpsCategory ?? 'other'
+                const cat = (r as TradeRecExtended).dpsCategory ?? 'other'
                 return cat === watchCategoryFilter
               })
             // Count by AI-edge tier so the user sees the breakdown at a glance:
             // "3 👤 your edge / 2 🤖 AI / 5 ⚠️ weak"
             const edgeCounts = { strong: 0, user: 0, weak: 0, untagged: 0 }
             for (const r of watchListMain) {
-              const e = (r as TradeRecommendation & { aiEdge?: string }).aiEdge ?? 'untagged'
+              const e = (r as TradeRecExtended).aiEdge ?? 'untagged'
               if (e === 'strong') edgeCounts.strong++
               else if (e === 'user') edgeCounts.user++
               else if (e === 'weak') edgeCounts.weak++
@@ -2007,7 +2020,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
                   {(() => {
                     const counts = new Map<string, number>()
                     for (const r of watchListFiltered) {
-                      const cat = (r as TradeRecommendation & { dpsCategory?: string }).dpsCategory ?? 'other'
+                      const cat = (r as TradeRecExtended).dpsCategory ?? 'other'
                       counts.set(cat, (counts.get(cat) ?? 0) + 1)
                     }
                     const allCount = watchListFiltered.length
@@ -2047,7 +2060,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
                 }}>
                   {watchListAfterCategory.map((rec) => {
                     const liveDaysToClose = liveDays(rec)
-                    const recExt = rec as TradeRecommendation & { aiEdge?: 'strong' | 'user' | 'weak'; aiEdgeReason?: string; llmDirection?: string }
+                    const recExt = rec as TradeRecExtended
                     const edgePts = (rec.estimatedProbability - rec.odds) * 100  // signed edge
                     const edgeAbs = Math.abs(edgePts)
                     // Three-way direction: 'yes' if Opus's est > market by >=0.5pt,
@@ -2188,7 +2201,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
                         }}
                       >
                         {(() => {
-                          const conv = (rec as TradeRecommendation & { conviction?: ConvictionResult }).conviction
+                          const conv = (rec as TradeRecExtended).conviction
                           if (!conv) return null
                           // Defense: this badge is for the main watch list only. Speculative
                           // picks have their own section (Task 6) with their own rendering;
@@ -2675,7 +2688,7 @@ POLYMARKET_CLOB_API_SECRET=...`}
                             </div>
                             <div style={{ fontSize: '0.55rem', color: '#8b949e' }}>
                               {(() => {
-                                const conv = (rec as TradeRecommendation & { conviction?: ConvictionResult }).conviction
+                                const conv = (rec as TradeRecExtended).conviction
                                 if (!conv) return null
                                 const o = conv.signals.opus === 'agrees' ? '✓' : '✗'
                                 const d = conv.signals.dps === 'agrees' ? '✓' : '✗'
