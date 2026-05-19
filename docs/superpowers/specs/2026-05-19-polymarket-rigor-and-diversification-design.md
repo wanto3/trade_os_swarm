@@ -86,7 +86,6 @@ Replace the current "top-N by volume" market fetch in
 | `politics` | 30 | Opus strong here, often high-conviction edges |
 | `geopolitics` | 30 | Opus strong, longer-horizon picks |
 | `crypto-milestone` | 20 | Opus strong, you have personal interest |
-| `policy` | 20 | Opus reasonable, calibration data thin |
 | `corporate-ma` | 15 | Opus strong, slow-moving |
 | `tech-launch` | 15 | Opus strong, specific catalysts |
 | `esports` | 20 | Volume-heavy on Polymarket but high noise |

@@ -891,7 +891,6 @@ const CATEGORY_FETCH_QUOTAS: Array<{ category: string; quota: number }> = [
   { category: 'politics', quota: 30 },
   { category: 'geopolitics', quota: 30 },
   { category: 'crypto-milestone', quota: 20 },
-  { category: 'policy', quota: 20 },
   { category: 'corporate-ma', quota: 15 },
   { category: 'tech-launch', quota: 15 },
   { category: 'esports', quota: 20 },
