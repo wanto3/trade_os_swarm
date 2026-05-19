@@ -401,6 +401,8 @@ export function PolymarketSection() {
     balance: { usdc: number; eth: number }
     openOrdersCount: number
   } | null>(null)
+  const [testModeEnabled, setTestModeEnabled] = useState<boolean>(false)
+  const [testModeBusy, setTestModeBusy] = useState<boolean>(false)
 
   // Local config form state
   const [localConfig, setLocalConfig] = useState<Partial<AutoTraderConfig>>({})
@@ -427,6 +429,10 @@ export function PolymarketSection() {
     loadBalance()
     loadPaperData()
     loadLiveTradingStatus()
+    fetch('/api/polymarket/test-mode', { cache: 'no-store' })
+      .then(r => r.json())
+      .then(j => { if (j.success) setTestModeEnabled(Boolean(j.testModeEnabled)) })
+      .catch(() => { /* ignore — non-critical */ })
   }, [fetchData])
 
   // Auto-sync the header bankroll widget with the live Polymarket
@@ -502,6 +508,54 @@ export function PolymarketSection() {
       }
     } catch { /* ignore */ }
     if (!silent) setPaperLoading(false)
+  }
+
+  const toggleTestMode = async () => {
+    if (testModeBusy) return
+    setTestModeBusy(true)
+    try {
+      const res = await fetch('/api/polymarket/test-mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !testModeEnabled }),
+      })
+      const j = await res.json()
+      if (j.success) {
+        setTestModeEnabled(Boolean(j.testModeEnabled))
+        if (j.testModeEnabled) {
+          // Refresh data so the user sees any auto-placed picks soon
+          loadPaperData(true)
+        }
+      }
+    } catch (e) {
+      console.warn('[TestMode] toggle failed:', e)
+    } finally {
+      setTestModeBusy(false)
+    }
+  }
+
+  const resetTestPortfolio = async () => {
+    if (testModeBusy) return
+    const ok = typeof window !== 'undefined' && window.confirm(
+      'Reset algorithm test portfolio to $10?\n\nThis wipes all auto-placed paper trades and resets the bankroll. Manual + imported positions are preserved. Use this to start a clean 7-day test run.'
+    )
+    if (!ok) return
+    setTestModeBusy(true)
+    try {
+      const res = await fetch('/api/polymarket/reset-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount: 10 }),
+      })
+      const j = await res.json()
+      if (j.success) {
+        loadPaperData(true)
+      }
+    } catch (e) {
+      console.warn('[TestMode] reset failed:', e)
+    } finally {
+      setTestModeBusy(false)
+    }
   }
 
   // Live recursive-learning poll. Every 60s we silently re-fetch
@@ -2731,6 +2785,96 @@ POLYMARKET_CLOB_API_SECRET=...`}
       {/* ── Paper Trades Tab ── */}
       {activeTab === 'paper-trades' && (
         <div>
+          {(() => {
+            // Algorithm Test Mode banner — visible whether enabled or
+            // disabled. When ON, shows live counts of auto-placed picks
+            // so the user can see the algo's track record in real time.
+            const autoPositions = paperPositions.filter(p => p.source === 'auto')
+            const autoOpen = autoPositions.filter(p => p.status === 'open').length
+            const autoWon = autoPositions.filter(p => p.status === 'won').length
+            const autoLost = autoPositions.filter(p => p.status === 'lost').length
+            const autoResolved = autoWon + autoLost
+            const autoPnl = autoPositions.reduce((sum, p) => sum + (p.pnl ?? 0), 0)
+            const winRate = autoResolved > 0 ? (autoWon / autoResolved) * 100 : null
+
+            return (
+              <div style={{
+                marginBottom: '1rem',
+                padding: '0.9rem 1.1rem',
+                borderRadius: '12px',
+                background: testModeEnabled ? 'rgba(63,185,80,0.06)' : 'rgba(110,118,129,0.06)',
+                border: `1px ${testModeEnabled ? 'solid' : 'dashed'} ${testModeEnabled ? 'rgba(63,185,80,0.35)' : 'rgba(110,118,129,0.35)'}`,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '1rem',
+                flexWrap: 'wrap',
+              }}>
+                <div style={{
+                  fontSize: '0.95rem',
+                  color: testModeEnabled ? '#3fb950' : '#8b949e',
+                }}>
+                  🧪
+                </div>
+                <div style={{ flex: 1, minWidth: '200px' }}>
+                  <div style={{
+                    fontSize: '0.7rem',
+                    fontWeight: 700,
+                    color: testModeEnabled ? '#3fb950' : '#8b949e',
+                    letterSpacing: '0.04em',
+                    textTransform: 'uppercase',
+                    marginBottom: '0.2rem',
+                  }}>
+                    Algorithm Test Mode {testModeEnabled ? '· Active' : '· Off'}
+                  </div>
+                  <div style={{
+                    fontSize: '0.65rem',
+                    color: '#c9d1d9',
+                    lineHeight: 1.5,
+                  }}>
+                    {testModeEnabled
+                      ? `Auto-placing qualifying picks as paper trades. ${autoPositions.length} placed (${autoOpen} open) · ${autoResolved} resolved (${autoWon}W / ${autoLost}L${winRate !== null ? ` · ${winRate.toFixed(0)}%` : ''}) · Algo PnL ${autoPnl >= 0 ? '+' : '−'}$${Math.abs(autoPnl).toFixed(2)}`
+                      : 'Turn this on to run a hands-off test of the recommendation algorithm. Auto-placed paper trades only — no real money.'}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={toggleTestMode}
+                    disabled={testModeBusy}
+                    style={{
+                      padding: '0.4rem 0.8rem',
+                      background: testModeEnabled ? 'rgba(248,81,73,0.12)' : 'rgba(63,185,80,0.15)',
+                      border: `1px solid ${testModeEnabled ? 'rgba(248,81,73,0.4)' : 'rgba(63,185,80,0.4)'}`,
+                      borderRadius: '6px',
+                      color: testModeEnabled ? '#f85149' : '#3fb950',
+                      fontSize: '0.6rem',
+                      fontWeight: 700,
+                      cursor: testModeBusy ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    {testModeBusy ? 'Working…' : (testModeEnabled ? 'Stop Test' : 'Start Test')}
+                  </button>
+                  <button
+                    onClick={resetTestPortfolio}
+                    disabled={testModeBusy}
+                    title="Wipe auto-placed positions and reset paper bankroll to $10. Manual + imported positions preserved."
+                    style={{
+                      padding: '0.4rem 0.8rem',
+                      background: 'transparent',
+                      border: '1px solid #30363d',
+                      borderRadius: '6px',
+                      color: '#8b949e',
+                      fontSize: '0.6rem',
+                      fontWeight: 600,
+                      cursor: testModeBusy ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    Reset → $10
+                  </button>
+                </div>
+              </div>
+            )
+          })()}
+
           {/* Import button + Check Resolutions trigger — both ALWAYS visible
               at top of Paper Trades tab regardless of position count.
               "Check Resolutions" calls /api/polymarket/resolve-only on
