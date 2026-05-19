@@ -61,6 +61,11 @@ export interface TradeRecommendation {
   // crypto/stock prices); undefined = uncategorized / general.
   aiEdge?: 'strong' | 'user' | 'weak'
   aiEdgeReason?: string
+  // DPS classification — exposed to the UI for the conviction filter
+  // (Layer 1, FILTER 5). The server-side dpsInfo map already computes
+  // these; we just need to thread them through to the client.
+  dpsCategory?: string
+  dpsTier?: 'high' | 'medium' | 'low' | 'unknown'
   // Compounding economics for the user's small-capital scenario.
   // dailyRoi = expectedValue / daysToClose — measures how fast capital
   // recycles. With $4 starting capital, locking $1 for 999 days at +60% EV
@@ -1417,6 +1422,8 @@ async function runFullPipeline(): Promise<any> {
       // are Opus's bread-and-butter vs which need their own knowledge.
       const dps = dpsInfo.get(rec.market.question)
       const cat = dps?.category
+      rec.dpsCategory = dps?.category
+      rec.dpsTier = dps?.tier
       const AI_STRONG_CATS = new Set([
         'politics', 'geopolitics', 'corporate-ma', 'crypto-milestone',
         'tech-launch', 'box-office', 'creator-economy',
