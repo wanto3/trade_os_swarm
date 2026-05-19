@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { isTopTierEsports } from '@/lib/services/esports-classifier'
+import type { DPSTier } from '@/lib/services/dps.service'
 
 // Force dynamic rendering — never cache Polymarket data
 export const dynamic = 'force-dynamic'
@@ -65,7 +66,7 @@ export interface TradeRecommendation {
   // (Layer 1, FILTER 5). The server-side dpsInfo map already computes
   // these; we just need to thread them through to the client.
   dpsCategory?: string
-  dpsTier?: 'high' | 'medium' | 'low' | 'unknown'
+  dpsTier?: DPSTier
   // Compounding economics for the user's small-capital scenario.
   // dailyRoi = expectedValue / daysToClose — measures how fast capital
   // recycles. With $4 starting capital, locking $1 for 999 days at +60% EV
