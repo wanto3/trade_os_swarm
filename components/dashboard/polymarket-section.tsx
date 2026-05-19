@@ -2126,6 +2126,41 @@ POLYMARKET_CLOB_API_SECRET=...`}
                           e.currentTarget.style.backgroundColor = '#0d1117'
                         }}
                       >
+                        {(() => {
+                          const conv = (rec as TradeRecommendation & { conviction?: ConvictionResult }).conviction
+                          if (!conv) return null
+                          const cfg = conv.level === 'strong'
+                            ? { color: '#3fb950', bg: 'rgba(63,185,80,0.12)', icon: '🟢', label: 'STRONG CONVICTION' }
+                            : { color: '#f0c000', bg: 'rgba(240,192,0,0.12)', icon: '🟡', label: 'MODERATE CONVICTION' }
+                          const signalText = (() => {
+                            const o = conv.signals.opus === 'agrees' ? '✓' : '✗'
+                            const d = conv.signals.dps === 'agrees' ? '✓' : '✗'
+                            const c = conv.signals.calibration === 'agrees' ? '✓' : '✗'
+                            return `Opus ${o} · DPS ${d} · Calibration ${c}`
+                          })()
+                          return (
+                            <div
+                              title={`${signalText}\n\nA conviction badge means signals AGREED that this pick has edge — NOT that the outcome is guaranteed. Polymarket bets always involve risk.`}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                padding: '0.25rem 0.55rem',
+                                backgroundColor: cfg.bg,
+                                border: `1px solid ${cfg.color}55`,
+                                borderRadius: '6px',
+                                fontSize: '0.55rem',
+                                fontWeight: 700,
+                                color: cfg.color,
+                                marginBottom: '0.5rem',
+                                cursor: 'help',
+                              }}
+                            >
+                              <span>{cfg.icon} {cfg.label}</span>
+                              <span style={{ fontSize: '0.5rem', opacity: 0.8, fontWeight: 500 }}>{signalText}</span>
+                            </div>
+                          )
+                        })()}
                         <div style={{
                           display: 'flex', justifyContent: 'space-between',
                           alignItems: 'center', gap: '0.5rem',
