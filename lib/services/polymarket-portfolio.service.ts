@@ -115,6 +115,10 @@ export interface AutoTraderConfig {
   startingBankroll: number
   lastPoll: number | null
   lastPlacement: number | null
+  /** Algorithm Test Mode — when true, the API GET route auto-places
+   *  qualifying recommendations as paper trades after each screening.
+   *  Used to validate the algo's win-rate without manual clicks. */
+  testModeEnabled?: boolean
 }
 
 const DATA_DIR = join(process.cwd(), 'data')
@@ -145,6 +149,7 @@ const DEFAULT_CONFIG: AutoTraderConfig = {
   startingBankroll: 1000,
   lastPoll: null,
   lastPlacement: null,
+  testModeEnabled: false,
 }
 
 // In-memory state

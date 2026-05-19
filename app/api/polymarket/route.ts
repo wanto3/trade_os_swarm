@@ -1930,6 +1930,21 @@ async function runFullPipeline(): Promise<any> {
     // immediately while the new run completes in the background.
     saveDiskCache(responseData)
 
+    // Algorithm Test Mode: auto-place qualifying picks as paper trades
+    // so the user can validate the algo's win-rate hands-off.
+    // No-op unless the config flag is on.
+    try {
+      const { getConfig } = await import('@/lib/services/polymarket-portfolio.service')
+      const { placeOpportunitiesAsPaper } = await import('@/lib/services/polymarket-auto-trader')
+      const tmConfig = getConfig()
+      if (tmConfig.testModeEnabled === true && Array.isArray(allOpportunities) && allOpportunities.length > 0) {
+        const placement = await placeOpportunitiesAsPaper(allOpportunities)
+        console.log(`[Polymarket TestMode] placed=${placement.placed} skipped=${placement.skipped} errors=${placement.errors.length}`)
+      }
+    } catch (e) {
+      console.warn('[Polymarket TestMode] auto-place failed (non-fatal):', e instanceof Error ? e.message : e)
+    }
+
     // Return the response data — the SWR layer in GET wraps caching.
     return responseData
   } catch (error) {
