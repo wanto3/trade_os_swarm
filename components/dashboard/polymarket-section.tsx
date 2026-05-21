@@ -403,6 +403,7 @@ export function PolymarketSection() {
   } | null>(null)
   const [testModeEnabled, setTestModeEnabled] = useState<boolean>(false)
   const [testModeBusy, setTestModeBusy] = useState<boolean>(false)
+  const [dailyStatus, setDailyStatus] = useState<{ lastRunAt?: number | null; nextHours?: number } | null>(null)
 
   // Local config form state
   const [localConfig, setLocalConfig] = useState<Partial<AutoTraderConfig>>({})
@@ -431,7 +432,16 @@ export function PolymarketSection() {
     loadLiveTradingStatus()
     fetch('/api/polymarket/test-mode', { cache: 'no-store' })
       .then(r => r.json())
-      .then(j => { if (j.success) setTestModeEnabled(Boolean(j.testModeEnabled)) })
+      .then(j => {
+        if (j.success) {
+          setTestModeEnabled(Boolean(j.testModeEnabled))
+          if (typeof j.lastDailyRunAt !== 'undefined') {
+            const elapsed = j.lastDailyRunAt ? Date.now() - j.lastDailyRunAt : null
+            const next = elapsed !== null ? Math.max(0, (23 * 3_600_000 - elapsed) / 3_600_000) : 0
+            setDailyStatus({ lastRunAt: j.lastDailyRunAt, nextHours: next })
+          }
+        }
+      })
       .catch(() => { /* ignore — non-critical */ })
   }, [fetchData])
 
@@ -522,6 +532,11 @@ export function PolymarketSection() {
       const j = await res.json()
       if (j.success) {
         setTestModeEnabled(Boolean(j.testModeEnabled))
+        if (typeof j.lastDailyRunAt !== 'undefined') {
+          const elapsed = j.lastDailyRunAt ? Date.now() - j.lastDailyRunAt : null
+          const next = elapsed !== null ? Math.max(0, (23 * 3_600_000 - elapsed) / 3_600_000) : 0
+          setDailyStatus({ lastRunAt: j.lastDailyRunAt, nextHours: next })
+        }
         if (j.testModeEnabled) {
           // Refresh data so the user sees any auto-placed picks soon
           loadPaperData(true)
@@ -2834,6 +2849,13 @@ POLYMARKET_CLOB_API_SECRET=...`}
                     {testModeEnabled
                       ? `Auto-placing qualifying picks as paper trades. ${autoPositions.length} placed (${autoOpen} open) · ${autoResolved} resolved (${autoWon}W / ${autoLost}L${winRate !== null ? ` · ${winRate.toFixed(0)}%` : ''}) · Algo PnL ${autoPnl >= 0 ? '+' : '−'}$${Math.abs(autoPnl).toFixed(2)}`
                       : 'Turn this on to run a hands-off test of the recommendation algorithm. Auto-placed paper trades only — no real money.'}
+                    {testModeEnabled && dailyStatus && (
+                      <div style={{ fontSize: '0.6rem', color: '#8b949e', marginTop: '0.25rem' }}>
+                        Daily scheduler: {dailyStatus.lastRunAt
+                          ? `last fired ${((Date.now() - dailyStatus.lastRunAt) / 3_600_000).toFixed(1)}h ago, next in ${(dailyStatus.nextHours ?? 0).toFixed(1)}h`
+                          : 'never fired yet — will fire within the next hour'}
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>

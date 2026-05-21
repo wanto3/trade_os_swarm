@@ -33,4 +33,54 @@ export async function register() {
         console.warn('[instrumentation] Pre-warm failed:', e instanceof Error ? e.message : e)
       })
   }, 5000)
+
+  // Daily auto-trade scheduler — ticks every 60 minutes, fires a full
+  // screening + auto-place cycle when 23h+ have elapsed since the last
+  // run. Lets the algorithm test mode generate paper-trade picks once
+  // per day even when the dashboard is closed. No-op when test mode
+  // is disabled (the tick logs but doesn't place anything).
+  //
+  // Survives container restarts via persisted lastDailyRunAt in the
+  // auto-trader config. If a restart happens mid-day, the next tick
+  // sees the stored timestamp and waits the appropriate time.
+  //
+  // Uses fetch() to /api/polymarket/daily-tick instead of a dynamic
+  // import so that Node.js `fs`/`path` imports inside polymarket-auto-
+  // trader don't get pulled into the instrumentation bundle at build
+  // time (which would cause "Module not found: Can't resolve 'fs'" on
+  // the edge runtime analysis pass).
+  const TICK_INTERVAL_MS = 60 * 60 * 1000  // 1 hour
+  const tickPort = process.env.PORT || '3000'
+  const tickUrl = process.env.INTERNAL_API_BASE
+    ? `${process.env.INTERNAL_API_BASE}/api/polymarket/daily-tick`
+    : `http://localhost:${tickPort}/api/polymarket/daily-tick`
+
+  const runDailyTick = async () => {
+    try {
+      const res = await fetch(tickUrl, {
+        method: 'POST',
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+      })
+      if (!res.ok) {
+        console.warn(`[instrumentation] Daily tick HTTP ${res.status}`)
+        return
+      }
+      const result = await res.json()
+      if (result.fired) {
+        console.log(`[instrumentation] Daily scheduler fired — ${result.reason}`)
+      }
+    } catch (e) {
+      console.warn('[instrumentation] Daily tick failed:', e instanceof Error ? e.message : e)
+    }
+  }
+
+  // Fire first tick 30s after server start (gives the pre-warm above
+  // time to populate the screening cache), then every hour after.
+  setTimeout(() => {
+    runDailyTick().catch(() => {})
+    setInterval(() => {
+      runDailyTick().catch(() => {})
+    }, TICK_INTERVAL_MS)
+  }, 30_000)
 }

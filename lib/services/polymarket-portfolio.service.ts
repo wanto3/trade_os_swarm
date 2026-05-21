@@ -119,6 +119,9 @@ export interface AutoTraderConfig {
    *  qualifying recommendations as paper trades after each screening.
    *  Used to validate the algo's win-rate without manual clicks. */
   testModeEnabled?: boolean
+  /** Last time the daily auto-trade scheduler fired a cycle. Used to
+   *  prevent double-firing on container restart. Null until first run. */
+  lastDailyRunAt?: number | null
 }
 
 const DATA_DIR = join(process.cwd(), 'data')
@@ -150,6 +153,7 @@ const DEFAULT_CONFIG: AutoTraderConfig = {
   lastPoll: null,
   lastPlacement: null,
   testModeEnabled: false,
+  lastDailyRunAt: null,
 }
 
 // In-memory state

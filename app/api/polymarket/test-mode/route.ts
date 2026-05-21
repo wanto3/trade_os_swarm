@@ -12,6 +12,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       testModeEnabled: updated.testModeEnabled === true,
+      lastDailyRunAt: updated.lastDailyRunAt ?? null,
     })
   } catch (e) {
     return NextResponse.json({
@@ -28,6 +29,7 @@ export async function GET() {
     return NextResponse.json({
       success: true,
       testModeEnabled: cfg.testModeEnabled === true,
+      lastDailyRunAt: cfg.lastDailyRunAt ?? null,
     })
   } catch (e) {
     return NextResponse.json({

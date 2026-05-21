@@ -2,6 +2,7 @@ import type { TradeRecommendation, ConvictionBreakdown, TimeAnalysis, Conviction
 import {
   ensureInitialized,
   getConfig,
+  updateConfig,
   getPositions,
   getOpenPositionByMarketId,
   createPosition,
@@ -210,6 +211,83 @@ export async function placeOpportunitiesAsPaper(
     )
   }
   return result
+}
+
+const DAILY_INTERVAL_MS = 23 * 60 * 60 * 1000  // 23h (allow some drift around 24h)
+
+/**
+ * Daily auto-trade scheduler tick.
+ *
+ * Called every hour by the setInterval in instrumentation.ts. Checks
+ * if 23+ hours have elapsed since the last firing (from persisted
+ * config). If yes, fetches the latest screening output, calls
+ * placeOpportunitiesAsPaper, and updates lastDailyRunAt. If no, no-op.
+ *
+ * Skips placement entirely when testModeEnabled is false — the
+ * scheduler still ticks and logs, but doesn't touch any positions.
+ *
+ * Token cost: $0 when test mode is off (no LLM calls). When test mode
+ * is on, fires a single screening cycle per day (~same cost as one
+ * dashboard refresh).
+ *
+ * Never throws — wraps the whole cycle in try/catch.
+ */
+export async function runDailyAutoTradeIfDue(): Promise<{
+  fired: boolean
+  placed: number
+  reason: string
+  hoursUntilNext: number
+}> {
+  try {
+    await ensureInitialized()
+    const cfg = getConfig()
+    const now = Date.now()
+    const last = cfg.lastDailyRunAt ?? 0
+    const elapsedMs = now - last
+    const hoursUntilNext = Math.max(0, (DAILY_INTERVAL_MS - elapsedMs) / 3_600_000)
+
+    if (elapsedMs < DAILY_INTERVAL_MS) {
+      return { fired: false, placed: 0, reason: 'not yet due', hoursUntilNext }
+    }
+
+    // Eagerly write lastDailyRunAt BEFORE running the cycle so a slow
+    // pipeline (or a crash) doesn't cause a second tick to also fire.
+    await updateConfig({ lastDailyRunAt: now })
+
+    if (!cfg.testModeEnabled) {
+      console.log('[DailyScheduler] Tick fired but testModeEnabled=false — skipping placement')
+      return { fired: false, placed: 0, reason: 'test mode disabled', hoursUntilNext: 23 }
+    }
+
+    // Fetch latest opportunities via the internal API. We can't call
+    // the screening service directly here because it lives in a
+    // dynamic-import path. The internal HTTP fetch is the established
+    // pattern (see fetchOpportunities elsewhere in this file).
+    const baseUrl = process.env.INTERNAL_API_BASE || 'http://localhost:3000'
+    const res = await fetch(`${baseUrl}/api/polymarket`, {
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+    })
+    if (!res.ok) {
+      console.warn(`[DailyScheduler] Fetch failed: HTTP ${res.status}`)
+      return { fired: false, placed: 0, reason: `fetch http ${res.status}`, hoursUntilNext: 23 }
+    }
+    const data = await res.json()
+    const opportunities = (data.opportunities || []) as TradeRecommendation[]
+
+    const result = await placeOpportunitiesAsPaper(opportunities)
+    console.log(`[DailyScheduler] Fired daily cycle — placed ${result.placed}, skipped ${result.skipped}, errors ${result.errors.length}`)
+    return {
+      fired: true,
+      placed: result.placed,
+      reason: `placed ${result.placed} of ${opportunities.length} opportunities`,
+      hoursUntilNext: 23,
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.warn('[DailyScheduler] Tick failed:', msg)
+    return { fired: false, placed: 0, reason: `error: ${msg}`, hoursUntilNext: 1 }
+  }
 }
 
 export function startAutoTrader(): void {
