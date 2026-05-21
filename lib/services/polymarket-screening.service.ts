@@ -143,13 +143,13 @@ ${marketLines}
 
   If a market matches one or more of these patterns AND you can articulate WHICH pattern in your reasoning, that's a real edge — surface it. If it matches NONE, skip more honestly.
 
-⚠️ TRAPS TO AVOID — these are the failure modes that have cost the user money:
+⚠️ COMMON FAILURE MODES — be aware of these, but don't let them paralyze you into skipping. Trader's mindset: the goal is many small positive-EV bets, not zero losses. Half-Kelly sizing handles per-pick risk. Commit to a direction when you have ANY meaningful prior:
 
-  - PERSONALITY-DRIVEN MARKETS where the "obvious" answer is the celebrity/charismatic option. Markets often price these reasonably; your gut may be wrong because of media saturation.
-  - "OBVIOUS FAVORITE" trap — heavy favorites (≥85%) where you reflexively want to bet YES because "of course they'll win". The market has already priced this in. Need a specific reason to push higher than 85%.
-  - HINDSIGHT-BIAS extrapolation — extrapolating recent results too far. "Team A won 3 in a row" doesn't mean 80% on game 4 if their underlying talent gap with Team B is small.
-  - UNDERDOG NARRATIVE trap — rooting for the scrappy underdog. The market has often priced "upset chance" correctly. Need specific structural reason (key injury, format change, matchup) to disagree.
-  - CONFIDENCE INFLATION from "I can reason about this" — being able to articulate a theory ≠ having predictive edge. If your reasoning is "X seems more likely because of vague sociological/psychological reasons", that's confidence='low'.
+  - PERSONALITY-DRIVEN MARKETS: media saturation can bias your gut. Just be aware your "obvious" pick may already be priced in — but if you have a specific reason, still call it.
+  - HEAVY FAVORITE confirmation: at ≥85% YES, your estimate should be within ~5-15pt of the market unless you have specific structural reason for more. A 3-5pt confirmation edge IS bettable — it's safe-scalp territory.
+  - RECENT-FORM extrapolation: don't naively turn "3 wins in a row" into 90% on the next match — but if underlying form genuinely supports a 5-10pt edge over market, surface it.
+  - UNDERDOG picks: the market often prices upset chance fairly. To bet underdog, name the specific structural reason (key injury, format change, matchup mismatch). If you have one, commit with medium confidence.
+  - CONFIDENCE CALIBRATION: theory ≠ predictive edge. Use 'medium' when you have a real but non-airtight prior, 'low' only when genuinely no information. Default toward 'medium' for markets you can reason about at all.
 
 🎯 DAILY COMPOUND TARGET — the user is compounding $4 toward $100 in 30 days. This requires ~11%/day growth from picks closing within 24h to 3 DAYS so capital recycles fast enough. Their primary trading window is ≤3d markets, so:
 

@@ -178,9 +178,13 @@ export async function placeOpportunitiesAsPaper(
       result.skipped++
       continue
     }
-    // Filter 3: ≥5pt edge floor (mirrors FILTER 2 in the UI)
+    // Filter 3: ≥3pt edge floor (lowered from 5pt — see commit log).
+    // Half-Kelly sizing automatically scales bet size by edge magnitude,
+    // so a 3pt edge yields ~$0.30 stake while a 10pt edge yields ~$1.20.
+    // Small edges + Kelly sizing = small bets that compound. Volume
+    // matters more than per-pick perfection for paper-test learning.
     const edgePts = Math.abs((rec.estimatedProbability - rec.odds) * 100)
-    if (edgePts < 5) {
+    if (edgePts < 3) {
       result.skipped++
       continue
     }
