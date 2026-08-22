@@ -302,6 +302,27 @@ export default function DashboardPage() {
 
           {/* Auto-improve link */}
           <Link
+            href="/arbitrage"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              padding: '4px 10px',
+              borderRadius: '6px',
+              fontSize: '10px',
+              fontWeight: 600,
+              color: 'var(--green)',
+              background: 'rgba(0,255,136,0.08)',
+              border: '1px solid rgba(0,255,136,0.2)',
+              textDecoration: 'none',
+              transition: 'all 0.2s',
+            }}
+          >
+            <ArrowLeftRight size={10} />
+            ARB LAB
+          </Link>
+
+          <Link
             href="/self-improvement"
             style={{
               display: 'flex',
