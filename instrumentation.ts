@@ -23,6 +23,11 @@ export async function register() {
   // Skip in test runs so vitest startups stay fast.
   if (process.env.NODE_ENV === 'test') return
 
+  // Without a model key the legacy background pipeline can only produce
+  // placeholder verdicts and rewrite its cache; the prediction dashboard
+  // fetches its own public quotes on demand.
+  if (!process.env.GROQ_API_KEY) return
+
   // Skip on Vercel: pre-warming a localhost endpoint is meaningless on serverless.
   // There's no persistent server — each request spins up a fresh function. The fetch
   // below would either hit a non-existent server or wake a function that immediately

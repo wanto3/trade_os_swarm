@@ -1,1343 +1,221 @@
 'use client'
 
-import React, { useState, useEffect, useCallback } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import {
-  Zap, TrendingUp, TrendingDown, Activity, RefreshCw,
-  Clock, Wallet, Bell, Settings, Maximize2, Minimize2,
-  BarChart3, LineChart as LineIcon, PieChart as PieIcon,
-  Globe, ArrowUpRight, ArrowDownLeft, Shield, AlertTriangle,
-  Target, Cpu, Database, Eye, ArrowLeftRight
+  Activity, ArrowLeftRight, ArrowUpRight, BrainCircuit, ExternalLink,
+  Filter, RefreshCw, Search, ShieldAlert, ShieldCheck, Sparkles,
 } from 'lucide-react'
-import { GlassPanel } from '@/components/dashboard/glass-panel'
-import { DataCard } from '@/components/dashboard/data-card'
-import { GaugeIndicator } from '@/components/dashboard/gauge-indicator'
-import { TrendBadge } from '@/components/dashboard/trend-badge'
-import { PriceHero } from '@/components/dashboard/price-hero'
-import { SignalRadar } from '@/components/dashboard/signal-radar'
-import { OrderBookDepth } from '@/components/dashboard/order-book-depth'
-import { WhaleAlerts } from '@/components/dashboard/whale-alerts'
-import { MarginHealth, FundingRates, OpenInterest, Liquidations } from '@/components/dashboard/margin-health'
-import { PositionManager } from '@/components/dashboard/position-manager'
-import { KellyCalculator } from '@/components/dashboard/kelly-optimizer'
-import { MultiTimeframe, SupportResistanceLevels } from '@/components/dashboard/multi-timeframe'
-import RSIIndicator from '@/components/dashboard/rsi-indicator'
-import InfluencerInsights from '@/components/dashboard/influencer-insights'
-import MACDIndicator from '@/components/dashboard/macd-indicator'
-import BollingerIndicator from '@/components/dashboard/bollinger-indicator'
-import MovingAveragesIndicator from '@/components/dashboard/moving-averages-indicator'
-import VolumeAnalyzer from '@/components/dashboard/volume-analyzer'
-import MomentumIndicator from '@/components/dashboard/momentum-indicator'
-import VolatilityMeter from '@/components/dashboard/volatility-meter'
-import TrendScanner from '@/components/dashboard/trend-scanner'
-import SupportResistance from '@/components/dashboard/support-resistance'
-import { TabNavigation } from '@/components/dashboard/tab-nav'
-import { StatusBar } from '@/components/dashboard/status-bar'
-import { PolymarketSection } from '@/components/dashboard/polymarket-section'
+import type {
+  PredictionMarket, PredictionMarketSnapshot, PredictionVenue,
+} from '@/lib/services/prediction-markets.service'
 
-// Types
-interface PriceData {
-  symbol: string
-  price: number
-  change24h: number
-  volume24h: number
-  marketCap: number
+type VenueFilter = 'all' | PredictionVenue
+
+interface ResearchResult {
+  model: string
+  generatedAt: string
+  estimate: number
+  confidence: 'high' | 'medium' | 'low'
+  uncertaintyRange: number
+  reasoning: string
+  citedEvidence: string[]
+  premortemRisks: string[]
+  evidenceCount: number
+  signalStrength: number
+  disclaimer: string
 }
 
-type TabId = 'overview' | 'technical' | 'onchain' | 'trading' | 'markets'
-
-// === FALLBACK DATA ===
-const FALLBACK_PRICES: PriceData[] = [
-  { symbol: 'BTC', price: 67661, change24h: -2.68, volume24h: 42e9, marketCap: 1.33e12 },
-  { symbol: 'ETH', price: 2039, change24h: -1.75, volume24h: 14e9, marketCap: 246e9 },
-  { symbol: 'SOL', price: 84.98, change24h: -3.43, volume24h: 3.2e9, marketCap: 37e9 },
-  { symbol: 'ADA', price: 0.2507, change24h: -2.45, volume24h: 480e6, marketCap: 8.9e9 },
-  { symbol: 'DOT', price: 1.29, change24h: -1.01, volume24h: 320e6, marketCap: 1.8e9 },
-]
-
-// === UTILITY ===
-function formatLarge(n: number): string {
-  if (n >= 1e12) return `$${(n / 1e12).toFixed(2)}T`
-  if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`
-  if (n >= 1e6) return `$${(n / 1e6).toFixed(2)}M`
-  if (n >= 1e3) return `$${(n / 1e3).toFixed(0)}K`
-  return `$${n.toFixed(2)}`
+function quote(price: number | null): string {
+  return price === null ? '—' : `${(price * 100).toFixed(1)}¢`
 }
 
-function formatTimeAgo(ts: number | null): string {
-  if (!ts) return ''
-  const diff = Date.now() - ts
-  const secs = Math.floor(diff / 1000)
-  if (secs < 60) return `${secs}s ago`
-  const mins = Math.floor(secs / 60)
-  if (mins < 60) return `${mins}m ago`
-  return `${Math.floor(mins / 60)}h ago`
+function volume(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`
+  return value.toFixed(0)
 }
 
-// === MAIN PAGE ===
-export default function DashboardPage() {
-  const [prices, setPrices] = useState<PriceData[]>(FALLBACK_PRICES)
-  const [dataSource, setDataSource] = useState<string>('local')
-  const [lastUpdated, setLastUpdated] = useState<number | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [activeTab, setActiveTab] = useState<TabId>('overview')
-  const [selectedSymbol, setSelectedSymbol] = useState<string>('BTC')
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const [time, setTime] = useState(0)
+function closeLabel(value: string | null): string {
+  if (!value) return 'Close unknown'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? 'Close unknown' : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}
 
-  const selectedPrice = prices.find(p => p.symbol === selectedSymbol) || prices[0]
+function sourceLabel(venue: PredictionVenue): string {
+  return venue === 'polymarket' ? 'POLYMARKET' : 'KALSHI'
+}
 
-  const fetchPrices = useCallback(async () => {
+export default function PredictionMarketDashboard() {
+  const [snapshot, setSnapshot] = useState<PredictionMarketSnapshot | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [filter, setFilter] = useState<VenueFilter>('all')
+  const [search, setSearch] = useState('')
+  const [selectedKey, setSelectedKey] = useState<string | null>(null)
+  const [research, setResearch] = useState<ResearchResult | null>(null)
+  const [researchLoading, setResearchLoading] = useState(false)
+  const [researchError, setResearchError] = useState<string | null>(null)
+
+  const refresh = useCallback(async () => {
     setLoading(true)
+    setError(null)
     try {
-      // Fetch BTC real data from the TA service
-      const btcRes = await fetch('/api/prices?symbol=BTCUSDT&interval=1h')
-      const btcJson = await btcRes.json()
-      const btcPrice = btcJson.price ? { symbol: 'BTC', price: btcJson.price, change24h: btcJson.change24h, volume24h: 42e9, marketCap: btcJson.price * 19800000 } : null
-
-      // Fetch ETH, SOL, ADA, DOT from CoinGecko for multi-coin display
-      const cgRes = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum,solana,cardano,polkadot&vs_currencies=usd&include_24hr_change=true')
-      const cgJson = await cgRes.json()
-
-      const fetchedPrices: PriceData[] = []
-      if (btcPrice) fetchedPrices.push(btcPrice)
-      if (cgJson.ethereum) fetchedPrices.push({ symbol: 'ETH', price: cgJson.ethereum.usd, change24h: cgJson.ethereum.usd_24h_change ?? 0, volume24h: 14e9, marketCap: cgJson.ethereum.usd * 120e6 })
-      if (cgJson.solana) fetchedPrices.push({ symbol: 'SOL', price: cgJson.solana.usd, change24h: cgJson.solana.usd_24h_change ?? 0, volume24h: 3.2e9, marketCap: cgJson.solana.usd * 440e6 })
-      if (cgJson.cardano) fetchedPrices.push({ symbol: 'ADA', price: cgJson.cardano.usd, change24h: cgJson.cardano.usd_24h_change ?? 0, volume24h: 480e6, marketCap: cgJson.cardano.usd * 35e9 })
-      if (cgJson.polkadot) fetchedPrices.push({ symbol: 'DOT', price: cgJson.polkadot.usd, change24h: cgJson.polkadot.usd_24h_change ?? 0, volume24h: 320e6, marketCap: cgJson.polkadot.usd * 1.4e9 })
-
-      if (fetchedPrices.length > 0) {
-        setPrices(fetchedPrices)
-        setDataSource('live')
-        setLastUpdated(Date.now())
-      }
-    } catch {
-      setDataSource('local')
+      const response = await fetch('/api/prediction-markets', { cache: 'no-store' })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`)
+      setSnapshot(data as PredictionMarketSnapshot)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Market feed unavailable')
     } finally {
       setLoading(false)
     }
   }, [])
 
   useEffect(() => {
-    setTime(Date.now())
-    fetchPrices()
-    const id = setInterval(fetchPrices, 60000)
-    const timeId = setInterval(() => setTime(Date.now()), 1000)
-    return () => {
-      clearInterval(id)
-      clearInterval(timeId)
+    void refresh()
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refresh()
+    }, 60_000)
+    return () => window.clearInterval(timer)
+  }, [refresh])
+
+  const markets = useMemo(() => [...(snapshot?.markets ?? [])].sort((a, b) => b.volume24h - a.volume24h), [snapshot])
+  const quoteCounts = useMemo(() => ({
+    polymarket: markets.filter(market => market.venue === 'polymarket' && (market.yesAsk !== null || market.noAsk !== null)).length,
+    kalshi: markets.filter(market => market.venue === 'kalshi' && (market.yesAsk !== null || market.noAsk !== null)).length,
+  }), [markets])
+  const visible = useMemo(() => markets.filter(market =>
+    (filter === 'all' || market.venue === filter) &&
+    market.title.toLowerCase().includes(search.trim().toLowerCase()),
+  ).slice(0, 80), [markets, filter, search])
+  const selected = visible.find(market => `${market.venue}:${market.id}` === selectedKey) ?? visible[0] ?? null
+
+  const selectMarket = (market: PredictionMarket) => {
+    setSelectedKey(`${market.venue}:${market.id}`)
+    setResearch(null)
+    setResearchError(null)
+  }
+
+  const researchSelected = async () => {
+    if (!selected || !snapshot?.modelAvailable) return
+    setResearchLoading(true)
+    setResearch(null)
+    setResearchError(null)
+    try {
+      const response = await fetch('/api/prediction-markets/research', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: selected.id, venue: selected.venue }),
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`)
+      setResearch(data as ResearchResult)
+    } catch (cause) {
+      setResearchError(cause instanceof Error ? cause.message : 'Research unavailable')
+    } finally {
+      setResearchLoading(false)
     }
-  }, [fetchPrices])
+  }
 
-  // Prefetch prediction market data on page load so it's ready when user opens Markets tab
-  useEffect(() => {
-    fetch('/api/polymarket', { cache: 'no-store' }).catch(() => {})
-  }, [])
-
-  // Order book mock
-  const midPrice = selectedPrice.price
-  const spread = midPrice * 0.0003
-  const mockBids = Array.from({ length: 12 }, (_, i) => ({
-    price: midPrice - spread - (i * midPrice * 0.0001),
-    size: 0.5 + Math.random() * 3,
-    total: 0,
-  }))
-  const mockAsks = Array.from({ length: 12 }, (_, i) => ({
-    price: midPrice + spread + (i * midPrice * 0.0001),
-    size: 0.5 + Math.random() * 3,
-    total: 0,
-  }))
-  let bidTotal = 0
-  let askTotal = 0
-  mockBids.forEach(b => { bidTotal += b.size; b.total = bidTotal })
-  mockAsks.forEach(a => { askTotal += a.size; a.total = askTotal })
-
-  // Signal radar — fetches its own real data internally
-
-  const formatClock = (ts: number) =>
-    new Date(ts).toLocaleTimeString('en-US', { hour12: false })
-
-  // === RENDER ===
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        background: 'var(--void)',
-        color: 'var(--text-primary)',
-        fontFamily: 'var(--font-sans)',
-        position: 'relative',
-        overflowX: 'hidden',
-      }}
-    >
-      {/* Ambient background orbs */}
+    <main className="relative min-h-screen overflow-hidden bg-void text-foreground">
       <div className="ambient-orb ambient-orb-1" />
-      <div className="ambient-orb ambient-orb-2" />
-      <div className="ambient-orb ambient-orb-3" />
-
-      {/* Scan line */}
-      <div className="scan-line-overlay" />
-
-      {/* Hex grid bg */}
-      <div className="hex-grid-bg" style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 0 }} />
-
-      {/* === HEADER === */}
-      <header
-        style={{
-          position: 'sticky',
-          top: 0,
-          zIndex: 50,
-          background: 'rgba(5,5,8,0.9)',
-          backdropFilter: 'blur(12px)',
-          borderBottom: '1px solid rgba(42,42,74,0.6)',
-          padding: '0 24px',
-          height: '56px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '24px',
-        }}
-      >
-        {/* Logo */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
-          <div style={{
-            width: '32px',
-            height: '32px',
-            borderRadius: '8px',
-            background: 'linear-gradient(135deg, var(--cyan), var(--purple))',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            boxShadow: '0 0 16px rgba(0,245,255,0.3), 0 0 4px rgba(168,85,247,0.3)',
-          }}>
-            <Zap size={18} color="#fff" style={{ filter: 'drop-shadow(0 0 4px #fff)' }} />
+      <div className="hex-grid-bg pointer-events-none fixed inset-0" />
+      <div className="relative z-10 mx-auto max-w-[1600px] px-4 pb-16 pt-5 md:px-8">
+        <header className="mb-8 flex flex-wrap items-center justify-between gap-4 border-b border-border-glow/60 pb-5">
+          <div className="flex items-center gap-3">
+            <div className="grid h-10 w-10 place-items-center rounded-xl border border-cyan/30 bg-cyan/10 text-cyan"><Activity size={21} /></div>
+            <div>
+              <div className="font-display text-sm font-bold tracking-[.18em] text-foreground md:text-base">TRADE<span className="text-cyan">OS</span></div>
+              <div className="text-[10px] uppercase tracking-[.16em] text-muted-secondary">Prediction market command center</div>
+            </div>
           </div>
-          <div>
-            <h1 style={{
-              fontSize: '14px',
-              fontWeight: 700,
-              fontFamily: 'var(--font-display)',
-              letterSpacing: '0.1em',
-              color: 'var(--text-primary)',
-              margin: 0,
-              lineHeight: 1,
-            }}>
-              CRYPTOS<span style={{ color: 'var(--cyan)' }}>OS</span>
-            </h1>
-            <p style={{
-              fontSize: '8px',
-              color: 'var(--text-muted)',
-              margin: 0,
-              letterSpacing: '0.15em',
-              textTransform: 'uppercase',
-            }}>
-              Command Center
-            </p>
+          <nav className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="rounded-lg border border-cyan/30 bg-cyan/10 px-3 py-2 font-semibold text-cyan">Markets</span>
+            <Link href="/arbitrage" className="flex items-center gap-1.5 rounded-lg border border-border-glow bg-surface px-3 py-2 text-muted-secondary hover:text-cyan"><ArrowLeftRight size={13} /> Complete-set lab</Link>
+            <Link href="/crypto" className="rounded-lg border border-border-glow bg-surface px-3 py-2 text-muted-secondary hover:text-cyan">Crypto dashboard</Link>
+          </nav>
+        </header>
+
+        <section className="mb-7 grid gap-5 xl:grid-cols-[1fr_330px]">
+          <div className="rounded-2xl border border-border-glow bg-gradient-to-br from-cyan/10 via-surface to-purple/5 p-6 md:p-8">
+            <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-green/30 bg-green/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-green"><ShieldCheck size={12} /> Read only · paper research</div>
+            <h1 className="max-w-3xl font-display text-2xl font-bold leading-tight tracking-wide md:text-4xl">Find the question.<br /><span className="text-cyan">Price the uncertainty.</span></h1>
+            <p className="mt-4 max-w-3xl text-sm leading-relaxed text-muted-secondary">Live public Kalshi and Polymarket quotes, side-by-side research, and a manual cross-venue review queue. No orders, wallet access, or invented “guaranteed” outcomes.</p>
+            <div className="mt-6 flex flex-wrap gap-2 text-xs text-muted-secondary">
+              <span className="rounded-lg border border-border bg-void/60 px-3 py-2">YES / NO asks ≠ true probability</span>
+              <span className="rounded-lg border border-border bg-void/60 px-3 py-2">Quotes can move before execution</span>
+              <span className="rounded-lg border border-border bg-void/60 px-3 py-2">Rules must match before hedging</span>
+            </div>
           </div>
-        </div>
-
-        {/* Tab navigation */}
-        <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
-          <TabNavigation activeTab={activeTab} onTabChange={setActiveTab} />
-        </div>
-
-        {/* Right actions */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
-          {/* Live indicator */}
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '4px 10px',
-            borderRadius: '20px',
-            background: 'rgba(0,255,136,0.06)',
-            border: '1px solid rgba(0,255,136,0.2)',
-          }}>
-            <div className="live-dot" />
-            <span style={{ fontSize: '10px', fontWeight: 600, color: 'var(--green)' }}>LIVE</span>
+          <div className="rounded-2xl border border-purple/25 bg-surface/90 p-5">
+            <div className="mb-4 flex items-center gap-2 text-sm font-semibold"><Sparkles size={16} className="text-purple" /> Research stack</div>
+            <div className="space-y-3 text-xs text-muted-secondary">
+              <div className="flex justify-between gap-3 border-b border-border pb-3"><span>Polymarket</span><span className={snapshot?.sources.polymarket.ok && quoteCounts.polymarket > 0 ? 'text-green' : 'text-orange'}>{snapshot?.sources.polymarket.ok ? `${snapshot.sources.polymarket.count} markets · ${quoteCounts.polymarket} quoted` : 'unavailable'}</span></div>
+              <div className="flex justify-between gap-3 border-b border-border pb-3"><span>Kalshi</span><span className={snapshot?.sources.kalshi.ok && quoteCounts.kalshi > 0 ? 'text-green' : 'text-orange'}>{snapshot?.sources.kalshi.ok ? `${snapshot.sources.kalshi.count} markets · ${quoteCounts.kalshi} quoted` : 'unavailable'}</span></div>
+              <div className="flex justify-between gap-3 border-b border-border pb-3"><span>On-demand model</span><span className={snapshot?.modelAvailable ? 'text-green' : 'text-orange'}>{snapshot?.modelAvailable ? 'configured' : 'not configured'}</span></div>
+              <div className="flex justify-between gap-3"><span>Snapshot</span><span className="font-mono text-foreground">{snapshot ? new Date(snapshot.generatedAt).toLocaleTimeString() : '—'}</span></div>
+            </div>
+            <button onClick={() => void refresh()} disabled={loading} className="mt-5 flex w-full items-center justify-center gap-2 rounded-lg border border-cyan/30 bg-cyan/10 px-3 py-2.5 text-xs font-semibold text-cyan transition hover:bg-cyan/20 disabled:opacity-50"><RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> {loading ? 'Refreshing feeds…' : 'Refresh feeds'}</button>
           </div>
+        </section>
 
-          {/* Clock */}
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '4px',
-            fontSize: '12px',
-            fontFamily: 'var(--font-mono)',
-            fontWeight: 600,
-            color: 'var(--text-secondary)',
-          }}>
-            <Clock size={12} />
-            {formatClock(time)}
-          </div>
+        {error && <div className="mb-5 rounded-xl border border-magenta/30 bg-magenta/10 p-4 text-sm text-magenta">Market feeds failed: {error}</div>}
+        {snapshot && !snapshot.sources.polymarket.ok && <div className="mb-3 text-xs text-orange">Polymarket unavailable: {snapshot.sources.polymarket.error}</div>}
+        {snapshot?.sources.polymarket.ok && snapshot.sources.polymarket.count > 0 && quoteCounts.polymarket === 0 && <div className="mb-3 text-xs text-orange">Polymarket market metadata is live, but its executable CLOB asks are temporarily unavailable. No Polymarket arbitrage is evaluated without asks.</div>}
+        {snapshot && !snapshot.sources.kalshi.ok && <div className="mb-3 text-xs text-orange">Kalshi unavailable: {snapshot.sources.kalshi.error}</div>}
 
-          {/* Refresh */}
-          <button
-            onClick={fetchPrices}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: '28px',
-              height: '28px',
-              borderRadius: '6px',
-              border: '1px solid rgba(42,42,74,0.8)',
-              background: 'transparent',
-              cursor: 'pointer',
-              color: 'var(--text-muted)',
-              transition: 'all 0.2s',
-            }}
-          >
-            <RefreshCw size={12} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
-          </button>
-
-          {/* Source */}
-          <div style={{
-            fontSize: '9px',
-            fontFamily: 'var(--font-mono)',
-            color: dataSource === 'coingecko' ? 'var(--cyan)' : 'var(--orange)',
-            textTransform: 'uppercase',
-            letterSpacing: '0.05em',
-          }}>
-            {dataSource}
-          </div>
-
-          {/* Auto-improve link */}
-          <Link
-            href="/arbitrage"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              padding: '4px 10px',
-              borderRadius: '6px',
-              fontSize: '10px',
-              fontWeight: 600,
-              color: 'var(--green)',
-              background: 'rgba(0,255,136,0.08)',
-              border: '1px solid rgba(0,255,136,0.2)',
-              textDecoration: 'none',
-              transition: 'all 0.2s',
-            }}
-          >
-            <ArrowLeftRight size={10} />
-            ARB LAB
-          </Link>
-
-          <Link
-            href="/self-improvement"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              padding: '4px 10px',
-              borderRadius: '6px',
-              fontSize: '10px',
-              fontWeight: 600,
-              color: 'var(--purple)',
-              background: 'rgba(168,85,247,0.08)',
-              border: '1px solid rgba(168,85,247,0.2)',
-              textDecoration: 'none',
-              transition: 'all 0.2s',
-            }}
-          >
-            <Zap size={10} />
-            AI
-          </Link>
-        </div>
-      </header>
-
-      {/* === MAIN CONTENT === */}
-      <div style={{
-        display: 'flex',
-        minHeight: 'calc(100vh - 56px - 28px)',
-        position: 'relative',
-        zIndex: 1,
-      }}>
-        {/* === LEFT SIDEBAR === */}
-        <aside
-          style={{
-            width: sidebarCollapsed ? '48px' : '260px',
-            flexShrink: 0,
-            borderRight: '1px solid rgba(42,42,74,0.5)',
-            padding: sidebarCollapsed ? '16px 8px' : '16px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '16px',
-            background: 'rgba(5,5,8,0.5)',
-            transition: 'width 0.2s ease-out',
-            overflow: 'hidden',
-          }}
-        >
-          {/* Collapse toggle */}
-          <button
-            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: sidebarCollapsed ? 'center' : 'flex-end',
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              color: 'var(--text-muted)',
-              padding: '4px',
-            }}
-          >
-            {sidebarCollapsed ? <Maximize2 size={12} /> : <Minimize2 size={12} />}
-          </button>
-
-          {!sidebarCollapsed && (
-            <>
-              {/* Symbol selector */}
-              <div>
-                <div style={{
-                  fontSize: '9px',
-                  fontWeight: 600,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.1em',
-                  color: 'var(--text-muted)',
-                  marginBottom: '8px',
-                }}>
-                  Selected Asset
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  {prices.map((p) => (
-                    <button
-                      key={p.symbol}
-                      onClick={() => setSelectedSymbol(p.symbol)}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        padding: '8px 10px',
-                        borderRadius: '8px',
-                        border: 'none',
-                        cursor: 'pointer',
-                        background: selectedSymbol === p.symbol
-                          ? 'rgba(0,245,255,0.08)'
-                          : 'rgba(10,10,18,0.5)',
-                        borderBottom: selectedSymbol === p.symbol
-                          ? '1px solid rgba(0,245,255,0.2)'
-                          : '1px solid rgba(42,42,74,0.3)',
-                        transition: 'all 0.15s',
-                        textAlign: 'left',
-                      }}
-                      onMouseEnter={(e) => {
-                        if (selectedSymbol !== p.symbol) {
-                          e.currentTarget.style.background = 'rgba(42,42,74,0.3)'
-                        }
-                      }}
-                      onMouseLeave={(e) => {
-                        if (selectedSymbol !== p.symbol) {
-                          e.currentTarget.style.background = 'rgba(10,10,18,0.5)'
-                        }
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span style={{
-                          fontSize: '11px',
-                          fontWeight: 700,
-                          color: selectedSymbol === p.symbol ? 'var(--cyan)' : 'var(--text-primary)',
-                          fontFamily: 'var(--font-mono)',
-                        }}>
-                          {p.symbol}
-                        </span>
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                        <span style={{
-                          fontSize: '11px',
-                          fontFamily: 'var(--font-mono)',
-                          fontWeight: 600,
-                          color: 'var(--text-primary)',
-                        }}>
-                          {p.price >= 1000
-                            ? `$${p.price.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
-                            : `$${p.price.toFixed(2)}`
-                          }
-                        </span>
-                        <span style={{
-                          fontSize: '9px',
-                          fontFamily: 'var(--font-mono)',
-                          fontWeight: 600,
-                          color: p.change24h >= 0 ? 'var(--green)' : 'var(--magenta)',
-                        }}>
-                          {p.change24h >= 0 ? '+' : ''}{p.change24h.toFixed(2)}%
-                        </span>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Price hero */}
-              {selectedPrice && (
-                <PriceHero
-                  symbol={selectedPrice.symbol}
-                  price={selectedPrice.price}
-                  change24h={selectedPrice.change24h}
-                  high24h={selectedPrice.price * 1.025}
-                  low24h={selectedPrice.price * 0.975}
-                  volume24h={selectedPrice.volume24h}
-                  marketCap={selectedPrice.marketCap}
-                />
-              )}
-
-              {/* Quick stats */}
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: '1fr 1fr',
-                gap: '8px',
-              }}>
-                <DataCard
-                  label="MCap"
-                  value={formatLarge(selectedPrice.marketCap)}
-                  accent="cyan"
-                  size="sm"
-                />
-                <DataCard
-                  label="Vol 24H"
-                  value={formatLarge(selectedPrice.volume24h)}
-                  accent="purple"
-                  size="sm"
-                />
-                <DataCard
-                  label="BTC Dom"
-                  value="52.3%"
-                  accent="gold"
-                  size="sm"
-                />
-                <DataCard
-                  label="Fear/Greed"
-                  value="68"
-                  accent="green"
-                  subValue="Greed"
-                  size="sm"
-                />
-              </div>
-
-              {/* AI Score */}
-              <div style={{
-                padding: '10px',
-                borderRadius: '10px',
-                background: 'rgba(0,245,255,0.04)',
-                border: '1px solid rgba(0,245,255,0.12)',
-              }}>
-                <div style={{
-                  fontSize: '9px',
-                  fontWeight: 600,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.1em',
-                  color: 'var(--text-muted)',
-                  marginBottom: '6px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                }}>
-                  <Cpu size={10} color="var(--cyan)" />
-                  AI Conviction
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <div style={{
-                    fontSize: '28px',
-                    fontFamily: 'var(--font-display)',
-                    fontWeight: 800,
-                    color: 'var(--cyan)',
-                    lineHeight: 1,
-                    textShadow: '0 0 20px rgba(0,245,255,0.5)',
-                  }}>
-                    72
-                  </div>
-                  <div>
-                    <div style={{
-                      fontSize: '10px',
-                      fontWeight: 700,
-                      color: 'var(--green)',
-                      textTransform: 'uppercase',
-                    }}>
-                      BULLISH
-                    </div>
-                    <div style={{ fontSize: '8px', color: 'var(--text-muted)' }}>
-                      Confidence: High
-                    </div>
-                  </div>
-                </div>
-                <div style={{
-                  height: '3px',
-                  background: 'var(--border)',
-                  borderRadius: '2px',
-                  marginTop: '8px',
-                  overflow: 'hidden',
-                }}>
-                  <div style={{
-                    width: '72%',
-                    height: '100%',
-                    background: 'linear-gradient(90deg, var(--cyan), var(--green))',
-                    borderRadius: '2px',
-                    boxShadow: '0 0 6px rgba(0,245,255,0.4)',
-                  }} />
-                </div>
-              </div>
-
-              {/* Mini whale ticker */}
-              <div>
-                <div style={{
-                  fontSize: '9px',
-                  fontWeight: 600,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.1em',
-                  color: 'var(--text-muted)',
-                  marginBottom: '6px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                }}>
-                  <ArrowLeftRight size={10} />
-                  Whale Activity
-                </div>
-                <div style={{
-                  padding: '8px',
-                  borderRadius: '8px',
-                  background: 'rgba(10,10,18,0.5)',
-                  border: '1px solid rgba(42,42,74,0.5)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '4px',
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px' }}>
-                    <span style={{ color: 'var(--green)', display: 'flex', alignItems: 'center', gap: '3px' }}>
-                      <ArrowDownLeft size={8} /> Inflows
-                    </span>
-                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--green)' }}>+1.2B</span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px' }}>
-                    <span style={{ color: 'var(--magenta)', display: 'flex', alignItems: 'center', gap: '3px' }}>
-                      <ArrowUpRight size={8} /> Outflows
-                    </span>
-                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--magenta)' }}>-820M</span>
-                  </div>
-                  <div style={{
-                    borderTop: '1px solid rgba(42,42,74,0.5)',
-                    paddingTop: '4px',
-                    marginTop: '2px',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    fontSize: '9px',
-                    fontWeight: 700,
-                  }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Net Flow</span>
-                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--green)' }}>+380M</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Wallet */}
-              <div style={{
-                padding: '10px',
-                borderRadius: '8px',
-                background: 'rgba(10,10,18,0.5)',
-                border: '1px solid rgba(42,42,74,0.5)',
-              }}>
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  marginBottom: '6px',
-                }}>
-                  <Wallet size={12} color="var(--cyan)" />
-                  <span style={{ fontSize: '9px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-muted)' }}>
-                    Wallet
-                  </span>
-                </div>
-                <div style={{
-                  fontSize: '18px',
-                  fontFamily: 'var(--font-mono)',
-                  fontWeight: 700,
-                  color: 'var(--cyan)',
-                }}>
-                  $10,000.00
-                </div>
-                <div style={{
-                  fontSize: '10px',
-                  fontFamily: 'var(--font-mono)',
-                  color: 'var(--green)',
-                }}>
-                  +$320.50 (+3.32%)
-                </div>
-              </div>
-            </>
-          )}
-        </aside>
-
-        {/* === MAIN CONTENT AREA === */}
-        <main style={{ flex: 1, padding: '20px 24px', overflowY: 'auto', paddingBottom: '60px' }}>
-          {/* === TAB: OVERVIEW === */}
-          {activeTab === 'overview' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', animation: 'fade-in-up 0.4s ease-out' }}>
-              {/* Row 1: Key metrics */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
-                <GlassPanel glow="cyan" hoverable padding="14px">
-                  <DataCard
-                    label="Total Market Cap"
-                    value={formatLarge(prices.reduce((s, p) => s + p.marketCap, 0))}
-                    change={1.8}
-                    changeLabel="24h"
-                    accent="cyan"
-                    icon={<Globe size={10} />}
-                    size="md"
-                  />
-                </GlassPanel>
-                <GlassPanel hoverable padding="14px">
-                  <DataCard
-                    label="24H Volume"
-                    value={formatLarge(prices.reduce((s, p) => s + p.volume24h, 0))}
-                    change={-2.3}
-                    changeLabel="vs yesterday"
-                    accent="purple"
-                    icon={<Activity size={10} />}
-                    size="md"
-                  />
-                </GlassPanel>
-                <GlassPanel hoverable padding="14px">
-                  <DataCard
-                    label="BTC Dominance"
-                    value="52.3%"
-                    change={0.4}
-                    accent="gold"
-                    icon={<BarChart3 size={10} />}
-                    size="md"
-                  />
-                </GlassPanel>
-                <GlassPanel hoverable padding="14px">
-                  <DataCard
-                    label="Fear & Greed"
-                    value="68"
-                    subValue="Greed"
-                    accent="green"
-                    icon={<Eye size={10} />}
-                    size="md"
-                  />
-                </GlassPanel>
-              </div>
-
-              {/* Row 2: Price cards + Signal Radar */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: '16px' }}>
-                {/* Price strip */}
-                <GlassPanel glow="none" padding="16px">
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    marginBottom: '12px',
-                  }}>
-                    <BarChart3 size={12} color="var(--cyan)" />
-                    <span style={{
-                      fontSize: '9px',
-                      fontWeight: 600,
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.1em',
-                      color: 'var(--text-muted)',
-                    }}>
-                      Market Prices
-                    </span>
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '8px' }}>
-                    {prices.map((p) => (
-                      <div
-                        key={p.symbol}
-                        onClick={() => setSelectedSymbol(p.symbol)}
-                        style={{
-                          padding: '12px 10px',
-                          borderRadius: '10px',
-                          background: selectedSymbol === p.symbol
-                            ? 'rgba(0,245,255,0.06)'
-                            : 'rgba(10,10,18,0.4)',
-                          border: selectedSymbol === p.symbol
-                            ? '1px solid rgba(0,245,255,0.25)'
-                            : '1px solid rgba(42,42,74,0.4)',
-                          cursor: 'pointer',
-                          transition: 'all 0.15s',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: '4px',
-                          animation: 'breathe 4s ease-in-out infinite',
-                          animationDelay: `${prices.indexOf(p) * 0.5}s`,
-                        }}
-                        onMouseEnter={(e) => {
-                          if (selectedSymbol !== p.symbol) {
-                            e.currentTarget.style.borderColor = 'rgba(0,245,255,0.2)'
-                            e.currentTarget.style.transform = 'translateY(-1px)'
-                          }
-                        }}
-                        onMouseLeave={(e) => {
-                          if (selectedSymbol !== p.symbol) {
-                            e.currentTarget.style.borderColor = 'rgba(42,42,74,0.4)'
-                            e.currentTarget.style.transform = 'translateY(0)'
-                          }
-                        }}
-                      >
-                        <div style={{
-                          fontSize: '10px',
-                          fontWeight: 700,
-                          fontFamily: 'var(--font-mono)',
-                          color: 'var(--text-primary)',
-                        }}>
-                          {p.symbol}
-                        </div>
-                        <div style={{
-                          fontSize: '13px',
-                          fontFamily: 'var(--font-mono)',
-                          fontWeight: 700,
-                          color: 'var(--text-primary)',
-                        }}>
-                          {p.price >= 1000
-                            ? `$${p.price.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
-                            : `$${p.price.toFixed(2)}`
-                          }
-                        </div>
-                        <div style={{
-                          fontSize: '10px',
-                          fontFamily: 'var(--font-mono)',
-                          fontWeight: 600,
-                          color: p.change24h >= 0 ? 'var(--green)' : 'var(--magenta)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '2px',
-                        }}>
-                          {p.change24h >= 0 ? (
-                            <TrendingUp size={8} />
-                          ) : (
-                            <TrendingDown size={8} />
-                          )}
-                          {p.change24h >= 0 ? '+' : ''}{p.change24h.toFixed(2)}%
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </GlassPanel>
-
-                {/* Signal Radar */}
-                <GlassPanel glow="purple" padding="16px">
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    marginBottom: '8px',
-                  }}>
-                    <Target size={12} color="var(--purple)" />
-                    <span style={{
-                      fontSize: '9px',
-                      fontWeight: 600,
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.1em',
-                      color: 'var(--text-muted)',
-                    }}>
-                      Signal Radar
-                    </span>
-                  </div>
-                  <SignalRadar size={200} />
-                </GlassPanel>
-              </div>
-
-              {/* Row 3: Multi-timeframe + indicators */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                <GlassPanel padding="14px">
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    marginBottom: '10px',
-                  }}>
-                    <LineIcon size={12} color="var(--cyan)" />
-                    <span style={{
-                      fontSize: '9px',
-                      fontWeight: 600,
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.1em',
-                      color: 'var(--text-muted)',
-                    }}>
-                      Multi-Timeframe Analysis — {selectedSymbol}
-                    </span>
-                  </div>
-                  <MultiTimeframe symbol={selectedSymbol} />
-                </GlassPanel>
-
-                <GlassPanel padding="14px">
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    marginBottom: '10px',
-                  }}>
-                    <BarChart3 size={12} color="var(--orange)" />
-                    <span style={{
-                      fontSize: '9px',
-                      fontWeight: 600,
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.1em',
-                      color: 'var(--text-muted)',
-                    }}>
-                      Support & Resistance
-                    </span>
-                  </div>
-                  <SupportResistanceLevels />
-                </GlassPanel>
-              </div>
-
-              {/* Row 4: Funding, OI, Liquidations */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
-                <GlassPanel glow="cyan" padding="14px">
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    marginBottom: '10px',
-                  }}>
-                    <Activity size={12} color="var(--orange)" />
-                    <span style={{
-                      fontSize: '9px',
-                      fontWeight: 600,
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.1em',
-                      color: 'var(--text-muted)',
-                    }}>
-                      Funding Rates
-                    </span>
-                  </div>
-                  <FundingRates />
-                </GlassPanel>
-                <GlassPanel glow="purple" padding="14px">
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    marginBottom: '10px',
-                  }}>
-                    <BarChart3 size={12} color="var(--purple)" />
-                    <span style={{
-                      fontSize: '9px',
-                      fontWeight: 600,
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.1em',
-                      color: 'var(--text-muted)',
-                    }}>
-                      Open Interest
-                    </span>
-                  </div>
-                  <OpenInterest />
-                </GlassPanel>
-                <GlassPanel glow="magenta" padding="14px">
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    marginBottom: '10px',
-                  }}>
-                    <AlertTriangle size={12} color="var(--magenta)" />
-                    <span style={{
-                      fontSize: '9px',
-                      fontWeight: 600,
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.1em',
-                      color: 'var(--text-muted)',
-                    }}>
-                      Liquidations
-                    </span>
-                  </div>
-                  <Liquidations />
-                </GlassPanel>
-              </div>
-
-              {/* Row 5: Whales + Polymarket */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '16px' }}>
-                <GlassPanel glow="cyan" padding="14px">
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    marginBottom: '10px',
-                  }}>
-                    <ArrowLeftRight size={12} color="var(--cyan)" />
-                    <span style={{
-                      fontSize: '9px',
-                      fontWeight: 600,
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.1em',
-                      color: 'var(--text-muted)',
-                    }}>
-                      Whale Alerts
-                    </span>
-                  </div>
-                  <WhaleAlerts />
-                </GlassPanel>
-
-                {/* Polymarket */}
-                <PolymarketSection />
+        <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
+          <div className="min-w-0 rounded-2xl border border-border-glow bg-surface/90">
+            <div className="flex flex-wrap items-end justify-between gap-4 border-b border-border p-5">
+              <div><h2 className="font-display text-base font-semibold tracking-wider">MARKET TAPE</h2><p className="mt-1 text-xs text-muted-secondary">Top sampled binary markets, sorted by 24h volume · {markets.length} loaded</p></div>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-secondary" size={13} /><input aria-label="Search markets" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search questions" className="w-48 pl-8" /></div>
+                <Filter size={14} className="text-muted-secondary" />
+                {(['all', 'polymarket', 'kalshi'] as VenueFilter[]).map(value => <button key={value} onClick={() => { setFilter(value); setSelectedKey(null); setResearch(null) }} className={`rounded-md border px-2.5 py-1.5 text-[11px] font-semibold ${filter === value ? 'border-cyan/40 bg-cyan/10 text-cyan' : 'border-border bg-void text-muted-secondary'}`}>{value === 'all' ? 'All' : sourceLabel(value)}</button>)}
               </div>
             </div>
-          )}
-
-          {/* === TAB: TECHNICAL === */}
-          {activeTab === 'technical' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', animation: 'fade-in-up 0.4s ease-out' }}>
-              {/* Indicator gauges row — real data from TA service */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
-                <RSIIndicator />
-                <MACDIndicator />
-                <MomentumIndicator />
-                <VolatilityMeter />
-              </div>
-
-              {/* Moving averages — real data from TA service */}
-              <MovingAveragesIndicator />
-
-              {/* Bollinger + Volume — real data from TA service */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                <BollingerIndicator />
-                <VolumeAnalyzer />
-              </div>
-
-              {/* Additional indicators — real data */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                <TrendScanner />
-                <SupportResistance />
-              </div>
-
-              {/* Multi-timeframe trend */}
-              <GlassPanel padding="14px">
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  marginBottom: '10px',
-                }}>
-                  <LineIcon size={12} color="var(--cyan)" />
-                  <span style={{
-                    fontSize: '9px',
-                    fontWeight: 600,
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.1em',
-                    color: 'var(--text-muted)',
-                  }}>
-                    Multi-Timeframe — {selectedSymbol}
-                  </span>
-                </div>
-                <MultiTimeframe symbol={selectedSymbol} />
-              </GlassPanel>
-
-              {/* Influencer insights */}
-              <InfluencerInsights />
+            <div className="max-h-[880px] overflow-y-auto p-3">
+              {loading && !snapshot ? <div className="grid min-h-72 place-items-center text-sm text-muted-secondary">Reading live market feeds…</div> : visible.length === 0 ? <div className="grid min-h-72 place-items-center text-sm text-muted-secondary">No markets match this filter, or the source is unavailable.</div> : visible.map(market => {
+                const active = selected?.id === market.id && selected.venue === market.venue
+                return <button key={`${market.venue}:${market.id}`} onClick={() => selectMarket(market)} className={`mb-2 w-full rounded-xl border p-4 text-left transition ${active ? 'border-cyan/40 bg-cyan/5' : 'border-border bg-void/50 hover:border-border-glow'}`}>
+                  <div className="mb-2 flex items-center justify-between gap-3"><span className={`text-[10px] font-bold tracking-wider ${market.venue === 'polymarket' ? 'text-purple' : 'text-cyan'}`}>{sourceLabel(market.venue)}</span><span className="text-[10px] text-muted-secondary">{closeLabel(market.closeTime)}</span></div>
+                  <div className="line-clamp-2 text-sm font-semibold leading-snug text-foreground">{market.title}</div>
+                  <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs"><span className="text-muted-secondary">{market.outcomes[0]} ASK <b className="ml-1 font-mono text-green">{quote(market.yesAsk)}</b></span><span className="text-muted-secondary">{market.outcomes[1]} ASK <b className="ml-1 font-mono text-magenta">{quote(market.noAsk)}</b></span><span className="text-muted-secondary">24H VOL <b className="ml-1 font-mono text-foreground">{volume(market.volume24h)}</b></span></div>
+                </button>
+              })}
             </div>
-          )}
+          </div>
 
-          {/* === TAB: ON-CHAIN === */}
-          {activeTab === 'onchain' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', animation: 'fade-in-up 0.4s ease-out' }}>
-              {/* Whale alerts full */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                <GlassPanel glow="cyan" padding="16px">
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    marginBottom: '12px',
-                  }}>
-                    <ArrowLeftRight size={12} color="var(--cyan)" />
-                    <span style={{
-                      fontSize: '9px',
-                      fontWeight: 600,
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.1em',
-                      color: 'var(--text-muted)',
-                    }}>
-                      Whale Activity Feed
-                    </span>
-                  </div>
-                  <WhaleAlerts />
-                </GlassPanel>
+          <aside className="h-fit rounded-2xl border border-purple/25 bg-surface/90 xl:sticky xl:top-5">
+            <div className="border-b border-border p-5"><h2 className="flex items-center gap-2 font-display text-sm font-semibold tracking-wider"><BrainCircuit size={17} className="text-purple" /> RESEARCH DESK</h2><p className="mt-2 text-xs text-muted-secondary">Select a market to inspect its quote and request evidence-based model research.</p></div>
+            {!selected ? <div className="p-6 text-sm text-muted-secondary">Choose a market from the tape.</div> : <div className="space-y-5 p-5">
+              <div><div className="mb-2 text-[10px] font-bold tracking-widest text-purple">{sourceLabel(selected.venue)}</div><h3 className="text-base font-semibold leading-snug">{selected.title}</h3><a href={selected.url} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 text-xs text-cyan">View contract <ExternalLink size={12} /></a></div>
+              <div className="grid grid-cols-2 gap-2"><div className="rounded-lg border border-border bg-void p-3"><div className="truncate text-[10px] text-muted-secondary" title={selected.outcomes[0]}>BUY {selected.outcomes[0]} ASK</div><div className="mt-1 font-mono text-xl text-green">{quote(selected.yesAsk)}</div><div className="text-[10px] text-muted-secondary">top size {selected.yesAskSize?.toFixed(0) ?? '—'}</div></div><div className="rounded-lg border border-border bg-void p-3"><div className="truncate text-[10px] text-muted-secondary" title={selected.outcomes[1]}>BUY {selected.outcomes[1]} ASK</div><div className="mt-1 font-mono text-xl text-magenta">{quote(selected.noAsk)}</div><div className="text-[10px] text-muted-secondary">top size {selected.noAskSize?.toFixed(0) ?? '—'}</div></div></div>
+              <div className="text-[11px] leading-relaxed text-muted-secondary">{selected.quoteSource === 'orderbook' ? 'Polymarket: best displayed CLOB asks. The size shown is only the top level.' : 'Kalshi: public market-summary asks. Confirm full depth before estimating fills.'}</div>
+              {selected.rules && <details className="rounded-lg border border-border bg-void/50 p-3 text-xs text-muted-secondary"><summary className="cursor-pointer font-semibold text-foreground">Settlement rules / description</summary><p className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap leading-relaxed">{selected.rules}</p></details>}
+              <button onClick={() => void researchSelected()} disabled={!snapshot?.modelAvailable || researchLoading || selected.yesAsk === null || selected.outcomes[0].toLowerCase() !== 'yes' || selected.outcomes[1].toLowerCase() !== 'no'} className="flex w-full items-center justify-center gap-2 rounded-lg border border-purple/40 bg-purple/10 px-3 py-3 text-xs font-semibold text-purple transition hover:bg-purple/20 disabled:cursor-not-allowed disabled:opacity-50"><BrainCircuit size={14} />{researchLoading ? 'Gathering evidence…' : snapshot?.modelAvailable ? 'Run model research' : 'Model not configured'}</button>
+              {(selected.outcomes[0].toLowerCase() !== 'yes' || selected.outcomes[1].toLowerCase() !== 'no') && <p className="text-[11px] text-muted-secondary">The current model prompt is limited to explicit YES/NO contracts; no forecast is generated for named outcomes.</p>}
+              {!snapshot?.modelAvailable && <p className="text-[11px] leading-relaxed text-orange">Set <code>GROQ_API_KEY</code> on the server to enable the existing 70B research pipeline. Until then, no AI forecast is shown.</p>}
+              {researchError && <p className="text-xs text-magenta">{researchError}</p>}
+              {research && <div className="space-y-3 rounded-xl border border-purple/30 bg-purple/5 p-4 text-xs">
+                <div className="flex items-start justify-between gap-3"><div><div className="text-[10px] uppercase tracking-widest text-muted-secondary">Model estimate · not calibrated</div><div className="mt-1 font-mono text-2xl text-purple">{(research.estimate * 100).toFixed(1)}%</div></div><span className="rounded-md border border-purple/30 px-2 py-1 text-[10px] uppercase text-purple">{research.confidence} confidence</span></div>
+                <p className="leading-relaxed text-foreground">{research.reasoning}</p>
+                <p className="text-muted-secondary">Evidence items: {research.evidenceCount} · signal: {research.signalStrength}/100 · uncertainty range: ±{(research.uncertaintyRange * 100).toFixed(0)} points</p>
+                {research.premortemRisks.length > 0 && <p className="text-muted-secondary">What could break this view: {research.premortemRisks.slice(0, 2).join('; ')}</p>}
+                <p className="border-t border-purple/20 pt-3 text-orange">{research.disclaimer}</p>
+              </div>}
+            </div>}
+          </aside>
+        </section>
 
-                <GlassPanel padding="16px">
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    marginBottom: '12px',
-                  }}>
-                    <Globe size={12} color="var(--purple)" />
-                    <span style={{
-                      fontSize: '9px',
-                      fontWeight: 600,
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.1em',
-                      color: 'var(--text-muted)',
-                    }}>
-                      TVL & DeFi Metrics
-                    </span>
-                  </div>
-                  {(() => {
-                    const tvl = [
-                      { name: 'Lido', tvl: 15.2e9, change: 2.1 },
-                      { name: 'Aave', tvl: 8.4e9, change: -1.2 },
-                      { name: 'Maker', tvl: 6.8e9, change: 0.8 },
-                      { name: 'Uniswap', tvl: 5.2e9, change: 5.4 },
-                      { name: 'Curve', tvl: 3.1e9, change: -2.3 },
-                    ]
-                    return (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        {tvl.map((p, i) => (
-                          <div key={p.name} style={{
-                            display: 'grid',
-                            gridTemplateColumns: '80px 1fr 60px',
-                            gap: '8px',
-                            alignItems: 'center',
-                            padding: '6px 8px',
-                            borderRadius: '6px',
-                            background: 'rgba(10,10,18,0.4)',
-                          }}>
-                            <span style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>{p.name}</span>
-                            <div style={{ height: '6px', background: 'var(--border)', borderRadius: '3px', overflow: 'hidden' }}>
-                              <div style={{
-                                width: `${(p.tvl / 15.2e9) * 100}%`,
-                                height: '100%',
-                                background: 'linear-gradient(90deg, var(--purple), var(--cyan))',
-                                borderRadius: '3px',
-                              }} />
-                            </div>
-                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                              <span style={{ fontSize: '10px', fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--text-primary)' }}>
-                                ${(p.tvl / 1e9).toFixed(1)}B
-                              </span>
-                              <span style={{
-                                fontSize: '8px',
-                                fontFamily: 'var(--font-mono)',
-                                color: p.change >= 0 ? 'var(--green)' : 'var(--magenta)',
-                              }}>
-                                {p.change >= 0 ? '+' : ''}{p.change}%
-                              </span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )
-                  })()}
-                </GlassPanel>
-              </div>
+        <section className="mt-5 rounded-2xl border border-orange/25 bg-surface/90 p-5">
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-3"><div><h2 className="flex items-center gap-2 font-display text-sm font-semibold tracking-wider"><ArrowLeftRight size={17} className="text-orange" /> CROSS-VENUE REVIEW QUEUE</h2><p className="mt-2 max-w-3xl text-xs leading-relaxed text-muted-secondary">Similar titles and close times are only leads. A lower opposite-ask sum is <b>not</b> arbitrage until settlement rules, both books, fees, transfer costs, and execution are verified.</p></div><span className="rounded-full border border-orange/30 bg-orange/10 px-3 py-1 text-[10px] font-bold text-orange">0 VERIFIED ARBS</span></div>
+          {!snapshot?.crossVenueCandidates.length ? <div className="rounded-xl border border-dashed border-border p-5 text-xs text-muted-secondary">No close title/date matches in the current sampled markets. The complete-set lab still scans executable depth within Polymarket.</div> : <div className="grid gap-3 lg:grid-cols-2">{snapshot.crossVenueCandidates.map(candidate => <div key={`${candidate.polymarket.id}:${candidate.kalshi.id}`} className="rounded-xl border border-border bg-void/60 p-4"><div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-orange">Unverified comparison · rule review required</div><div className="line-clamp-2 text-sm font-semibold">{candidate.polymarket.title}</div><div className="mt-2 text-xs text-muted-secondary">{candidate.cheaperPair?.replaceAll('-', ' ').replace(' + ', ' + ') ?? 'Missing opposite asks'} · quoted sum <span className="font-mono text-foreground">{quote(candidate.bestOppositeAskSum)}</span> before fees</div><div className="mt-3 flex gap-4 text-xs"><a href={candidate.polymarket.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-purple">Polymarket <ArrowUpRight size={12} /></a><a href={candidate.kalshi.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-cyan">Kalshi <ArrowUpRight size={12} /></a></div></div>)}</div>}
+        </section>
 
-              {/* Exchange flows */}
-              <GlassPanel padding="16px">
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  marginBottom: '12px',
-                }}>
-                  <ArrowUpRight size={12} color="var(--green)" />
-                  <ArrowDownLeft size={12} color="var(--magenta)" />
-                  <span style={{
-                    fontSize: '9px',
-                    fontWeight: 600,
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.1em',
-                    color: 'var(--text-muted)',
-                  }}>
-                    Exchange Flows (24H)
-                  </span>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
-                  {[
-                    { exchange: 'Binance', flow: 1250000000, type: 'in' as const },
-                    { exchange: 'Coinbase', flow: -420000000, type: 'out' as const },
-                    { exchange: 'Kraken', flow: 180000000, type: 'in' as const },
-                    { exchange: 'Bitfinex', flow: -95000000, type: 'out' as const },
-                  ].map((ex) => (
-                    <div key={ex.exchange} style={{
-                      padding: '12px',
-                      borderRadius: '8px',
-                      background: ex.type === 'in' ? 'rgba(0,255,136,0.04)' : 'rgba(255,0,128,0.04)',
-                      border: `1px solid ${ex.type === 'in' ? 'rgba(0,255,136,0.15)' : 'rgba(255,0,128,0.15)'}`,
-                      textAlign: 'center',
-                    }}>
-                      <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginBottom: '4px' }}>{ex.exchange}</div>
-                      <div style={{
-                        fontSize: '14px',
-                        fontFamily: 'var(--font-mono)',
-                        fontWeight: 700,
-                        color: ex.type === 'in' ? 'var(--green)' : 'var(--magenta)',
-                      }}>
-                        {ex.type === 'in' ? '+' : ''}{formatLarge(Math.abs(ex.flow))}
-                      </div>
-                      <div style={{
-                        fontSize: '9px',
-                        color: ex.type === 'in' ? 'var(--green)' : 'var(--magenta)',
-                        marginTop: '2px',
-                      }}>
-                        {ex.type === 'in' ? 'Net Inflow' : 'Net Outflow'}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </GlassPanel>
-            </div>
-          )}
-
-          {/* === TAB: TRADING === */}
-          {activeTab === 'trading' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', animation: 'fade-in-up 0.4s ease-out' }}>
-              {/* Order Book + Margin */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                <GlassPanel glow="cyan" padding="14px">
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    marginBottom: '10px',
-                  }}>
-                    <BarChart3 size={12} color="var(--cyan)" />
-                    <span style={{
-                      fontSize: '9px',
-                      fontWeight: 600,
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.1em',
-                      color: 'var(--text-muted)',
-                    }}>
-                      Order Book Depth — {selectedSymbol}
-                    </span>
-                  </div>
-                  <OrderBookDepth bids={mockBids} asks={mockAsks} spread={spread} symbol={selectedSymbol} />
-                </GlassPanel>
-
-                <GlassPanel glow="purple" padding="14px">
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    marginBottom: '10px',
-                  }}>
-                    <Shield size={12} color="var(--purple)" />
-                    <span style={{
-                      fontSize: '9px',
-                      fontWeight: 600,
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.1em',
-                      color: 'var(--text-muted)',
-                    }}>
-                      Margin Health
-                    </span>
-                  </div>
-                  <MarginHealth />
-                </GlassPanel>
-              </div>
-
-              {/* Positions */}
-              <GlassPanel glow="green" padding="14px">
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  marginBottom: '10px',
-                }}>
-                  <Activity size={12} color="var(--green)" />
-                  <span style={{
-                    fontSize: '9px',
-                    fontWeight: 600,
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.1em',
-                    color: 'var(--text-muted)',
-                  }}>
-                    Position Manager
-                  </span>
-                </div>
-                <PositionManager />
-              </GlassPanel>
-
-              {/* Kelly Calculator */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                <GlassPanel glow="cyan" padding="14px">
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    marginBottom: '10px',
-                  }}>
-                    <Target size={12} color="var(--cyan)" />
-                    <span style={{
-                      fontSize: '9px',
-                      fontWeight: 600,
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.1em',
-                      color: 'var(--text-muted)',
-                    }}>
-                      Kelly Criterion Calculator
-                    </span>
-                  </div>
-                  <KellyCalculator />
-                </GlassPanel>
-
-                <GlassPanel padding="14px">
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    marginBottom: '10px',
-                  }}>
-                    <AlertTriangle size={12} color="var(--magenta)" />
-                    <span style={{
-                      fontSize: '9px',
-                      fontWeight: 600,
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.1em',
-                      color: 'var(--text-muted)',
-                    }}>
-                      Recent Liquidations
-                    </span>
-                  </div>
-                  <Liquidations />
-                </GlassPanel>
-              </div>
-            </div>
-          )}
-
-          {/* === TAB: MARKETS === */}
-          {activeTab === 'markets' && (
-            <div style={{ animation: 'fade-in-up 0.4s ease-out' }}>
-              <PolymarketSection />
-            </div>
-          )}
-        </main>
+        <footer className="mt-6 flex flex-wrap items-center gap-2 text-[11px] leading-relaxed text-muted-secondary"><ShieldAlert size={14} className="text-orange" /> Paper-only decision support. There is no always-win prediction model or risk-free cross-exchange execution. <Link href="/arbitrage" className="inline-flex items-center gap-1 text-cyan">Open depth-aware complete-set lab <ArrowUpRight size={11} /></Link></footer>
       </div>
-
-      {/* === STATUS BAR === */}
-      <StatusBar lastUpdated={lastUpdated || undefined} dataSource={dataSource} />
-
-      {/* === GLOBAL STYLES === */}
-      <style suppressHydrationWarning>{`
-        @keyframes spin {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
-        }
-        @keyframes breathe {
-          0%, 100% { transform: scale(1); opacity: 0.9; }
-          50% { transform: scale(1.01); opacity: 1; }
-        }
-        @keyframes fade-in-up {
-          0% { opacity: 0; transform: translateY(16px); }
-          100% { opacity: 1; transform: translateY(0); }
-        }
-        @keyframes orb-drift {
-          0%, 100% { transform: translate(0, 0) scale(1); }
-          25% { transform: translate(30px, -20px) scale(1.1); }
-          50% { transform: translate(-10px, 30px) scale(0.95); }
-          75% { transform: translate(-25px, -15px) scale(1.05); }
-        }
-        @keyframes pulse-live {
-          0%, 100% { opacity: 1; box-shadow: 0 0 4px var(--green), 0 0 8px rgba(0,255,136,0.25); }
-          50% { opacity: 0.6; box-shadow: 0 0 8px var(--green), 0 0 16px rgba(0,255,136,0.25); }
-        }
-        .live-dot {
-          width: 8px;
-          height: 8px;
-          border-radius: 50%;
-          background: var(--green);
-          animation: pulse-live 2s ease-in-out infinite;
-        }
-      `}</style>
-    </div>
+    </main>
   )
 }
