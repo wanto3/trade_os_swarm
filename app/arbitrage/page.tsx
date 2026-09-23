@@ -116,6 +116,41 @@ export default function ArbitrageLabPage() {
   const [autoRefresh, setAutoRefresh] = useState(false)
   const [showOnlyPositive, setShowOnlyPositive] = useState(false)
   const [paperFills, setPaperFills] = useState<PaperFill[]>([])
+  const [researching, setResearching] = useState<Record<string, boolean>>({})
+  const [researchResults, setResearchResults] = useState<Record<string, any>>({})
+
+  const runResearch = async (opportunity: ArbitrageOpportunity) => {
+    setResearching(prev => ({ ...prev, [opportunity.marketId]: true }))
+    try {
+      const response = await fetch('/api/prediction-markets/research', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: opportunity.marketId,
+          venue: 'polymarket',
+          marketData: {
+            id: opportunity.marketId,
+            question: opportunity.question,
+            yesAsk: opportunity.yes.averagePrice,
+            outcomes: opportunity.outcomes,
+            closeTime: opportunity.endDate,
+            volume24h: opportunity.volume24hr,
+            liquidityNum: opportunity.liquidity
+          }
+        }),
+      })
+      const data = await response.json()
+      if (response.ok) {
+        setResearchResults(prev => ({ ...prev, [opportunity.marketId]: data }))
+      } else {
+        console.error('Research error:', data.error)
+      }
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setResearching(prev => ({ ...prev, [opportunity.marketId]: false }))
+    }
+  }
 
   const runScan = useCallback(async () => {
     setLoading(true)
@@ -395,34 +430,89 @@ export default function ArbitrageLabPage() {
                             const underdogReturnPct = ((1 - underdogPrice) / underdogPrice) * 100
                             
                             return (
+                            const aiData = researchResults[opportunity.marketId]
+                            const isResearching = researching[opportunity.marketId]
+                            
+                            // If AI researched, use its estimate
+                            const estimatedYesProb = aiData ? aiData.estimate : (1 - favoredPrice) // naive fallback if no ai data
+                            const estimatedNoProb = aiData ? (1 - aiData.estimate) : (1 - underdogPrice)
+
+                            // For UI display, figure out which side the AI actually favors vs market
+                            const aiFavorsYes = aiData && aiData.estimate > yesProb
+                            const recommendedSide = aiData ? (aiFavorsYes ? 'yes' : 'no') : favoredSide
+                            const recommendedLabel = recommendedSide === 'yes' ? opportunity.outcomes[0] : opportunity.outcomes[1]
+                            const recommendedPrice = recommendedSide === 'yes' ? yesProb : noProb
+                            const recommendedWinPct = (recommendedSide === 'yes' ? estimatedYesProb : estimatedNoProb) * 100
+                            const recommendedReturnPct = ((1 - recommendedPrice) / recommendedPrice) * 100
+
+                            return (
                               <div className="mt-4 rounded-lg border border-purple/20 bg-purple/5 px-4 py-3 text-sm">
-                                <div className="text-xs font-semibold uppercase tracking-wider mb-2 text-purple">🎯 Best Directional Bet</div>
-                                <div className="grid gap-3 sm:grid-cols-2">
-                                  {/* Favored side */}
-                                  <div className="rounded-lg border border-border bg-surface-alt p-3">
-                                    <div className="flex items-center justify-between mb-1">
-                                      <span className="text-xs font-semibold text-profit">🟢 Safer Bet</span>
-                                      <span className="font-mono text-xs text-profit font-semibold">{winPct.toFixed(0)}% win rate</span>
-                                    </div>
-                                    <p className="text-sm font-medium text-foreground">Buy "{favoredLabel}" at <span className="font-mono">${favoredPrice.toFixed(3)}</span></p>
-                                    <div className="mt-2 prob-bar">
-                                      <div className="prob-bar-fill" style={{ width: `${Math.min(100, winPct)}%` }} />
-                                    </div>
-                                    <p className="mt-1.5 text-xs text-muted">Pays $1.00 if correct → <span className="text-profit font-medium">+{returnPct.toFixed(1)}% return</span></p>
-                                  </div>
-                                  {/* Underdog side */}
-                                  <div className="rounded-lg border border-border bg-surface-alt p-3">
-                                    <div className="flex items-center justify-between mb-1">
-                                      <span className="text-xs font-semibold text-warn">🔶 High Risk / High Reward</span>
-                                      <span className="font-mono text-xs text-warn font-semibold">{underdogWinPct.toFixed(0)}% win rate</span>
-                                    </div>
-                                    <p className="text-sm font-medium text-foreground">Buy "{underdogLabel}" at <span className="font-mono">${underdogPrice.toFixed(3)}</span></p>
-                                    <div className="mt-2 prob-bar">
-                                      <div className="prob-bar-fill" style={{ width: `${Math.min(100, underdogWinPct)}%`, background: 'var(--color-warning)' }} />
-                                    </div>
-                                    <p className="mt-1.5 text-xs text-muted">Pays $1.00 if correct → <span className="text-warn font-medium">+{underdogReturnPct.toFixed(1)}% return</span></p>
-                                  </div>
+                                <div className="flex items-center justify-between mb-2">
+                                  <div className="text-xs font-semibold uppercase tracking-wider text-purple">🎯 Best Directional Bet</div>
+                                  {!aiData && (
+                                    <button
+                                      onClick={() => runResearch(opportunity)}
+                                      disabled={isResearching}
+                                      className="text-xs flex items-center gap-1 font-medium bg-purple/10 text-purple hover:bg-purple/20 px-2 py-1 rounded transition-colors disabled:opacity-50"
+                                    >
+                                      {isResearching ? <RefreshCw size={12} className="animate-spin" /> : <Radar size={12} />}
+                                      {isResearching ? 'Researching...' : 'Deep Research'}
+                                    </button>
+                                  )}
                                 </div>
+
+                                {aiData ? (
+                                  <div className="space-y-3">
+                                    <div className="rounded-lg border border-border bg-surface-alt p-3">
+                                      <div className="flex items-center justify-between mb-1">
+                                        <span className="text-xs font-semibold text-profit">🧠 AI Recommended: Buy "{recommendedLabel}"</span>
+                                        <span className="font-mono text-xs text-profit font-semibold">{recommendedWinPct.toFixed(0)}% true win rate</span>
+                                      </div>
+                                      <div className="flex items-center justify-between mt-2">
+                                        <p className="text-sm font-medium text-foreground">Entry: <span className="font-mono">${recommendedPrice.toFixed(3)}</span></p>
+                                        <p className="text-xs text-muted">Pays $1.00 if correct → <span className="text-profit font-medium">+{recommendedReturnPct.toFixed(1)}% return</span></p>
+                                      </div>
+                                      <div className="mt-2 prob-bar">
+                                        <div className="prob-bar-fill" style={{ width: `${Math.min(100, recommendedWinPct)}%` }} />
+                                      </div>
+                                    </div>
+                                    <div className="text-xs text-secondary bg-surface p-3 rounded-lg border border-border">
+                                      <div className="flex items-center gap-2 mb-1.5">
+                                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${aiData.confidence === 'high' ? 'bg-profit/10 text-profit' : aiData.confidence === 'medium' ? 'bg-warn/10 text-warn' : 'bg-loss/10 text-loss'}`}>
+                                          {aiData.confidence} Confidence
+                                        </span>
+                                      </div>
+                                      <p className="leading-relaxed">{aiData.reasoning}</p>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="grid gap-3 sm:grid-cols-2">
+                                    {/* Favored side */}
+                                    <div className="rounded-lg border border-border bg-surface-alt p-3">
+                                      <div className="flex items-center justify-between mb-1">
+                                        <span className="text-xs font-semibold text-profit">🟢 Safer Bet (Naive)</span>
+                                        <span className="font-mono text-xs text-profit font-semibold">{winPct.toFixed(0)}% win rate</span>
+                                      </div>
+                                      <p className="text-sm font-medium text-foreground">Buy "{favoredLabel}" at <span className="font-mono">${favoredPrice.toFixed(3)}</span></p>
+                                      <div className="mt-2 prob-bar">
+                                        <div className="prob-bar-fill" style={{ width: `${Math.min(100, winPct)}%` }} />
+                                      </div>
+                                      <p className="mt-1.5 text-xs text-muted">Pays $1.00 if correct → <span className="text-profit font-medium">+{returnPct.toFixed(1)}% return</span></p>
+                                    </div>
+                                    {/* Underdog side */}
+                                    <div className="rounded-lg border border-border bg-surface-alt p-3">
+                                      <div className="flex items-center justify-between mb-1">
+                                        <span className="text-xs font-semibold text-warn">🔶 High Risk (Naive)</span>
+                                        <span className="font-mono text-xs text-warn font-semibold">{underdogWinPct.toFixed(0)}% win rate</span>
+                                      </div>
+                                      <p className="text-sm font-medium text-foreground">Buy "{underdogLabel}" at <span className="font-mono">${underdogPrice.toFixed(3)}</span></p>
+                                      <div className="mt-2 prob-bar">
+                                        <div className="prob-bar-fill" style={{ width: `${Math.min(100, underdogWinPct)}%`, background: 'var(--color-warning)' }} />
+                                      </div>
+                                      <p className="mt-1.5 text-xs text-muted">Pays $1.00 if correct → <span className="text-warn font-medium">+{underdogReturnPct.toFixed(1)}% return</span></p>
+                                    </div>
+                                  </div>
+                                )}
                               </div>
                             )
                           })()}
