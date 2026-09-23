@@ -341,6 +341,44 @@ export default function ArbitrageLabPage() {
                             <span className="text-muted">&middot;</span>
                             <span className="font-semibold text-foreground">Total: {opportunity.combinedAveragePrice !== null ? `$${opportunity.combinedAveragePrice.toFixed(4)}` : '—'}</span>
                           </div>
+
+                          {/* Recommended Action */}
+                          <div className={`mt-4 rounded-lg border px-4 py-3 text-sm ${
+                            opportunity.status === 'opportunity' 
+                              ? 'border-profit/30 bg-profit/5' 
+                              : opportunity.status === 'near-miss'
+                                ? 'border-warn/30 bg-warn/5'
+                                : 'border-loss/30 bg-loss/5'
+                          }`}>
+                            <div className={`text-xs font-semibold uppercase tracking-wider mb-1.5 ${
+                              opportunity.status === 'opportunity' ? 'text-profit' : opportunity.status === 'near-miss' ? 'text-warn' : 'text-loss'
+                            }`}>
+                              {opportunity.status === 'opportunity' ? '✅ Recommended Action' : opportunity.status === 'near-miss' ? '👀 Watch This Market' : '⚠️ Not Actionable'}
+                            </div>
+                            {opportunity.status === 'opportunity' ? (
+                              <div className="space-y-1.5 text-secondary">
+                                <p className="font-medium text-foreground">Execute a complete-set merge for guaranteed profit:</p>
+                                <div className="flex flex-wrap items-center gap-2 text-sm">
+                                  <span className="rounded bg-surface-alt border border-border px-2 py-0.5 font-mono text-xs">Buy {opportunity.requestedShares} "{opportunity.outcomes[0]}" @ {opportunity.yes.averagePrice !== null ? `$${opportunity.yes.averagePrice.toFixed(3)}` : '—'}</span>
+                                  <span className="text-muted">+</span>
+                                  <span className="rounded bg-surface-alt border border-border px-2 py-0.5 font-mono text-xs">Buy {opportunity.requestedShares} "{opportunity.outcomes[1]}" @ {opportunity.no.averagePrice !== null ? `$${opportunity.no.averagePrice.toFixed(3)}` : '—'}</span>
+                                  <span className="text-muted">→</span>
+                                  <span className="rounded bg-profit/10 border border-profit/30 px-2 py-0.5 font-mono text-xs text-profit">Merge → ${opportunity.payout.toFixed(2)}</span>
+                                </div>
+                                <p className="text-xs text-muted">Total cost: ${opportunity.acquisitionCost.toFixed(4)} · Fees: ${opportunity.fees.toFixed(4)} · Net profit: <span className="text-profit font-semibold">{money(opportunity.netProfit)}</span></p>
+                              </div>
+                            ) : opportunity.status === 'near-miss' ? (
+                              <div className="space-y-1 text-secondary">
+                                <p>This market is <span className="font-semibold text-foreground">close to profitable</span> — the combined cost is just above $1.00 after fees.</p>
+                                <p className="text-xs text-muted">Turn on auto-refresh (every 15s) to catch price dips, or try with fewer shares to reduce slippage.</p>
+                              </div>
+                            ) : (
+                              <div className="space-y-1 text-secondary">
+                                <p>Not enough order book depth — only <span className="font-semibold text-foreground">{opportunity.fillableShares.toFixed(1)}</span> of {opportunity.requestedShares} shares are fillable on both sides.</p>
+                                <p className="text-xs text-muted">Try reducing the "Shares per trade" input to {Math.max(1, Math.floor(opportunity.fillableShares))} or lower to find a fillable size.</p>
+                              </div>
+                            )}
+                          </div>
                           
                           <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted font-medium">
                             <span>Cost {money(-opportunity.acquisitionCost)}</span>
