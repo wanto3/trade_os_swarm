@@ -379,6 +379,53 @@ export default function ArbitrageLabPage() {
                               </div>
                             )}
                           </div>
+
+                          {/* Best Directional Bet */}
+                          {opportunity.yes.averagePrice !== null && opportunity.no.averagePrice !== null && (() => {
+                            const yesProb = opportunity.yes.averagePrice
+                            const noProb = opportunity.no.averagePrice
+                            const favoredSide = yesProb > noProb ? 'no' : 'yes'
+                            const favoredLabel = favoredSide === 'yes' ? opportunity.outcomes[0] : opportunity.outcomes[1]
+                            const favoredPrice = favoredSide === 'yes' ? yesProb : noProb
+                            const winPct = (1 - favoredPrice) * 100
+                            const returnPct = ((1 - favoredPrice) / favoredPrice) * 100
+                            const underdogLabel = favoredSide === 'yes' ? opportunity.outcomes[1] : opportunity.outcomes[0]
+                            const underdogPrice = favoredSide === 'yes' ? noProb : yesProb
+                            const underdogWinPct = underdogPrice * 100
+                            const underdogReturnPct = ((1 - underdogPrice) / underdogPrice) * 100
+                            
+                            return (
+                              <div className="mt-4 rounded-lg border border-purple/20 bg-purple/5 px-4 py-3 text-sm">
+                                <div className="text-xs font-semibold uppercase tracking-wider mb-2 text-purple">🎯 Best Directional Bet</div>
+                                <div className="grid gap-3 sm:grid-cols-2">
+                                  {/* Favored side */}
+                                  <div className="rounded-lg border border-border bg-surface-alt p-3">
+                                    <div className="flex items-center justify-between mb-1">
+                                      <span className="text-xs font-semibold text-profit">🟢 Safer Bet</span>
+                                      <span className="font-mono text-xs text-profit font-semibold">{winPct.toFixed(0)}% win rate</span>
+                                    </div>
+                                    <p className="text-sm font-medium text-foreground">Buy "{favoredLabel}" at <span className="font-mono">${favoredPrice.toFixed(3)}</span></p>
+                                    <div className="mt-2 prob-bar">
+                                      <div className="prob-bar-fill" style={{ width: `${Math.min(100, winPct)}%` }} />
+                                    </div>
+                                    <p className="mt-1.5 text-xs text-muted">Pays $1.00 if correct → <span className="text-profit font-medium">+{returnPct.toFixed(1)}% return</span></p>
+                                  </div>
+                                  {/* Underdog side */}
+                                  <div className="rounded-lg border border-border bg-surface-alt p-3">
+                                    <div className="flex items-center justify-between mb-1">
+                                      <span className="text-xs font-semibold text-warn">🔶 High Risk / High Reward</span>
+                                      <span className="font-mono text-xs text-warn font-semibold">{underdogWinPct.toFixed(0)}% win rate</span>
+                                    </div>
+                                    <p className="text-sm font-medium text-foreground">Buy "{underdogLabel}" at <span className="font-mono">${underdogPrice.toFixed(3)}</span></p>
+                                    <div className="mt-2 prob-bar">
+                                      <div className="prob-bar-fill" style={{ width: `${Math.min(100, underdogWinPct)}%`, background: 'var(--color-warning)' }} />
+                                    </div>
+                                    <p className="mt-1.5 text-xs text-muted">Pays $1.00 if correct → <span className="text-warn font-medium">+{underdogReturnPct.toFixed(1)}% return</span></p>
+                                  </div>
+                                </div>
+                              </div>
+                            )
+                          })()}
                           
                           <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted font-medium">
                             <span>Cost {money(-opportunity.acquisitionCost)}</span>
