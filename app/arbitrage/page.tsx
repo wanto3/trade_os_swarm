@@ -394,9 +394,9 @@ export default function ArbitrageLabPage() {
                               <div className="space-y-1.5 text-secondary">
                                 <p className="font-medium text-foreground">Execute a complete-set merge for guaranteed profit:</p>
                                 <div className="flex flex-wrap items-center gap-2 text-sm">
-                                  <span className="rounded bg-surface-alt border border-border px-2 py-0.5 font-mono text-xs">Buy {opportunity.requestedShares} "{opportunity.outcomes[0]}" @ {opportunity.yes.averagePrice !== null ? `$${opportunity.yes.averagePrice.toFixed(3)}` : '—'}</span>
+                                  <span className="rounded bg-surface-alt border border-border px-2 py-0.5 font-mono text-xs">Buy {opportunity.requestedShares} “{opportunity.outcomes[0]}” @ {opportunity.yes.averagePrice !== null ? `$${opportunity.yes.averagePrice.toFixed(3)}` : '—'}</span>
                                   <span className="text-muted">+</span>
-                                  <span className="rounded bg-surface-alt border border-border px-2 py-0.5 font-mono text-xs">Buy {opportunity.requestedShares} "{opportunity.outcomes[1]}" @ {opportunity.no.averagePrice !== null ? `$${opportunity.no.averagePrice.toFixed(3)}` : '—'}</span>
+                                  <span className="rounded bg-surface-alt border border-border px-2 py-0.5 font-mono text-xs">Buy {opportunity.requestedShares} “{opportunity.outcomes[1]}” @ {opportunity.no.averagePrice !== null ? `$${opportunity.no.averagePrice.toFixed(3)}` : '—'}</span>
                                   <span className="text-muted">→</span>
                                   <span className="rounded bg-profit/10 border border-profit/30 px-2 py-0.5 font-mono text-xs text-profit">Merge → ${opportunity.payout.toFixed(2)}</span>
                                 </div>
@@ -410,7 +410,7 @@ export default function ArbitrageLabPage() {
                             ) : (
                               <div className="space-y-1 text-secondary">
                                 <p>Not enough order book depth — only <span className="font-semibold text-foreground">{opportunity.fillableShares.toFixed(1)}</span> of {opportunity.requestedShares} shares are fillable on both sides.</p>
-                                <p className="text-xs text-muted">Try reducing the "Shares per trade" input to {Math.max(1, Math.floor(opportunity.fillableShares))} or lower to find a fillable size.</p>
+                                <p className="text-xs text-muted">Try reducing the “Shares per trade” input to {Math.max(1, Math.floor(opportunity.fillableShares))} or lower to find a fillable size.</p>
                               </div>
                             )}
                           </div>
@@ -429,7 +429,6 @@ export default function ArbitrageLabPage() {
                             const underdogWinPct = underdogPrice * 100
                             const underdogReturnPct = ((1 - underdogPrice) / underdogPrice) * 100
                             
-                            return (
                             const aiData = researchResults[opportunity.marketId]
                             const isResearching = researching[opportunity.marketId]
                             
@@ -465,7 +464,7 @@ export default function ArbitrageLabPage() {
                                   <div className="space-y-3">
                                     <div className="rounded-lg border border-border bg-surface-alt p-3">
                                       <div className="flex items-center justify-between mb-1">
-                                        <span className="text-xs font-semibold text-profit">🧠 AI Recommended: Buy "{recommendedLabel}"</span>
+                                        <span className="text-xs font-semibold text-profit">🧠 AI Recommended: Buy “{recommendedLabel}”</span>
                                         <span className="font-mono text-xs text-profit font-semibold">{recommendedWinPct.toFixed(0)}% true win rate</span>
                                       </div>
                                       <div className="flex items-center justify-between mt-2">
@@ -493,7 +492,7 @@ export default function ArbitrageLabPage() {
                                         <span className="text-xs font-semibold text-profit">🟢 Safer Bet (Naive)</span>
                                         <span className="font-mono text-xs text-profit font-semibold">{winPct.toFixed(0)}% win rate</span>
                                       </div>
-                                      <p className="text-sm font-medium text-foreground">Buy "{favoredLabel}" at <span className="font-mono">${favoredPrice.toFixed(3)}</span></p>
+                                      <p className="text-sm font-medium text-foreground">Buy “{favoredLabel}” at <span className="font-mono">${favoredPrice.toFixed(3)}</span></p>
                                       <div className="mt-2 prob-bar">
                                         <div className="prob-bar-fill" style={{ width: `${Math.min(100, winPct)}%` }} />
                                       </div>
@@ -505,7 +504,7 @@ export default function ArbitrageLabPage() {
                                         <span className="text-xs font-semibold text-warn">🔶 High Risk (Naive)</span>
                                         <span className="font-mono text-xs text-warn font-semibold">{underdogWinPct.toFixed(0)}% win rate</span>
                                       </div>
-                                      <p className="text-sm font-medium text-foreground">Buy "{underdogLabel}" at <span className="font-mono">${underdogPrice.toFixed(3)}</span></p>
+                                      <p className="text-sm font-medium text-foreground">Buy “{underdogLabel}” at <span className="font-mono">${underdogPrice.toFixed(3)}</span></p>
                                       <div className="mt-2 prob-bar">
                                         <div className="prob-bar-fill" style={{ width: `${Math.min(100, underdogWinPct)}%`, background: 'var(--color-warning)' }} />
                                       </div>

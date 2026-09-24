@@ -9,14 +9,18 @@ const config = {
   theme: {
     extend: {
       colors: {
-        void: "#050508",
-        surface: "#0a0a12",
-        "surface-alt": "#0f0f1a",
-        "surface-elevated": "#13131f",
+        void: "var(--bg-primary)",
+        surface: "var(--bg-secondary)",
+        "surface-alt": "var(--bg-card)",
+        "surface-elevated": "var(--bg-elevated)",
         border: {
-          DEFAULT: "#1a1a2e",
-          glow: "#2a2a4a",
+          DEFAULT: "var(--border-default)",
+          glow: "var(--border-light)",
         },
+        accent: "var(--color-accent)",
+        profit: "var(--color-profit)",
+        loss: "var(--color-loss)",
+        warn: "var(--color-warning)",
         cyan: {
           DEFAULT: "#00f5ff",
           dim: "rgba(0, 245, 255, 0.25)",
@@ -51,7 +55,7 @@ const config = {
         },
         primary: "#00f5ff",
         background: "#050508",
-        foreground: "#e8e8f0",
+        foreground: "var(--text-primary)",
         card: {
           DEFAULT: "#0a0a12",
           foreground: "#e8e8f0",
