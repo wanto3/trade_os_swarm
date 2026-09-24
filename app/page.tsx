@@ -4,8 +4,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import {
   Activity, ArrowLeftRight, ArrowUpRight, BrainCircuit, CheckCircle2,
-  ChevronRight, Clock3, ExternalLink, Gauge, Layers3, RefreshCw, Search,
-  AlertTriangle, ShieldCheck, SlidersHorizontal, Sparkles, TrendingUp,
+  ChevronRight, Clock3, DollarSign, ExternalLink, Eye, Gauge, Layers3,
+  LockKeyhole, Radar, RefreshCw, Search, AlertTriangle, ShieldCheck,
+  SlidersHorizontal, Sparkles, TrendingUp,
 } from 'lucide-react'
 import type {
   PredictionMarket, PredictionMarketSnapshot, PredictionVenue,
@@ -28,6 +29,35 @@ interface ResearchResult {
   disclaimer: string
 }
 
+interface ArbitrageOpportunitySummary {
+  marketId: string
+  question: string
+  outcomes: [string, string]
+  url: string
+  requestedShares: number
+  fillable: boolean
+  status: 'opportunity' | 'near-miss' | 'insufficient-depth'
+  yes: { averagePrice: number | null }
+  no: { averagePrice: number | null }
+  acquisitionCost: number
+  payout: number
+  fees: number
+  netProfit: number
+  netReturnPercent: number
+  combinedAveragePrice: number | null
+  feeSource: 'live' | 'conservative-fallback'
+}
+
+interface ArbitrageScanSummary {
+  generatedAt: string
+  paperOnly: true
+  requestedShares: number
+  scannedMarkets: number
+  profitableCount: number
+  opportunities: ArbitrageOpportunitySummary[]
+  warnings: string[]
+}
+
 function quote(price: number | null): string {
   return price === null ? 'Not quoted' : `${(price * 100).toFixed(1)}¢`
 }
@@ -36,6 +66,11 @@ function compactVolume(value: number): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`
   if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`
   return value.toFixed(0)
+}
+
+function money(value: number): string {
+  const sign = value < 0 ? '-' : ''
+  return `${sign}$${Math.abs(value).toFixed(2)}`
 }
 
 function closeLabel(value: string | null): string {
@@ -102,6 +137,9 @@ export default function PredictionMarketDashboard() {
   const [research, setResearch] = useState<ResearchResult | null>(null)
   const [researchLoading, setResearchLoading] = useState(false)
   const [researchError, setResearchError] = useState<string | null>(null)
+  const [arbitrage, setArbitrage] = useState<ArbitrageScanSummary | null>(null)
+  const [arbitrageLoading, setArbitrageLoading] = useState(true)
+  const [arbitrageError, setArbitrageError] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -118,6 +156,21 @@ export default function PredictionMarketDashboard() {
     }
   }, [])
 
+  const scanArbitrage = useCallback(async () => {
+    setArbitrageLoading(true)
+    setArbitrageError(null)
+    try {
+      const response = await fetch('/api/arbitrage?shares=10&marketLimit=100', { cache: 'no-store' })
+      const data = await response.json()
+      if (!response.ok || data.success === false) throw new Error(data.error ?? `HTTP ${response.status}`)
+      setArbitrage(data as ArbitrageScanSummary)
+    } catch (cause) {
+      setArbitrageError(cause instanceof Error ? cause.message : 'Arbitrage scan is temporarily unavailable')
+    } finally {
+      setArbitrageLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     void refresh()
     const timer = window.setInterval(() => {
@@ -125,6 +178,15 @@ export default function PredictionMarketDashboard() {
     }, 60_000)
     return () => window.clearInterval(timer)
   }, [refresh])
+
+
+  useEffect(() => {
+    void scanArbitrage()
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void scanArbitrage()
+    }, 90_000)
+    return () => window.clearInterval(timer)
+  }, [scanArbitrage])
 
   const markets = useMemo(() => snapshot?.markets ?? [], [snapshot])
   const quoteCounts = useMemo(() => ({
@@ -143,6 +205,14 @@ export default function PredictionMarketDashboard() {
   const selected = visible.find(market => marketKey(market) === selectedKey) ?? visible[0] ?? null
   const selectedTotal = selected ? askTotal(selected) : null
   const selectedQuality = selected ? quoteQuality(selected) : null
+  const lockedProfit = useMemo(() => arbitrage?.opportunities
+    .filter(item => item.status === 'opportunity' && item.fillable && item.netProfit > 0)
+    .sort((a, b) => b.netProfit - a.netProfit)
+    .slice(0, 3) ?? [], [arbitrage])
+  const closestSetups = useMemo(() => arbitrage?.opportunities
+    .filter(item => item.status === 'near-miss' && item.fillable)
+    .sort((a, b) => b.netProfit - a.netProfit)
+    .slice(0, 3) ?? [], [arbitrage])
   const modelCanRun = Boolean(selected && snapshot?.modelAvailable && selected.yesAsk !== null &&
     selected.outcomes[0].toLowerCase() === 'yes' && selected.outcomes[1].toLowerCase() === 'no')
 
@@ -204,11 +274,11 @@ export default function PredictionMarketDashboard() {
           <div className="grid lg:grid-cols-[1.3fr_.7fr]">
             <div className="p-6 sm:p-8 lg:p-10">
               <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-profit/20 bg-profit/10 px-3 py-1.5 text-xs font-semibold text-profit"><ShieldCheck size={14} /> Read-only decision support</div>
-              <h1 className="max-w-3xl text-3xl font-extrabold leading-[1.08] tracking-[-0.035em] sm:text-5xl">See the signal.<br /><span className="bg-gradient-to-r from-blue-400 to-violet-400 bg-clip-text text-transparent">Understand the risk.</span></h1>
-              <p className="mt-5 max-w-2xl text-sm leading-7 text-secondary sm:text-base">A calmer way to compare prediction markets. Start with quote quality, inspect the resolution rules, then use evidence—not excitement—to make a decision.</p>
+              <h1 className="max-w-3xl text-3xl font-extrabold leading-[1.08] tracking-[-0.035em] sm:text-5xl">Find the edge.<br /><span className="bg-gradient-to-r from-emerald-400 via-blue-400 to-violet-400 bg-clip-text text-transparent">Verify the math.</span></h1>
+              <p className="mt-5 max-w-2xl text-sm leading-7 text-secondary sm:text-base">Locked-price arbitrage appears first. Evidence-backed market ideas come next. If nothing clears fees, liquidity, and execution buffers, the dashboard says so plainly.</p>
               <div className="mt-7 flex flex-wrap items-center gap-3">
-                <button onClick={() => document.getElementById('decision-queue')?.scrollIntoView({ behavior: 'smooth' })} className="inline-flex items-center gap-2 rounded-xl bg-accent px-5 py-3 text-sm font-bold text-white shadow-lg shadow-accent/20 transition hover:-translate-y-0.5">Explore decision queue <ChevronRight size={16} /></button>
-                <div className="text-xs leading-5 text-secondary"><span className="font-semibold text-foreground">Best first step:</span> choose a high-volume market<br className="hidden sm:block" /> with complete, tight quotes.</div>
+                <button onClick={() => document.getElementById('opportunity-radar')?.scrollIntoView({ behavior: 'smooth' })} className="inline-flex items-center gap-2 rounded-xl bg-accent px-5 py-3 text-sm font-bold text-white shadow-lg shadow-accent/20 transition hover:-translate-y-0.5">View money opportunities <ChevronRight size={16} /></button>
+                <div className="text-xs leading-5 text-secondary"><span className="font-semibold text-foreground">Priority order:</span> locked arbitrage first,<br className="hidden sm:block" /> researched value second.</div>
               </div>
             </div>
             <div className="border-t border-border bg-void/25 p-6 lg:border-l lg:border-t-0 lg:p-8">
@@ -221,6 +291,47 @@ export default function PredictionMarketDashboard() {
               </div>
               <div className="mt-4 flex items-center justify-between text-[11px] text-secondary"><span>{snapshot ? `Updated ${new Date(snapshot.generatedAt).toLocaleTimeString()}` : 'Connecting to feeds…'}</span><span className={snapshot?.modelAvailable ? 'text-profit' : 'text-warn'}>{snapshot?.modelAvailable ? 'AI research ready' : 'AI not configured'}</span></div>
             </div>
+          </div>
+        </section>
+
+        <section id="opportunity-radar" className="glass-panel mb-6 overflow-hidden rounded-3xl border-profit/20">
+          <div className="border-b border-border bg-gradient-to-r from-profit/10 via-transparent to-accent/5 p-5 sm:p-6">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <div className="mb-2 flex items-center gap-2"><Radar className="text-profit" size={19} /><h2 className="text-lg font-bold">Money opportunity radar</h2><span className="rounded-full border border-profit/25 bg-profit/10 px-2 py-0.5 text-[10px] font-bold text-profit">LIVE PAPER SCAN</span></div>
+                <p className="max-w-3xl text-xs leading-5 text-secondary">First priority: buy both outcomes of the same contract for less than its payout after estimated fees and buffers. This is the closest setup to “no-brainer” math, but separate order legs can still move or fail.</p>
+              </div>
+              <button aria-label="Refresh arbitrage scan" onClick={() => void scanArbitrage()} disabled={arbitrageLoading} className="inline-flex items-center gap-2 rounded-xl border border-border bg-surface-alt px-3.5 py-2.5 text-xs font-bold text-secondary transition hover:border-profit/40 hover:text-profit disabled:opacity-50"><RefreshCw size={14} className={arbitrageLoading ? 'animate-spin' : ''} /> Scan again</button>
+            </div>
+          </div>
+
+          <div className="p-5 sm:p-6">
+            <div className="mb-5 grid gap-3 sm:grid-cols-3">
+              <div className="rounded-2xl border border-border bg-void/35 p-4"><div className="flex items-center justify-between"><span className="text-[10px] font-bold uppercase tracking-wider text-secondary">Locked-profit now</span><LockKeyhole size={15} className={lockedProfit.length ? 'text-profit' : 'text-muted'} /></div><div className={`mt-2 text-3xl font-bold ${lockedProfit.length ? 'text-profit' : 'text-foreground'}`}>{arbitrageLoading && !arbitrage ? '—' : lockedProfit.length}</div><div className="mt-1 text-[11px] text-muted">fee-adjusted, fillable candidates</div></div>
+              <div className="rounded-2xl border border-border bg-void/35 p-4"><div className="flex items-center justify-between"><span className="text-[10px] font-bold uppercase tracking-wider text-secondary">Best net profit</span><DollarSign size={15} className="text-accent" /></div><div className="mt-2 text-3xl font-bold text-accent">{lockedProfit[0] ? money(lockedProfit[0].netProfit) : '—'}</div><div className="mt-1 text-[11px] text-muted">on {arbitrage?.requestedShares ?? 10} matched shares</div></div>
+              <div className="rounded-2xl border border-border bg-void/35 p-4"><div className="flex items-center justify-between"><span className="text-[10px] font-bold uppercase tracking-wider text-secondary">Markets checked</span><Eye size={15} className="text-purple" /></div><div className="mt-2 text-3xl font-bold text-purple">{arbitrage?.scannedMarkets ?? '—'}</div><div className="mt-1 text-[11px] text-muted">full order-book scan</div></div>
+            </div>
+
+            {arbitrageLoading && !arbitrage && <div className="grid min-h-36 place-items-center rounded-2xl border border-dashed border-border bg-void/20"><div className="text-center"><RefreshCw className="mx-auto mb-2 animate-spin text-profit" size={20} /><div className="text-sm font-semibold">Checking both sides of every book</div><div className="mt-1 text-xs text-secondary">Accounting for depth, fees, and execution buffer…</div></div></div>}
+
+            {arbitrageError && <div className="flex items-start gap-3 rounded-2xl border border-loss/25 bg-loss/10 p-4 text-sm text-loss"><AlertTriangle className="mt-0.5 shrink-0" size={17} /><div><div className="font-semibold">Opportunity scan unavailable</div><div className="mt-0.5 text-xs opacity-80">{arbitrageError}</div></div></div>}
+
+            {!arbitrageLoading && !arbitrageError && lockedProfit.length > 0 && <div className="grid gap-3 lg:grid-cols-3">{lockedProfit.map(item => <article key={item.marketId} className="rounded-2xl border border-profit/30 bg-profit/5 p-4">
+              <div className="flex items-center justify-between gap-3"><span className="rounded-full bg-profit/15 px-2.5 py-1 text-[10px] font-bold text-profit">LOCKED-PRICE CANDIDATE</span><span className="font-mono text-lg font-bold text-profit">+{money(item.netProfit)}</span></div>
+              <h3 className="mt-3 line-clamp-2 text-sm font-bold leading-5">{item.question}</h3>
+              <div className="mt-3 grid grid-cols-2 gap-2 text-xs"><div className="rounded-xl bg-void/35 p-2.5"><div className="text-muted">Total cost</div><div className="mt-1 font-mono font-bold">{money(item.acquisitionCost)}</div></div><div className="rounded-xl bg-void/35 p-2.5"><div className="text-muted">Payout</div><div className="mt-1 font-mono font-bold">{money(item.payout)}</div></div></div>
+              <div className="mt-3 text-[11px] leading-5 text-secondary">Buy {item.requestedShares} of <strong className="text-foreground">{item.outcomes[0]}</strong> and <strong className="text-foreground">{item.outcomes[1]}</strong>. Estimated return <strong className="text-profit">+{item.netReturnPercent.toFixed(2)}%</strong>.</div>
+              <div className="mt-4 flex items-center justify-between"><a href={item.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-bold text-profit">Open contract <ArrowUpRight size={12} /></a><Link href="/arbitrage" className="text-xs font-bold text-accent">Full execution check</Link></div>
+            </article>)}</div>}
+
+            {!arbitrageLoading && !arbitrageError && lockedProfit.length === 0 && arbitrage && <div className="grid gap-4 lg:grid-cols-[.8fr_1.2fr]">
+              <div className="rounded-2xl border border-dashed border-border bg-void/25 p-5"><ShieldCheck className="mb-3 text-profit" size={23} /><div className="text-base font-bold">No locked-profit setup right now</div><p className="mt-2 text-xs leading-5 text-secondary">That is the correct answer—not a missed opportunity. None of the scanned books currently produces a positive payout after depth, fees, gas, and the execution buffer.</p><Link href="/arbitrage" className="mt-4 inline-flex items-center gap-1 text-xs font-bold text-accent">Open detailed arbitrage lab <ArrowUpRight size={12} /></Link></div>
+              <div className="rounded-2xl border border-border bg-void/25 p-5"><div className="mb-3 flex items-center justify-between"><div><div className="text-sm font-bold">Closest watchlist</div><div className="mt-1 text-[11px] text-secondary">Not trades—wait for the combined price to move below break-even.</div></div><span className="rounded-full bg-warn/10 px-2.5 py-1 text-[10px] font-bold text-warn">WATCH ONLY</span></div>
+                <div className="space-y-2">{closestSetups.length ? closestSetups.map(item => <a key={item.marketId} href={item.url} target="_blank" rel="noreferrer" className="flex items-center justify-between gap-4 rounded-xl border border-border bg-surface-alt/60 p-3 transition hover:border-warn/30"><div className="min-w-0"><div className="truncate text-xs font-semibold">{item.question}</div><div className="mt-1 text-[10px] text-muted">combined asks {item.combinedAveragePrice === null ? '—' : money(item.combinedAveragePrice)} per $1 payout</div></div><div className="shrink-0 text-right"><div className="font-mono text-xs font-bold text-loss">{money(item.netProfit)}</div><div className="text-[10px] text-muted">current net</div></div></a>) : <div className="rounded-xl border border-dashed border-border p-4 text-center text-xs text-secondary">No fillable near-misses were returned.</div>}</div>
+              </div>
+            </div>}
+
+            <div className="mt-4 flex flex-col justify-between gap-2 border-t border-border pt-4 text-[10px] leading-4 text-muted sm:flex-row"><span>“Locked” describes the payout math only—not guaranteed execution. Quotes and available size can disappear between legs.</span><span className="shrink-0">Last scan {arbitrage ? new Date(arbitrage.generatedAt).toLocaleTimeString() : '—'}</span></div>
           </div>
         </section>
 
