@@ -13,7 +13,15 @@ import type {
 } from '@/lib/services/prediction-markets.service'
 
 type VenueFilter = 'all' | PredictionVenue
-type SortMode = 'volume' | 'tight' | 'balanced' | 'closing'
+type SortMode = 'volume' | 'tight' | 'balanced' | 'certainty' | 'closing'
+
+type DecisionTone = 'profit' | 'accent' | 'warn' | 'loss'
+
+interface DecisionGuidance {
+  action: string
+  reason: string
+  tone: DecisionTone
+}
 
 interface ResearchResult {
   model: string
@@ -106,11 +114,58 @@ function quoteQuality(market: PredictionMarket): {
   return { label: 'Thin', detail: 'Higher execution risk', className: 'text-warn bg-warn/10 border-warn/20' }
 }
 
+function favoriteSide(market: PredictionMarket): { outcome: string; price: number } | null {
+  if (market.yesAsk === null || market.noAsk === null) return null
+  return market.yesAsk >= market.noAsk
+    ? { outcome: market.outcomes[0], price: market.yesAsk }
+    : { outcome: market.outcomes[1], price: market.noAsk }
+}
+
+function baseDecision(market: PredictionMarket): DecisionGuidance {
+  const total = askTotal(market)
+  const favorite = favoriteSide(market)
+  if (total === null) return { action: 'SKIP', reason: 'One side has no executable ask.', tone: 'loss' }
+  if (Math.abs(total - 1) > 0.06) return { action: 'SKIP', reason: 'Pricing friction is too high.', tone: 'loss' }
+  if (market.volume24h < 500) return { action: 'WAIT', reason: 'Quoted activity is too thin.', tone: 'warn' }
+  if (favorite && favorite.price >= 0.7) return {
+    action: `RESEARCH ${favorite.outcome.toUpperCase()}`,
+    reason: `${(favorite.price * 100).toFixed(0)}% market-implied favorite; confirm value before buying.`,
+    tone: 'accent',
+  }
+  return { action: 'RUN RESEARCH', reason: 'The price alone does not reveal a positive edge.', tone: 'accent' }
+}
+
+function researchedDecision(market: PredictionMarket, research: ResearchResult | null): DecisionGuidance {
+  if (!research || market.yesAsk === null) return baseDecision(market)
+  const edge = research.estimate - market.yesAsk
+  const threshold = Math.max(0.05, research.uncertaintyRange)
+  const confidenceReady = research.confidence === 'high' || research.confidence === 'medium'
+  if (confidenceReady && edge > threshold) return {
+    action: `CONSIDER ${market.outcomes[0].toUpperCase()}`,
+    reason: `Model is ${(edge * 100).toFixed(1)} points above the market, beyond its uncertainty threshold.`,
+    tone: 'profit',
+  }
+  if (confidenceReady && edge < -threshold && market.noAsk !== null) return {
+    action: `CONSIDER ${market.outcomes[1].toUpperCase()}`,
+    reason: `Model is ${(Math.abs(edge) * 100).toFixed(1)} points below the market, favoring the opposite side.`,
+    tone: 'profit',
+  }
+  return { action: 'PASS', reason: 'No model edge large enough to clear uncertainty and execution risk.', tone: 'warn' }
+}
+
+function decisionClass(tone: DecisionTone): string {
+  if (tone === 'profit') return 'border-profit/30 bg-profit/10 text-profit'
+  if (tone === 'loss') return 'border-loss/30 bg-loss/10 text-loss'
+  if (tone === 'warn') return 'border-warn/30 bg-warn/10 text-warn'
+  return 'border-accent/30 bg-accent/10 text-accent'
+}
+
 function sortMarkets(markets: PredictionMarket[], mode: SortMode): PredictionMarket[] {
   return [...markets].sort((a, b) => {
     if (mode === 'volume') return b.volume24h - a.volume24h
     if (mode === 'balanced') return Math.abs((a.yesAsk ?? 0.5) - 0.5) - Math.abs((b.yesAsk ?? 0.5) - 0.5)
     if (mode === 'tight') return Math.abs((askTotal(a) ?? 99) - 1) - Math.abs((askTotal(b) ?? 99) - 1)
+    if (mode === 'certainty') return (favoriteSide(b)?.price ?? 0) - (favoriteSide(a)?.price ?? 0)
     const aTime = a.closeTime ? Date.parse(a.closeTime) : Infinity
     const bTime = b.closeTime ? Date.parse(b.closeTime) : Infinity
     return (Number.isFinite(aTime) ? aTime : Infinity) - (Number.isFinite(bTime) ? bTime : Infinity)
@@ -213,6 +268,17 @@ export default function PredictionMarketDashboard() {
     .filter(item => item.status === 'near-miss' && item.fillable)
     .sort((a, b) => b.netProfit - a.netProfit)
     .slice(0, 3) ?? [], [arbitrage])
+  const selectedArbitrage = selected ? lockedProfit.find(item => item.marketId === selected.id) : null
+  const selectedDecision = selectedArbitrage
+    ? { action: 'BUY BOTH SIDES', reason: `${money(selectedArbitrage.netProfit)} estimated net profit after modeled costs for ${selectedArbitrage.requestedShares} matched shares. Recheck both books immediately before execution.`, tone: 'profit' as const }
+    : selected ? researchedDecision(selected, research) : null
+  const likelyFavorites = useMemo(() => markets
+    .map(market => ({ market, favorite: favoriteSide(market), total: askTotal(market) }))
+    .filter((item): item is { market: PredictionMarket; favorite: { outcome: string; price: number }; total: number } =>
+      item.favorite !== null && item.total !== null && Math.abs(item.total - 1) <= 0.03 &&
+      item.market.volume24h >= 5_000 && item.favorite.price >= 0.7 && item.favorite.price <= 0.97)
+    .sort((a, b) => b.favorite.price - a.favorite.price || b.market.volume24h - a.market.volume24h)
+    .slice(0, 3), [markets])
   const modelCanRun = Boolean(selected && snapshot?.modelAvailable && selected.yesAsk !== null &&
     selected.outcomes[0].toLowerCase() === 'yes' && selected.outcomes[1].toLowerCase() === 'no')
 
@@ -325,11 +391,13 @@ export default function PredictionMarketDashboard() {
             </article>)}</div>}
 
             {!arbitrageLoading && !arbitrageError && lockedProfit.length === 0 && arbitrage && <div className="grid gap-4 lg:grid-cols-[.8fr_1.2fr]">
-              <div className="rounded-2xl border border-dashed border-border bg-void/25 p-5"><ShieldCheck className="mb-3 text-profit" size={23} /><div className="text-base font-bold">No locked-profit setup right now</div><p className="mt-2 text-xs leading-5 text-secondary">That is the correct answer—not a missed opportunity. None of the scanned books currently produces a positive payout after depth, fees, gas, and the execution buffer.</p><Link href="/arbitrage" className="mt-4 inline-flex items-center gap-1 text-xs font-bold text-accent">Open detailed arbitrage lab <ArrowUpRight size={12} /></Link></div>
-              <div className="rounded-2xl border border-border bg-void/25 p-5"><div className="mb-3 flex items-center justify-between"><div><div className="text-sm font-bold">Closest watchlist</div><div className="mt-1 text-[11px] text-secondary">Not trades—wait for the combined price to move below break-even.</div></div><span className="rounded-full bg-warn/10 px-2.5 py-1 text-[10px] font-bold text-warn">WATCH ONLY</span></div>
-                <div className="space-y-2">{closestSetups.length ? closestSetups.map(item => <a key={item.marketId} href={item.url} target="_blank" rel="noreferrer" className="flex items-center justify-between gap-4 rounded-xl border border-border bg-surface-alt/60 p-3 transition hover:border-warn/30"><div className="min-w-0"><div className="truncate text-xs font-semibold">{item.question}</div><div className="mt-1 text-[10px] text-muted">combined asks {item.combinedAveragePrice === null ? '—' : money(item.combinedAveragePrice)} per $1 payout</div></div><div className="shrink-0 text-right"><div className="font-mono text-xs font-bold text-loss">{money(item.netProfit)}</div><div className="text-[10px] text-muted">current net</div></div></a>) : <div className="rounded-xl border border-dashed border-border p-4 text-center text-xs text-secondary">No fillable near-misses were returned.</div>}</div>
+              <div className="rounded-2xl border border-dashed border-border bg-void/25 p-5"><div className="mb-3 flex items-center justify-between gap-3"><ShieldCheck className="text-profit" size={23} /><span className="rounded-full border border-loss/30 bg-loss/10 px-2.5 py-1 text-[10px] font-bold text-loss">DECISION: DO NOT TRADE</span></div><div className="text-base font-bold">No locked-profit setup right now</div><p className="mt-2 text-xs leading-5 text-secondary">That is the correct answer—not a missed opportunity. None of the scanned books currently produces a positive payout after depth, fees, gas, and the execution buffer.</p><Link href="/arbitrage" className="mt-4 inline-flex items-center gap-1 text-xs font-bold text-accent">Open detailed arbitrage lab <ArrowUpRight size={12} /></Link></div>
+              <div className="rounded-2xl border border-border bg-void/25 p-5"><div className="mb-3 flex items-center justify-between"><div><div className="text-sm font-bold">Highest implied win chance</div><div className="mt-1 text-[11px] text-secondary">Liquid favorites between 70–97%. Likely does not automatically mean profitable.</div></div><span className="rounded-full bg-accent/10 px-2.5 py-1 text-[10px] font-bold text-accent">RESEARCH FIRST</span></div>
+                <div className="space-y-2">{likelyFavorites.length ? likelyFavorites.map(({ market, favorite }) => <button key={marketKey(market)} onClick={() => { selectMarket(market); document.getElementById('decision-queue')?.scrollIntoView({ behavior: 'smooth' }) }} className="flex w-full items-center justify-between gap-4 rounded-xl border border-border bg-surface-alt/60 p-3 text-left transition hover:border-accent/35"><div className="min-w-0"><div className="truncate text-xs font-semibold">{market.title}</div><div className="mt-1 text-[10px] text-muted">market favorite: <span className="text-foreground">{favorite.outcome}</span> · gross upside {((1 - favorite.price) * 100).toFixed(1)}¢</div></div><div className="shrink-0 text-right"><div className="font-mono text-base font-bold text-accent">{(favorite.price * 100).toFixed(1)}%</div><div className="text-[10px] font-bold text-accent">RESEARCH</div></div></button>) : <div className="rounded-xl border border-dashed border-border p-4 text-center text-xs text-secondary">No liquid favorites meet the quality filter.</div>}</div>
               </div>
             </div>}
+
+            {!arbitrageLoading && !arbitrageError && lockedProfit.length === 0 && closestSetups.length > 0 && <details className="mt-4 rounded-2xl border border-border bg-void/20"><summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-xs font-bold">Closest arbitrage watchlist <span className="text-[10px] font-semibold text-warn">NOT PROFITABLE YET · {closestSetups.length} NEAR-MISSES</span></summary><div className="grid gap-2 border-t border-border p-3 md:grid-cols-3">{closestSetups.map(item => <a key={item.marketId} href={item.url} target="_blank" rel="noreferrer" className="rounded-xl border border-border bg-surface-alt/60 p-3 transition hover:border-warn/30"><div className="truncate text-xs font-semibold">{item.question}</div><div className="mt-2 flex items-center justify-between text-[10px]"><span className="text-muted">asks {item.combinedAveragePrice === null ? '—' : money(item.combinedAveragePrice)}</span><span className="font-mono font-bold text-loss">{money(item.netProfit)} net</span></div></a>)}</div></details>}
 
             <div className="mt-4 flex flex-col justify-between gap-2 border-t border-border pt-4 text-[10px] leading-4 text-muted sm:flex-row"><span>“Locked” describes the payout math only—not guaranteed execution. Quotes and available size can disappear between legs.</span><span className="shrink-0">Last scan {arbitrage ? new Date(arbitrage.generatedAt).toLocaleTimeString() : '—'}</span></div>
           </div>
@@ -349,7 +417,7 @@ export default function PredictionMarketDashboard() {
                 <div className="flex items-center gap-2">
                   <SlidersHorizontal className="hidden text-muted sm:block" size={15} />
                   <select aria-label="Sort markets" value={sort} onChange={event => setSort(event.target.value as SortMode)} className="!w-auto !min-w-40 !rounded-xl !bg-void/45 !py-3">
-                    <option value="volume">Most active</option><option value="tight">Tightest quotes</option><option value="balanced">Most uncertain</option><option value="closing">Closing soon</option>
+                    <option value="volume">Most active</option><option value="certainty">Highest win chance</option><option value="tight">Tightest quotes</option><option value="balanced">Most uncertain</option><option value="closing">Closing soon</option>
                   </select>
                 </div>
               </div>
@@ -362,6 +430,10 @@ export default function PredictionMarketDashboard() {
               {loading && !snapshot ? <div className="grid min-h-72 place-items-center"><div className="text-center"><RefreshCw className="mx-auto mb-3 animate-spin text-accent" size={22} /><div className="text-sm font-semibold">Reading live markets</div><div className="mt-1 text-xs text-secondary">Comparing quotes and liquidity…</div></div></div> : visible.length === 0 ? <div className="grid min-h-72 place-items-center text-center"><div><Search className="mx-auto mb-3 text-muted" size={24} /><div className="font-semibold">No matching markets</div><div className="mt-1 text-sm text-secondary">Try a broader search or another venue.</div></div></div> : visible.map((market, index) => {
                 const active = selected ? marketKey(selected) === marketKey(market) : false
                 const quality = quoteQuality(market)
+                const locked = lockedProfit.find(item => item.marketId === market.id)
+                const decision: DecisionGuidance = locked
+                  ? { action: 'BUY BOTH SIDES', reason: `${money(locked.netProfit)} modeled net profit.`, tone: 'profit' }
+                  : baseDecision(market)
                 const total = askTotal(market)
                 return <button key={marketKey(market)} onClick={() => selectMarket(market)} className={`decision-row w-full rounded-2xl p-4 text-left sm:p-5 ${active ? '!border-accent/60 !bg-accent/10 shadow-lg shadow-accent/5' : ''}`}>
                   <div className="grid items-center gap-4 md:grid-cols-[minmax(0,1fr)_230px_auto]">
@@ -375,7 +447,7 @@ export default function PredictionMarketDashboard() {
                       <div className="mb-2 h-1.5 overflow-hidden rounded-full bg-surface-elevated"><div className="h-full rounded-full bg-gradient-to-r from-accent to-purple" style={{ width: `${Math.max(0, Math.min(100, (market.yesAsk ?? 0) * 100))}%` }} /></div>
                       <div className="flex items-center justify-between text-xs"><span className="max-w-[95px] truncate text-secondary">{market.outcomes[1]}</span><span className="font-mono font-bold text-foreground">{quote(market.noAsk)}</span></div>
                     </div>
-                    <div className="flex items-center justify-between gap-3 md:block"><span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-bold ${quality.className}`}>{quality.label}</span><ChevronRight className={`mt-2 hidden md:block ${active ? 'text-accent' : 'text-muted'}`} size={18} /></div>
+                    <div className="flex items-center justify-between gap-3 md:flex-col md:items-end"><span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-bold ${decisionClass(decision.tone)}`}>{decision.action}</span><span className={`hidden rounded-full border px-2 py-0.5 text-[9px] font-bold md:inline-flex ${quality.className}`}>{quality.label} quotes</span><ChevronRight className={active ? 'text-accent' : 'text-muted'} size={17} /></div>
                   </div>
                 </button>
               })}
@@ -387,6 +459,8 @@ export default function PredictionMarketDashboard() {
             <div className="border-b border-border px-5 py-4"><div className="flex items-center justify-between"><div className="flex items-center gap-2 text-sm font-bold"><Sparkles className="text-purple" size={17} /> Decision brief</div><span className="rounded-full border border-border bg-void/35 px-2.5 py-1 text-[10px] font-bold text-secondary">PAPER ONLY</span></div></div>
             {!selected ? <div className="p-8 text-center"><Gauge className="mx-auto mb-3 text-muted" size={28} /><div className="font-semibold">Choose a market</div><p className="mt-1 text-sm text-secondary">Its pricing, quality checks, and research will appear here.</p></div> : <div className="space-y-5 p-5 sm:p-6">
               <div><div className="mb-2 flex items-center gap-2"><span className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${selected.venue === 'polymarket' ? 'bg-purple/10 text-purple' : 'bg-accent/10 text-accent'}`}>{sourceLabel(selected.venue)}</span><span className="text-[11px] text-muted">{closeLabel(selected.closeTime)}</span></div><h3 className="text-lg font-bold leading-6">{selected.title}</h3><a href={selected.url} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-accent hover:text-foreground">Open contract <ExternalLink size={12} /></a></div>
+
+              {selectedDecision && <div className={`rounded-2xl border p-4 ${decisionClass(selectedDecision.tone)}`}><div className="flex items-center justify-between gap-3"><div className="text-[10px] font-bold uppercase tracking-[.16em] opacity-75">Decision</div><span className="rounded-full border border-current/25 px-2 py-0.5 text-[9px] font-bold">{research ? 'MODEL + MARKET' : 'MARKET SCREEN'}</span></div><div className="mt-2 text-xl font-extrabold tracking-tight">{selectedDecision.action}</div><div className="mt-1 text-xs leading-5 opacity-80">{selectedDecision.reason}</div>{!research && modelCanRun && <button onClick={() => void researchSelected()} disabled={researchLoading} className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-foreground px-3 py-2 text-[11px] font-bold text-void disabled:opacity-50">{researchLoading ? <RefreshCw className="animate-spin" size={12} /> : <BrainCircuit size={12} />} Confirm with AI research</button>}</div>}
 
               <div className="rounded-2xl border border-border bg-void/35 p-4">
                 <div className="mb-4 flex items-center justify-between"><div><div className="text-[10px] font-bold uppercase tracking-[.14em] text-secondary">Current market view</div><div className="mt-1 text-xs text-muted">Executable asks, not true probabilities</div></div>{selectedQuality && <span className={`rounded-full border px-2.5 py-1 text-[10px] font-bold ${selectedQuality.className}`}>{selectedQuality.label}</span>}</div>
