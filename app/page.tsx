@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import {
-  Activity, ArrowLeftRight, ArrowUpRight, BrainCircuit, CheckCircle2,
-  ChevronRight, Clock3, DollarSign, ExternalLink, Eye, Gauge, Layers3,
+  Activity, ArrowLeftRight, ArrowUpRight, Beaker, BrainCircuit, CheckCircle2,
+  ChevronRight, Clock3, DollarSign, ExternalLink, Eye, Gauge, Info, Layers3,
   LockKeyhole, Radar, RefreshCw, Scale, Search, AlertTriangle, ShieldCheck,
-  SlidersHorizontal, Sparkles, TrendingUp,
+  SlidersHorizontal, Sparkles, Trash2, TrendingUp, X,
 } from 'lucide-react'
 import type {
   PredictionMarket, PredictionMarketSnapshot, PredictionVenue,
@@ -104,6 +104,26 @@ interface RebalancingResponse {
   mintAndSellCount: number
   buyAllCount: number
   opportunities: RebalancingOpportunity[]
+}
+
+interface RebalancingPaperTrade {
+  id: string
+  recordedAt: number
+  eventTitle: string
+  slug: string
+  type: RebalancingOpportunity['type']
+  shares: number
+  capitalCommitted: number
+  payout: number
+  netProfit: number
+  netReturnPercent: number
+  status: 'instant-settled' | 'awaiting-resolution'
+  legs: Array<{
+    candidate: string
+    action: 'BUY' | 'SELL'
+    price: number
+    shares: number
+  }>
 }
 
 function quote(price: number | null): string {
@@ -364,6 +384,113 @@ export default function PredictionMarketDashboard() {
     return () => window.clearInterval(timer)
   }, [scanRebalancing])
 
+  const [rebalancingPaperTrades, setRebalancingPaperTrades] = useState<RebalancingPaperTrade[]>([])
+  const [simulationModalOpp, setSimulationModalOpp] = useState<RebalancingOpportunity | null>(null)
+  const [simShares, setSimShares] = useState<number>(10)
+  const [simToast, setSimToast] = useState<string | null>(null)
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('tradeos_rebalancing_simulations')
+      if (stored) {
+        setRebalancingPaperTrades(JSON.parse(stored))
+      }
+    } catch {}
+  }, [])
+
+  const executeSimulation = (opp: RebalancingOpportunity, shares: number) => {
+    const isMintAndSell = opp.type === 'mint-and-sell'
+    const isBuyAll = opp.type === 'buy-all-discount'
+
+    let capitalCommitted = 0
+    let payout = 0
+    let netProfit = 0
+    let netReturnPercent = 0
+    let status: RebalancingPaperTrade['status'] = 'instant-settled'
+    const legs: RebalancingPaperTrade['legs'] = []
+
+    if (isMintAndSell) {
+      capitalCommitted = 1.00 * shares
+      const sellTotal = (opp.bidSum || opp.priceSum) * shares
+      payout = sellTotal
+      netProfit = sellTotal - capitalCommitted
+      netReturnPercent = capitalCommitted > 0 ? (netProfit / capitalCommitted) * 100 : 0
+      status = 'instant-settled'
+
+      opp.outcomes.forEach(o => {
+        legs.push({
+          candidate: o.title,
+          action: 'SELL',
+          price: o.bestBid || o.price,
+          shares,
+        })
+      })
+    } else if (isBuyAll) {
+      capitalCommitted = (opp.askSum || opp.priceSum) * shares
+      payout = 1.00 * shares
+      netProfit = payout - capitalCommitted
+      netReturnPercent = capitalCommitted > 0 ? (netProfit / capitalCommitted) * 100 : 0
+      status = 'awaiting-resolution'
+
+      opp.outcomes.forEach(o => {
+        legs.push({
+          candidate: o.title,
+          action: 'BUY',
+          price: o.bestAsk || o.price,
+          shares,
+        })
+      })
+    } else {
+      capitalCommitted = (opp.outcomes[0]?.price || 0.5) * shares
+      payout = 1.00 * shares
+      netProfit = (opp.profitPercent / 100) * capitalCommitted
+      netReturnPercent = opp.profitPercent
+      status = 'awaiting-resolution'
+
+      legs.push({
+        candidate: opp.outcomes[0]?.title || 'Leading Contender',
+        action: 'BUY',
+        price: opp.outcomes[0]?.price || 0.5,
+        shares,
+      })
+    }
+
+    const trade: RebalancingPaperTrade = {
+      id: `${opp.id}-${Date.now()}`,
+      recordedAt: Date.now(),
+      eventTitle: opp.title,
+      slug: opp.slug,
+      type: opp.type,
+      shares,
+      capitalCommitted,
+      payout,
+      netProfit,
+      netReturnPercent,
+      status,
+      legs,
+    }
+
+    const updated = [trade, ...rebalancingPaperTrades].slice(0, 40)
+    setRebalancingPaperTrades(updated)
+    try {
+      localStorage.setItem('tradeos_rebalancing_simulations', JSON.stringify(updated))
+    } catch {}
+
+    setSimToast(`Simulated ${shares} sets on "${opp.title.slice(0, 32)}…" (Net: ${money(netProfit)})`)
+    setTimeout(() => setSimToast(null), 4000)
+    setSimulationModalOpp(null)
+  }
+
+  const clearPaperTrades = () => {
+    setRebalancingPaperTrades([])
+    try {
+      localStorage.removeItem('tradeos_rebalancing_simulations')
+    } catch {}
+  }
+
+  const simCapital = useMemo(() => rebalancingPaperTrades.reduce((sum, t) => sum + t.capitalCommitted, 0), [rebalancingPaperTrades])
+  const simProfit = useMemo(() => rebalancingPaperTrades.reduce((sum, t) => sum + t.netProfit, 0), [rebalancingPaperTrades])
+
   const markets = useMemo(() => snapshot?.markets ?? [], [snapshot])
   const quoteCounts = useMemo(() => ({
     polymarket: markets.filter(m => m.venue === 'polymarket' && m.yesAsk !== null && m.noAsk !== null).length,
@@ -592,6 +719,59 @@ export default function PredictionMarketDashboard() {
               </div>
             </div>
 
+            {/* Paper Trading Portfolio Banner */}
+            <div className="mb-5 rounded-2xl border border-purple/30 bg-gradient-to-r from-void/60 via-purple/10 to-surface-alt p-4 flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="grid h-10 w-10 place-items-center rounded-xl bg-purple/20 text-purple border border-purple/30">
+                  <Beaker size={20} />
+                </div>
+                <div>
+                  <div className="text-xs font-bold text-foreground flex items-center gap-2">
+                    Paper Trading Portfolio (Simulation Mode)
+                    <span className="rounded-full bg-purple/20 px-2.5 py-0.5 text-[10px] font-mono text-purple font-semibold">
+                      NO REAL MONEY AT RISK
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-muted">
+                    Test complete-set minting and basket purchases to track hypothetical performance with zero capital risk.
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-6">
+                <div>
+                  <div className="text-[10px] uppercase font-semibold text-secondary">Capital Simulated</div>
+                  <div className="font-mono text-sm font-bold text-foreground">${simCapital.toFixed(2)}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase font-semibold text-secondary">Simulated Net P&amp;L</div>
+                  <div className={`font-mono text-sm font-bold ${simProfit >= 0 ? 'text-profit' : 'text-loss'}`}>
+                    {money(simProfit)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase font-semibold text-secondary">Simulated Baskets</div>
+                  <div className="font-mono text-sm font-bold text-accent">{rebalancingPaperTrades.length}</div>
+                </div>
+                {rebalancingPaperTrades.length > 0 && (
+                  <button
+                    onClick={clearPaperTrades}
+                    className="flex items-center gap-1 rounded-lg border border-border bg-surface-alt px-2.5 py-1 text-xs text-muted hover:text-loss transition-colors"
+                  >
+                    <Trash2 size={12} /> Clear Log
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Toast notice */}
+            {simToast && (
+              <div className="mb-4 rounded-xl border border-profit/30 bg-profit/10 p-3 text-xs font-semibold text-profit flex items-center gap-2">
+                <CheckCircle2 size={16} />
+                <span>{simToast}</span>
+              </div>
+            )}
+
             {/* Loading state */}
             {rebalancingLoading && !rebalancing && (
               <div className="grid min-h-36 place-items-center rounded-2xl border border-dashed border-border bg-void/20">
@@ -717,8 +897,64 @@ export default function PredictionMarketDashboard() {
                         {opp.actionGuidance}
                       </div>
                     </div>
+
+                    {/* Interactive Simulation Button */}
+                    <div className="mt-4 flex items-center justify-between gap-3 pt-3 border-t border-border/60">
+                      <div className="text-[11px] text-muted font-mono flex items-center gap-1">
+                        <Info size={12} className="text-secondary" />
+                        {opp.type === 'mint-and-sell' ? 'Instant arbitrage settlement' : opp.type === 'buy-all-discount' ? 'Guaranteed resolution payout' : 'Statistical edge setup'}
+                      </div>
+                      <button
+                        onClick={() => {
+                          setSimulationModalOpp(opp)
+                          setSimShares(10)
+                        }}
+                        className="flex items-center gap-1.5 rounded-lg border border-purple/30 bg-purple/10 px-3.5 py-1.5 text-xs font-semibold text-purple hover:bg-purple/20 transition-colors shadow-sm"
+                      >
+                        <Beaker size={13} /> Simulate Rebalance
+                      </button>
+                    </div>
                   </article>
                 ))}
+              </div>
+            )}
+
+            {/* Paper Trading Ledger Table */}
+            {rebalancingPaperTrades.length > 0 && (
+              <div className="mt-6 rounded-2xl border border-border bg-void/30 p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Beaker size={16} className="text-purple" />
+                    <h4 className="text-xs font-bold text-foreground uppercase tracking-wider">Simulated Paper Execution Ledger</h4>
+                  </div>
+                  <span className="text-[11px] text-muted">{rebalancingPaperTrades.length} recorded simulations</span>
+                </div>
+                <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                  {rebalancingPaperTrades.map(trade => (
+                    <div key={trade.id} className="rounded-xl border border-border bg-surface-alt p-3 text-xs flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="font-semibold text-foreground line-clamp-1">{trade.eventTitle}</div>
+                        <div className="mt-0.5 text-[10px] text-muted flex items-center gap-2">
+                          <span className="uppercase font-mono text-purple">{trade.type}</span>
+                          <span>&bull;</span>
+                          <span>{trade.shares} sets</span>
+                          <span>&bull;</span>
+                          <span>Outlay: ${trade.capitalCommitted.toFixed(2)}</span>
+                          <span>&bull;</span>
+                          <span>{new Date(trade.recordedAt).toLocaleTimeString()}</span>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className={`font-mono text-sm font-bold ${trade.netProfit >= 0 ? 'text-profit' : 'text-loss'}`}>
+                          {money(trade.netProfit)}
+                        </div>
+                        <div className="text-[10px] font-mono text-muted">
+                          {trade.status === 'instant-settled' ? 'Instant Settled' : 'Awaiting Resolution'}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -728,6 +964,104 @@ export default function PredictionMarketDashboard() {
             </div>
           </div>
         </section>
+
+        {/* Simulation Modal */}
+        {simulationModalOpp && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+            <div className="relative w-full max-w-lg rounded-2xl border border-border bg-surface p-6 shadow-2xl">
+              <button
+                onClick={() => setSimulationModalOpp(null)}
+                className="absolute right-4 top-4 text-muted hover:text-foreground"
+              >
+                <X size={18} />
+              </button>
+
+              <div className="flex items-center gap-2 text-purple mb-1">
+                <Beaker size={18} />
+                <span className="text-xs font-bold uppercase tracking-wider">Paper Trading Simulator</span>
+              </div>
+              <h3 className="text-base font-bold text-foreground line-clamp-1">{simulationModalOpp.title}</h3>
+
+              <div className="mt-4 rounded-xl border border-border bg-surface-alt p-4 space-y-3">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-secondary font-medium">Rebalance Strategy:</span>
+                  <span className="font-bold text-purple uppercase">{simulationModalOpp.headline}</span>
+                </div>
+
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-secondary font-medium">Trade Size (Sets / Shares):</span>
+                  <div className="flex items-center gap-1.5">
+                    {[5, 10, 25, 50, 100].map(amt => (
+                      <button
+                        key={amt}
+                        onClick={() => setSimShares(amt)}
+                        className={`px-2 py-0.5 rounded text-xs font-mono font-semibold transition ${simShares === amt ? 'bg-purple text-white' : 'bg-surface border border-border text-secondary'}`}
+                      >
+                        {amt}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Financial Simulation Math */}
+                <div className="border-t border-border pt-3 grid grid-cols-3 gap-2 text-center text-xs">
+                  <div className="rounded-lg bg-surface p-2 border border-border">
+                    <div className="text-[10px] text-muted uppercase">Capital Needed</div>
+                    <div className="mt-1 font-mono text-sm font-bold text-foreground">
+                      ${(simulationModalOpp.type === 'mint-and-sell' ? 1.00 * simShares : (simulationModalOpp.askSum || simulationModalOpp.priceSum) * simShares).toFixed(2)}
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-surface p-2 border border-border">
+                    <div className="text-[10px] text-muted uppercase">Expected Payout</div>
+                    <div className="mt-1 font-mono text-sm font-bold text-accent">
+                      ${(simulationModalOpp.type === 'mint-and-sell' ? (simulationModalOpp.bidSum || simulationModalOpp.priceSum) * simShares : 1.00 * simShares).toFixed(2)}
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-surface p-2 border border-border">
+                    <div className="text-[10px] text-muted uppercase">Net Profit</div>
+                    <div className="mt-1 font-mono text-sm font-bold text-profit">
+                      {money(simulationModalOpp.type === 'mint-and-sell'
+                        ? ((simulationModalOpp.bidSum || simulationModalOpp.priceSum) - 1.00) * simShares
+                        : (1.00 - (simulationModalOpp.askSum || simulationModalOpp.priceSum)) * simShares
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Leg preview */}
+              <div className="mt-4">
+                <div className="text-[11px] font-bold uppercase text-secondary mb-2">Simulated Order Tickets ({simulationModalOpp.outcomes.length} legs):</div>
+                <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                  {simulationModalOpp.outcomes.map(o => (
+                    <div key={o.id} className="flex items-center justify-between rounded-lg border border-border bg-surface-alt px-3 py-1.5 text-xs font-mono">
+                      <span className="font-sans font-medium text-foreground truncate max-w-[200px]">{o.title}</span>
+                      <span className="text-secondary">
+                        {simulationModalOpp.type === 'mint-and-sell' ? 'SELL' : 'BUY'} {simShares} @ ${(o.bestBid || o.bestAsk || o.price).toFixed(2)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Action buttons */}
+              <div className="mt-6 flex items-center justify-end gap-3">
+                <button
+                  onClick={() => setSimulationModalOpp(null)}
+                  className="px-4 py-2 rounded-xl border border-border bg-surface-alt text-xs font-semibold text-secondary hover:text-foreground"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => executeSimulation(simulationModalOpp, simShares)}
+                  className="flex items-center gap-2 px-5 py-2 rounded-xl bg-purple text-white text-xs font-bold shadow-lg shadow-purple/20 hover:bg-purple/90"
+                >
+                  <Beaker size={14} /> Confirm Paper Execution
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {error && <div className="mb-5 flex items-start gap-3 rounded-2xl border border-loss/25 bg-loss/10 p-4 text-sm text-loss"><AlertTriangle className="mt-0.5 shrink-0" size={17} /><div><div className="font-semibold">Market feeds did not refresh</div><div className="mt-0.5 opacity-80">{error}</div></div></div>}
 
