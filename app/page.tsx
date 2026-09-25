@@ -13,7 +13,7 @@ import type {
 } from '@/lib/services/prediction-markets.service'
 
 type VenueFilter = 'all' | PredictionVenue
-type SortMode = 'volume' | 'tight' | 'balanced' | 'certainty' | 'closing'
+type SortMode = 'riskReward' | 'volume' | 'tight' | 'balanced' | 'certainty' | 'upside' | 'closing'
 
 type DecisionTone = 'profit' | 'accent' | 'warn' | 'loss'
 
@@ -121,6 +121,59 @@ function favoriteSide(market: PredictionMarket): { outcome: string; price: numbe
     : { outcome: market.outcomes[1], price: market.noAsk }
 }
 
+interface OpportunityProfile {
+  outcome: string
+  price: number
+  impliedChance: number
+  profitPerShare: number
+  returnOnStake: number
+  score: number
+  label: 'High chance · small reward' | 'Balanced chance + reward' | 'Higher reward · higher risk'
+}
+
+function clamp(value: number, min = 0, max = 1): number {
+  return Math.max(min, Math.min(max, value))
+}
+
+/**
+ * A market-screening score, not a probability forecast. It favors liquid,
+ * tightly quoted favorites around 70–85%, where the payout is still meaningful.
+ */
+function opportunityProfile(market: PredictionMarket): OpportunityProfile | null {
+  const favorite = favoriteSide(market)
+  const total = askTotal(market)
+  if (!favorite || total === null || favorite.price <= 0 || favorite.price >= 1) return null
+
+  const impliedChance = clamp(favorite.price / total)
+  const profitPerShare = 1 - favorite.price
+  const returnOnStake = profitPerShare / favorite.price
+  const chanceRewardFit = clamp(1 - Math.abs(impliedChance - 0.78) / 0.28)
+  const usefulReturn = clamp(returnOnStake / 0.5)
+  const liquidity = clamp(Math.log10(market.volume24h + 1) / 5)
+  const quoteIntegrity = clamp(1 - Math.abs(total - 1) / 0.08)
+  const thinMarketPenalty = market.volume24h < 500 ? 0.65 : 1
+  const score = 100 * (
+    chanceRewardFit * 0.45 +
+    usefulReturn * 0.25 +
+    liquidity * 0.20 +
+    quoteIntegrity * 0.10
+  ) * thinMarketPenalty
+
+  return {
+    outcome: favorite.outcome,
+    price: favorite.price,
+    impliedChance,
+    profitPerShare,
+    returnOnStake,
+    score,
+    label: impliedChance >= 0.9
+      ? 'High chance · small reward'
+      : impliedChance >= 0.7
+        ? 'Balanced chance + reward'
+        : 'Higher reward · higher risk',
+  }
+}
+
 function baseDecision(market: PredictionMarket): DecisionGuidance {
   const total = askTotal(market)
   const favorite = favoriteSide(market)
@@ -162,10 +215,12 @@ function decisionClass(tone: DecisionTone): string {
 
 function sortMarkets(markets: PredictionMarket[], mode: SortMode): PredictionMarket[] {
   return [...markets].sort((a, b) => {
+    if (mode === 'riskReward') return (opportunityProfile(b)?.score ?? -1) - (opportunityProfile(a)?.score ?? -1)
     if (mode === 'volume') return b.volume24h - a.volume24h
     if (mode === 'balanced') return Math.abs((a.yesAsk ?? 0.5) - 0.5) - Math.abs((b.yesAsk ?? 0.5) - 0.5)
     if (mode === 'tight') return Math.abs((askTotal(a) ?? 99) - 1) - Math.abs((askTotal(b) ?? 99) - 1)
     if (mode === 'certainty') return (favoriteSide(b)?.price ?? 0) - (favoriteSide(a)?.price ?? 0)
+    if (mode === 'upside') return (opportunityProfile(b)?.returnOnStake ?? -1) - (opportunityProfile(a)?.returnOnStake ?? -1)
     const aTime = a.closeTime ? Date.parse(a.closeTime) : Infinity
     const bTime = b.closeTime ? Date.parse(b.closeTime) : Infinity
     return (Number.isFinite(aTime) ? aTime : Infinity) - (Number.isFinite(bTime) ? bTime : Infinity)
@@ -186,7 +241,7 @@ export default function PredictionMarketDashboard() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<VenueFilter>('all')
-  const [sort, setSort] = useState<SortMode>('volume')
+  const [sort, setSort] = useState<SortMode>('riskReward')
   const [search, setSearch] = useState('')
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [research, setResearch] = useState<ResearchResult | null>(null)
@@ -417,9 +472,12 @@ export default function PredictionMarketDashboard() {
                 <div className="flex items-center gap-2">
                   <SlidersHorizontal className="hidden text-muted sm:block" size={15} />
                   <select aria-label="Sort markets" value={sort} onChange={event => setSort(event.target.value as SortMode)} className="!w-auto !min-w-40 !rounded-xl !bg-void/45 !py-3">
-                    <option value="volume">Most active</option><option value="certainty">Highest win chance</option><option value="tight">Tightest quotes</option><option value="balanced">Most uncertain</option><option value="closing">Closing soon</option>
+                    <option value="riskReward">Best chance + return</option><option value="certainty">Highest implied chance</option><option value="upside">Highest potential return</option><option value="volume">Most active</option><option value="tight">Tightest quotes</option><option value="balanced">Most uncertain</option><option value="closing">Closing soon</option>
                   </select>
                 </div>
+              </div>
+              <div className="mt-3 rounded-xl border border-accent/15 bg-accent/5 px-3.5 py-2.5 text-[11px] leading-5 text-secondary">
+                <strong className="text-foreground">Recommended:</strong> Best chance + return favors liquid, tightly quoted favorites around 70–85%, where the potential payout is still meaningful. It is a screening score—not proof that the favorite will win.
               </div>
               <div className="mt-3 flex gap-2">
                 {(['all', 'polymarket', 'kalshi'] as VenueFilter[]).map(value => <button key={value} onClick={() => changeFilter(value)} className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition ${filter === value ? 'bg-foreground text-void' : 'border border-border bg-void/30 text-secondary hover:text-foreground'}`}>{value === 'all' ? 'All markets' : sourceLabel(value)}</button>)}
@@ -435,14 +493,16 @@ export default function PredictionMarketDashboard() {
                   ? { action: 'BUY BOTH SIDES', reason: `${money(locked.netProfit)} modeled net profit.`, tone: 'profit' }
                   : baseDecision(market)
                 const total = askTotal(market)
+                const profile = opportunityProfile(market)
                 return <button key={marketKey(market)} onClick={() => selectMarket(market)} className={`decision-row w-full rounded-2xl p-4 text-left sm:p-5 ${active ? '!border-accent/60 !bg-accent/10 shadow-lg shadow-accent/5' : ''}`}>
                   <div className="grid items-center gap-4 md:grid-cols-[minmax(0,1fr)_230px_auto]">
                     <div className="min-w-0">
                       <div className="mb-2 flex flex-wrap items-center gap-2"><span className="text-[10px] font-bold uppercase tracking-[.14em] text-secondary">#{String(index + 1).padStart(2, '0')}</span><span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${market.venue === 'polymarket' ? 'border-purple/25 bg-purple/10 text-purple' : 'border-accent/25 bg-accent/10 text-accent'}`}>{sourceLabel(market.venue)}</span><span className="flex items-center gap-1 text-[10px] text-muted"><Clock3 size={11} /> {closeLabel(market.closeTime)}</span></div>
                       <h3 className="line-clamp-2 text-sm font-semibold leading-5 sm:text-[15px]">{market.title}</h3>
-                      <div className="mt-2 flex items-center gap-3 text-[11px] text-secondary"><span>24h volume <strong className="font-semibold text-foreground">{compactVolume(market.volume24h)}</strong></span>{total !== null && <span>quote friction <strong className={Math.abs(total - 1) <= .025 ? 'text-profit' : 'text-warn'}>{((total - 1) * 100).toFixed(1)} pts</strong></span>}</div>
+                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-secondary"><span>24h volume <strong className="font-semibold text-foreground">{compactVolume(market.volume24h)}</strong></span>{total !== null && <span>quote friction <strong className={Math.abs(total - 1) <= .025 ? 'text-profit' : 'text-warn'}>{((total - 1) * 100).toFixed(1)} pts</strong></span>}{profile && <span className={profile.impliedChance >= .9 ? 'text-warn' : profile.impliedChance >= .7 ? 'text-profit' : 'text-secondary'}>{profile.label}</span>}</div>
                     </div>
                     <div>
+                      {profile && <div className="mb-2 grid grid-cols-3 gap-1.5 text-center" title={`Favorite: ${profile.outcome}`}><div className="rounded-lg bg-void/35 px-1.5 py-1.5"><div className="font-mono text-xs font-bold text-accent">{(profile.impliedChance * 100).toFixed(0)}%</div><div className="text-[8px] uppercase tracking-wide text-muted">implied</div></div><div className="rounded-lg bg-void/35 px-1.5 py-1.5"><div className="font-mono text-xs font-bold text-profit">{(profile.profitPerShare * 100).toFixed(0)}¢</div><div className="text-[8px] uppercase tracking-wide text-muted">profit/share</div></div><div className="rounded-lg bg-void/35 px-1.5 py-1.5"><div className="font-mono text-xs font-bold text-foreground">+{(profile.returnOnStake * 100).toFixed(0)}%</div><div className="text-[8px] uppercase tracking-wide text-muted">gross return</div></div></div>}
                       <div className="mb-2 flex items-center justify-between text-xs"><span className="max-w-[95px] truncate text-secondary">{market.outcomes[0]}</span><span className="font-mono font-bold text-foreground">{quote(market.yesAsk)}</span></div>
                       <div className="mb-2 h-1.5 overflow-hidden rounded-full bg-surface-elevated"><div className="h-full rounded-full bg-gradient-to-r from-accent to-purple" style={{ width: `${Math.max(0, Math.min(100, (market.yesAsk ?? 0) * 100))}%` }} /></div>
                       <div className="flex items-center justify-between text-xs"><span className="max-w-[95px] truncate text-secondary">{market.outcomes[1]}</span><span className="font-mono font-bold text-foreground">{quote(market.noAsk)}</span></div>
