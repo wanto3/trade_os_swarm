@@ -84,8 +84,8 @@ interface PaperFill {
 }
 
 function money(value: number): string {
-  const sign = value > 0 ? '+' : ''
-  return `${sign}$${value.toFixed(4)}`
+  const sign = value > 0 ? '+' : value < 0 ? '-' : ''
+  return `${sign}$${Math.abs(value).toFixed(4)}`
 }
 
 function compactMoney(value: number): string {
@@ -102,7 +102,7 @@ function statusStyle(status: ArbitrageOpportunity['status']): string {
 
 function statusLabel(status: ArbitrageOpportunity['status']): string {
   if (status === 'opportunity') return 'Profitable'
-  if (status === 'near-miss') return 'Near Miss'
+  if (status === 'near-miss') return 'No Profit'
   return 'Not Enough Depth'
 }
 
@@ -114,43 +114,8 @@ export default function ArbitrageLabPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [autoRefresh, setAutoRefresh] = useState(false)
-  const [showOnlyPositive, setShowOnlyPositive] = useState(false)
+  const [showOnlyPositive, setShowOnlyPositive] = useState(true)
   const [paperFills, setPaperFills] = useState<PaperFill[]>([])
-  const [researching, setResearching] = useState<Record<string, boolean>>({})
-  const [researchResults, setResearchResults] = useState<Record<string, any>>({})
-
-  const runResearch = async (opportunity: ArbitrageOpportunity) => {
-    setResearching(prev => ({ ...prev, [opportunity.marketId]: true }))
-    try {
-      const response = await fetch('/api/prediction-markets/research', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: opportunity.marketId,
-          venue: 'polymarket',
-          marketData: {
-            id: opportunity.marketId,
-            question: opportunity.question,
-            yesAsk: opportunity.yes.averagePrice,
-            outcomes: opportunity.outcomes,
-            closeTime: opportunity.endDate,
-            volume24h: opportunity.volume24hr,
-            liquidityNum: opportunity.liquidity
-          }
-        }),
-      })
-      const data = await response.json()
-      if (response.ok) {
-        setResearchResults(prev => ({ ...prev, [opportunity.marketId]: data }))
-      } else {
-        console.error('Research error:', data.error)
-      }
-    } catch (e) {
-      console.error(e)
-    } finally {
-      setResearching(prev => ({ ...prev, [opportunity.marketId]: false }))
-    }
-  }
 
   const runScan = useCallback(async () => {
     setLoading(true)
@@ -231,7 +196,7 @@ export default function ArbitrageLabPage() {
             <div>
               <h1 className="text-xl font-bold md:text-2xl">Arbitrage Scanner</h1>
               <p className="text-sm text-secondary mt-1">
-                Scan Polymarket for risk-free complete-set opportunities (Paper mode only)
+                Scan Polymarket for fully hedged complete-set opportunities (Paper mode only)
               </p>
             </div>
           </div>
@@ -260,7 +225,7 @@ export default function ArbitrageLabPage() {
               </div>
               <div className="flex flex-wrap items-end gap-4">
                 <label className="grid gap-1.5 text-xs font-medium text-secondary">
-                  Shares per trade
+                  Matched pairs to buy
                   <input
                     type="number"
                     min={1}
@@ -298,7 +263,7 @@ export default function ArbitrageLabPage() {
               <Metric label="Markets Scanned" value={scan?.scannedMarkets ?? 0} detail={`${scan?.eligibleBinaryMarkets ?? 0} binary books`} />
               <Metric label="Order Books" value={scan?.booksReceived ?? 0} detail={`of ${scan?.booksRequested ?? 0} requested`} />
               <Metric label="Profitable" value={scan?.profitableCount ?? 0} detail="after estimated costs" accent={Boolean(scan?.profitableCount)} />
-              <Metric label="Trade Size" value={`${scan?.requestedShares ?? query.shares} shares`} detail={`$${scan?.assumptions.gasBuffer.toFixed(2) ?? '0.03'} merge buffer`} />
+              <Metric label="Trade Size" value={`${scan?.requestedShares ?? query.shares} complete sets`} detail={`${scan?.requestedShares ?? query.shares} YES + ${scan?.requestedShares ?? query.shares} NO`} />
             </div>
           </div>
 
@@ -306,9 +271,13 @@ export default function ArbitrageLabPage() {
              <h2 className="flex items-center gap-2 text-lg font-semibold">
                 <ShieldCheck size={18} className="text-profit" /> How it works
               </h2>
-              <div className="mt-5 text-sm text-secondary space-y-5">
-                <div className="rounded-lg border border-border bg-surface-alt p-4 font-medium text-foreground text-center">
-                  Buy Yes + No shares → Merge into $1.00 → Keep the profit
+              <div className="mt-5 text-sm text-secondary space-y-4">
+                <div className="rounded-lg border border-profit/20 bg-profit/5 p-4">
+                  <div className="font-semibold text-foreground">Buy equal share counts—not equal dollars</div>
+                  <div className="mt-2 text-xs leading-5">For 10 matched shares, buy <strong className="text-foreground">10 YES + 10 NO</strong>. One complete pair pays $1, so the guaranteed total payout is <strong className="text-foreground">$10.00</strong>.</div>
+                </div>
+                <div className="rounded-lg border border-border bg-surface-alt p-4 text-center text-xs font-medium text-foreground">
+                  $10 payout − both purchase costs − fees/buffers = net profit
                 </div>
                 <label className="flex cursor-pointer items-center justify-between rounded-lg border border-border bg-surface-alt px-4 py-3 hover:border-border-glow transition-colors">
                   <span className="flex items-center gap-2 text-foreground font-medium"><Timer size={16} /> Auto-refresh (15s)</span>
@@ -342,7 +311,7 @@ export default function ArbitrageLabPage() {
                 onClick={() => setShowOnlyPositive(value => !value)}
                 className={`rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${showOnlyPositive ? 'border-profit/40 bg-profit/10 text-profit' : 'border-border bg-surface-alt text-secondary hover:text-foreground'}`}
               >
-                {showOnlyPositive ? 'Positive Only' : 'Show All'}
+                {showOnlyPositive ? 'Show Losing Examples' : 'Hide Losing Examples'}
               </button>
             </div>
             
@@ -355,8 +324,9 @@ export default function ArbitrageLabPage() {
                 <div className="grid min-h-[280px] place-items-center rounded-xl border border-dashed border-border bg-surface text-center">
                   <div className="max-w-md px-6">
                     <CheckCircle2 className="mx-auto mb-4 h-10 w-10 text-profit" />
-                    <h3 className="text-lg font-semibold text-foreground">No riskless spread right now</h3>
-                    <p className="mt-2 text-sm text-secondary">That is a valid result. Efficient books usually price YES + NO at or above $1 after costs.</p>
+                    <h3 className="text-lg font-semibold text-foreground">DO NOT TRADE right now</h3>
+                    <p className="mt-2 text-sm leading-6 text-secondary">No complete set currently costs less than its guaranteed payout after fees and buffers. Buying both sides would lock in no profit or a loss.</p>
+                    <button onClick={() => setShowOnlyPositive(false)} className="mt-4 rounded-lg border border-border bg-surface-alt px-3.5 py-2 text-xs font-semibold text-secondary hover:text-foreground">Explain using near misses</button>
                   </div>
                 </div>
               ) : (
@@ -377,12 +347,20 @@ export default function ArbitrageLabPage() {
                             {opportunity.question}<ExternalLink size={15} className="mt-1 shrink-0 text-secondary" />
                           </a>
                           
-                          <div className="mt-4 flex flex-wrap items-center gap-2 text-sm text-secondary font-mono bg-surface-alt rounded-lg px-4 py-2.5 w-fit border border-border">
-                            <span>Yes avg: {opportunity.yes.averagePrice !== null ? `$${opportunity.yes.averagePrice.toFixed(4)}` : '—'}</span>
-                            <span className="text-muted">&middot;</span>
-                            <span>No avg: {opportunity.no.averagePrice !== null ? `$${opportunity.no.averagePrice.toFixed(4)}` : '—'}</span>
-                            <span className="text-muted">&middot;</span>
-                            <span className="font-semibold text-foreground">Total: {opportunity.combinedAveragePrice !== null ? `$${opportunity.combinedAveragePrice.toFixed(4)}` : '—'}</span>
+                          <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                            <div className="rounded-lg border border-border bg-surface-alt p-3"><div className="text-[10px] font-semibold uppercase tracking-wider text-muted">Buy {opportunity.requestedShares} {opportunity.outcomes[0]}</div><div className="mt-1 font-mono text-base font-bold text-foreground">${opportunity.yes.cost.toFixed(2)}</div><div className="mt-1 text-[10px] text-secondary">avg {opportunity.yes.averagePrice !== null ? `${(opportunity.yes.averagePrice * 100).toFixed(1)}¢` : '—'} each</div></div>
+                            <div className="rounded-lg border border-border bg-surface-alt p-3"><div className="text-[10px] font-semibold uppercase tracking-wider text-muted">Buy {opportunity.requestedShares} {opportunity.outcomes[1]}</div><div className="mt-1 font-mono text-base font-bold text-foreground">${opportunity.no.cost.toFixed(2)}</div><div className="mt-1 text-[10px] text-secondary">avg {opportunity.no.averagePrice !== null ? `${(opportunity.no.averagePrice * 100).toFixed(1)}¢` : '—'} each</div></div>
+                            <div className={`rounded-lg border p-3 ${opportunity.status === 'opportunity' ? 'border-profit/30 bg-profit/5' : 'border-loss/30 bg-loss/5'}`}><div className="text-[10px] font-semibold uppercase tracking-wider text-muted">Total paid for both</div><div className="mt-1 font-mono text-base font-bold text-foreground">${opportunity.acquisitionCost.toFixed(2)}</div><div className="mt-1 text-[10px] text-secondary">guaranteed payout ${opportunity.payout.toFixed(2)}</div></div>
+                          </div>
+
+                          <div className={`mt-3 rounded-lg border p-4 ${opportunity.netProfit > 0 ? 'border-profit/30 bg-profit/5' : 'border-loss/30 bg-loss/5'}`}>
+                            <div className="grid grid-cols-[1fr_auto] gap-x-5 gap-y-2 text-xs">
+                              <span className="text-secondary">Guaranteed complete-set payout</span><strong className="font-mono text-foreground">${opportunity.payout.toFixed(4)}</strong>
+                              <span className="text-secondary">Minus YES + NO purchase cost</span><strong className="font-mono text-loss">−${opportunity.acquisitionCost.toFixed(4)}</strong>
+                              <span className="text-secondary">Minus fees</span><strong className="font-mono text-loss">−${opportunity.fees.toFixed(4)}</strong>
+                              <span className="text-secondary">Minus safety and execution buffers</span><strong className="font-mono text-loss">−${(opportunity.gasBuffer + opportunity.executionBuffer).toFixed(4)}</strong>
+                              <span className="border-t border-border pt-2 font-bold text-foreground">Net result</span><strong className={`border-t border-border pt-2 font-mono text-base ${opportunity.netProfit > 0 ? 'text-profit' : 'text-loss'}`}>{money(opportunity.netProfit)}</strong>
+                            </div>
                           </div>
 
                           {/* Recommended Action */}
@@ -400,7 +378,7 @@ export default function ArbitrageLabPage() {
                             </div>
                             {opportunity.status === 'opportunity' ? (
                               <div className="space-y-1.5 text-secondary">
-                                <p className="font-medium text-foreground">Execute a complete-set merge for guaranteed profit:</p>
+                                <p className="font-medium text-foreground">Positive complete-set math at this snapshot:</p>
                                 <div className="flex flex-wrap items-center gap-2 text-sm">
                                   <span className="rounded bg-surface-alt border border-border px-2 py-0.5 font-mono text-xs">Buy {opportunity.requestedShares} “{opportunity.outcomes[0]}” @ {opportunity.yes.averagePrice !== null ? `$${opportunity.yes.averagePrice.toFixed(3)}` : '—'}</span>
                                   <span className="text-muted">+</span>
@@ -412,8 +390,8 @@ export default function ArbitrageLabPage() {
                               </div>
                             ) : opportunity.status === 'near-miss' ? (
                               <div className="space-y-1 text-secondary">
-                                <p>This market is <span className="font-semibold text-foreground">close to profitable</span> — the combined cost is just above $1.00 after fees.</p>
-                                <p className="text-xs text-muted">Turn on auto-refresh (every 15s) to catch price dips, or try with fewer shares to reduce slippage.</p>
+                                <p><span className="font-semibold text-loss">Do not buy both sides.</span> The guaranteed payout is smaller than the combined purchase cost and modeled expenses.</p>
+                                <p className="text-xs text-muted">This card is shown only to explain the failed math. Wait for prices to move below the profitable threshold.</p>
                               </div>
                             ) : (
                               <div className="space-y-1 text-secondary">
@@ -423,107 +401,6 @@ export default function ArbitrageLabPage() {
                             )}
                           </div>
 
-                          {/* Best Directional Bet */}
-                          {opportunity.yes.averagePrice !== null && opportunity.no.averagePrice !== null && (() => {
-                            const yesProb = opportunity.yes.averagePrice
-                            const noProb = opportunity.no.averagePrice
-                            const favoredSide = yesProb > noProb ? 'no' : 'yes'
-                            const favoredLabel = favoredSide === 'yes' ? opportunity.outcomes[0] : opportunity.outcomes[1]
-                            const favoredPrice = favoredSide === 'yes' ? yesProb : noProb
-                            const winPct = (1 - favoredPrice) * 100
-                            const returnPct = ((1 - favoredPrice) / favoredPrice) * 100
-                            const underdogLabel = favoredSide === 'yes' ? opportunity.outcomes[1] : opportunity.outcomes[0]
-                            const underdogPrice = favoredSide === 'yes' ? noProb : yesProb
-                            const underdogWinPct = underdogPrice * 100
-                            const underdogReturnPct = ((1 - underdogPrice) / underdogPrice) * 100
-                            
-                            const aiData = researchResults[opportunity.marketId]
-                            const isResearching = researching[opportunity.marketId]
-                            
-                            // If AI researched, use its estimate
-                            const estimatedYesProb = aiData ? aiData.estimate : (1 - favoredPrice) // naive fallback if no ai data
-                            const estimatedNoProb = aiData ? (1 - aiData.estimate) : (1 - underdogPrice)
-
-                            // For UI display, figure out which side the AI actually favors vs market
-                            const aiFavorsYes = aiData && aiData.estimate > yesProb
-                            const recommendedSide = aiData ? (aiFavorsYes ? 'yes' : 'no') : favoredSide
-                            const recommendedLabel = recommendedSide === 'yes' ? opportunity.outcomes[0] : opportunity.outcomes[1]
-                            const recommendedPrice = recommendedSide === 'yes' ? yesProb : noProb
-                            const recommendedWinPct = (recommendedSide === 'yes' ? estimatedYesProb : estimatedNoProb) * 100
-                            const recommendedReturnPct = ((1 - recommendedPrice) / recommendedPrice) * 100
-
-                            return (
-                              <div className="mt-4 rounded-lg border border-purple/20 bg-purple/5 px-4 py-3 text-sm">
-                                <div className="flex items-center justify-between mb-2">
-                                  <div className="text-xs font-semibold uppercase tracking-wider text-purple">🎯 Best Directional Bet</div>
-                                  {!aiData && (
-                                    <button
-                                      onClick={() => runResearch(opportunity)}
-                                      disabled={isResearching}
-                                      className="text-xs flex items-center gap-1 font-medium bg-purple/10 text-purple hover:bg-purple/20 px-2 py-1 rounded transition-colors disabled:opacity-50"
-                                    >
-                                      {isResearching ? <RefreshCw size={12} className="animate-spin" /> : <Radar size={12} />}
-                                      {isResearching ? 'Researching...' : 'Deep Research'}
-                                    </button>
-                                  )}
-                                </div>
-
-                                {aiData ? (
-                                  <div className="space-y-3">
-                                    <div className="rounded-lg border border-border bg-surface-alt p-3">
-                                      <div className="flex items-center justify-between mb-1">
-                                        <span className="text-xs font-semibold text-profit">🧠 AI Recommended: Buy “{recommendedLabel}”</span>
-                                        <span className="font-mono text-xs text-profit font-semibold">{recommendedWinPct.toFixed(0)}% true win rate</span>
-                                      </div>
-                                      <div className="flex items-center justify-between mt-2">
-                                        <p className="text-sm font-medium text-foreground">Entry: <span className="font-mono">${recommendedPrice.toFixed(3)}</span></p>
-                                        <p className="text-xs text-muted">Pays $1.00 if correct → <span className="text-profit font-medium">+{recommendedReturnPct.toFixed(1)}% return</span></p>
-                                      </div>
-                                      <div className="mt-2 prob-bar">
-                                        <div className="prob-bar-fill" style={{ width: `${Math.min(100, recommendedWinPct)}%` }} />
-                                      </div>
-                                    </div>
-                                    <div className="text-xs text-secondary bg-surface p-3 rounded-lg border border-border">
-                                      <div className="flex items-center gap-2 mb-1.5">
-                                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${aiData.confidence === 'high' ? 'bg-profit/10 text-profit' : aiData.confidence === 'medium' ? 'bg-warn/10 text-warn' : 'bg-loss/10 text-loss'}`}>
-                                          {aiData.confidence} Confidence
-                                        </span>
-                                      </div>
-                                      <p className="leading-relaxed">{aiData.reasoning}</p>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <div className="grid gap-3 sm:grid-cols-2">
-                                    {/* Favored side */}
-                                    <div className="rounded-lg border border-border bg-surface-alt p-3">
-                                      <div className="flex items-center justify-between mb-1">
-                                        <span className="text-xs font-semibold text-profit">🟢 Safer Bet (Naive)</span>
-                                        <span className="font-mono text-xs text-profit font-semibold">{winPct.toFixed(0)}% win rate</span>
-                                      </div>
-                                      <p className="text-sm font-medium text-foreground">Buy “{favoredLabel}” at <span className="font-mono">${favoredPrice.toFixed(3)}</span></p>
-                                      <div className="mt-2 prob-bar">
-                                        <div className="prob-bar-fill" style={{ width: `${Math.min(100, winPct)}%` }} />
-                                      </div>
-                                      <p className="mt-1.5 text-xs text-muted">Pays $1.00 if correct → <span className="text-profit font-medium">+{returnPct.toFixed(1)}% return</span></p>
-                                    </div>
-                                    {/* Underdog side */}
-                                    <div className="rounded-lg border border-border bg-surface-alt p-3">
-                                      <div className="flex items-center justify-between mb-1">
-                                        <span className="text-xs font-semibold text-warn">🔶 High Risk (Naive)</span>
-                                        <span className="font-mono text-xs text-warn font-semibold">{underdogWinPct.toFixed(0)}% win rate</span>
-                                      </div>
-                                      <p className="text-sm font-medium text-foreground">Buy “{underdogLabel}” at <span className="font-mono">${underdogPrice.toFixed(3)}</span></p>
-                                      <div className="mt-2 prob-bar">
-                                        <div className="prob-bar-fill" style={{ width: `${Math.min(100, underdogWinPct)}%`, background: 'var(--color-warning)' }} />
-                                      </div>
-                                      <p className="mt-1.5 text-xs text-muted">Pays $1.00 if correct → <span className="text-warn font-medium">+{underdogReturnPct.toFixed(1)}% return</span></p>
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            )
-                          })()}
-                          
                           <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted font-medium">
                             <span>Cost {money(-opportunity.acquisitionCost)}</span>
                             <span>Gross {money(opportunity.grossProfit)}</span>
@@ -543,10 +420,10 @@ export default function ArbitrageLabPage() {
                           </span>
                           <button
                             className="mt-5 w-full flex items-center justify-center gap-2 rounded-lg border border-border bg-surface px-4 py-2.5 text-sm font-semibold text-foreground hover:bg-accent hover:border-accent hover:text-white transition-all disabled:opacity-50 disabled:hover:bg-surface disabled:hover:text-foreground disabled:hover:border-border"
-                            disabled={!opportunity.fillable}
+                            disabled={!opportunity.fillable || opportunity.status !== 'opportunity'}
                             onClick={() => recordPaperFill(opportunity)}
                           >
-                            <Beaker size={16} /> Record Trade
+                            <Beaker size={16} /> {opportunity.status === 'opportunity' ? 'Paper Test This Trade' : 'Do Not Trade'}
                           </button>
                         </div>
                       </div>
