@@ -5,7 +5,7 @@ import Link from 'next/link'
 import {
   Activity, ArrowLeftRight, ArrowUpRight, BrainCircuit, CheckCircle2,
   ChevronRight, Clock3, DollarSign, ExternalLink, Eye, Gauge, Layers3,
-  LockKeyhole, Radar, RefreshCw, Search, AlertTriangle, ShieldCheck,
+  LockKeyhole, Radar, RefreshCw, Scale, Search, AlertTriangle, ShieldCheck,
   SlidersHorizontal, Sparkles, TrendingUp,
 } from 'lucide-react'
 import type {
@@ -65,6 +65,45 @@ interface ArbitrageScanSummary {
   profitableCount: number
   opportunities: ArbitrageOpportunitySummary[]
   warnings: string[]
+}
+
+interface RebalancingOutcome {
+  id: string
+  title: string
+  price: number
+  bestBid: number | null
+  bestAsk: number | null
+  volume24hr: number
+}
+
+interface RebalancingOpportunity {
+  id: string
+  title: string
+  slug: string
+  url: string
+  negRisk: boolean
+  outcomeCount: number
+  volume24hr: number
+  liquidity: number
+  priceSum: number
+  askSum: number | null
+  bidSum: number | null
+  diffFromDollar: number
+  type: 'mint-and-sell' | 'buy-all-discount' | 'overpriced-basket' | 'discounted-basket' | 'balanced'
+  headline: string
+  explanation: string
+  actionGuidance: string
+  profitPercent: number
+  outcomes: RebalancingOutcome[]
+}
+
+interface RebalancingResponse {
+  generatedAt: string
+  eventsScanned: number
+  opportunitiesFound: number
+  mintAndSellCount: number
+  buyAllCount: number
+  opportunities: RebalancingOpportunity[]
 }
 
 function quote(price: number | null): string {
@@ -252,6 +291,9 @@ export default function PredictionMarketDashboard() {
   const [arbitrage, setArbitrage] = useState<ArbitrageScanSummary | null>(null)
   const [arbitrageLoading, setArbitrageLoading] = useState(true)
   const [arbitrageError, setArbitrageError] = useState<string | null>(null)
+  const [rebalancing, setRebalancing] = useState<RebalancingResponse | null>(null)
+  const [rebalancingLoading, setRebalancingLoading] = useState(true)
+  const [rebalancingError, setRebalancingError] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -283,6 +325,21 @@ export default function PredictionMarketDashboard() {
     }
   }, [])
 
+  const scanRebalancing = useCallback(async () => {
+    setRebalancingLoading(true)
+    setRebalancingError(null)
+    try {
+      const response = await fetch('/api/rebalancing?limit=40', { cache: 'no-store' })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`)
+      setRebalancing(data as RebalancingResponse)
+    } catch (cause) {
+      setRebalancingError(cause instanceof Error ? cause.message : 'Rebalancing scan is temporarily unavailable')
+    } finally {
+      setRebalancingLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     void refresh()
     const timer = window.setInterval(() => {
@@ -291,7 +348,6 @@ export default function PredictionMarketDashboard() {
     return () => window.clearInterval(timer)
   }, [refresh])
 
-
   useEffect(() => {
     void scanArbitrage()
     const timer = window.setInterval(() => {
@@ -299,6 +355,14 @@ export default function PredictionMarketDashboard() {
     }, 90_000)
     return () => window.clearInterval(timer)
   }, [scanArbitrage])
+
+  useEffect(() => {
+    void scanRebalancing()
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void scanRebalancing()
+    }, 60_000)
+    return () => window.clearInterval(timer)
+  }, [scanRebalancing])
 
   const markets = useMemo(() => snapshot?.markets ?? [], [snapshot])
   const quoteCounts = useMemo(() => ({
@@ -461,6 +525,207 @@ export default function PredictionMarketDashboard() {
             {!arbitrageLoading && !arbitrageError && allLockedProfit.length === 0 && closestSetups.length > 0 && <details className="mt-4 rounded-2xl border border-border bg-void/20"><summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-xs font-bold">Closest arbitrage watchlist <span className="text-[10px] font-semibold text-warn">NOT PROFITABLE YET · {closestSetups.length} NEAR-MISSES</span></summary><div className="grid gap-2 border-t border-border p-3 md:grid-cols-3">{closestSetups.map(item => <a key={item.marketId} href={item.url} target="_blank" rel="noreferrer" className="rounded-xl border border-border bg-surface-alt/60 p-3 transition hover:border-warn/30"><div className="truncate text-xs font-semibold">{item.question}</div><div className="mt-2 flex items-center justify-between text-[10px]"><span className="text-muted">asks {item.combinedAveragePrice === null ? '—' : money(item.combinedAveragePrice)}</span><span className="font-mono font-bold text-loss">{money(item.netProfit)} net</span></div></a>)}</div></details>}
 
             <div className="mt-4 flex flex-col justify-between gap-2 border-t border-border pt-4 text-[10px] leading-4 text-muted sm:flex-row"><span>“Locked” describes the payout math only—not guaranteed execution. Quotes and available size can disappear between legs.</span><span className="shrink-0">Last scan {arbitrage ? new Date(arbitrage.generatedAt).toLocaleTimeString() : '—'}</span></div>
+          </div>
+        </section>
+
+        {/* Multi-Outcome Rebalancing & Neg-Risk Radar */}
+        <section id="rebalancing-radar" className="glass-panel mb-6 overflow-hidden rounded-3xl border-purple/30">
+          <div className="border-b border-border bg-gradient-to-r from-purple/10 via-transparent to-accent/5 p-5 sm:p-6">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <div className="mb-2 flex items-center gap-2">
+                  <Scale className="text-purple" size={20} />
+                  <h2 className="text-lg font-bold">Multi-Outcome Rebalancing &amp; Neg-Risk Radar</h2>
+                  <span className="rounded-full border border-purple/30 bg-purple/10 px-2.5 py-0.5 text-[10px] font-bold text-purple">
+                    100% MATH: EXACTLY 1 OUTCOME WINS $1.00
+                  </span>
+                </div>
+                <p className="max-w-3xl text-xs leading-5 text-secondary">
+                  When multiple candidates run in an election, tournament, or policy vote, exactly one candidate pays $1.00 and all others pay $0.00.
+                  Whenever total market prices or bids deviate from $1.00 (e.g. sum is $1.15 due to retail hype, or $0.94 due to neglected outsiders), risk-free minting or complete-set buying opportunities open up.
+                </p>
+              </div>
+              <button
+                aria-label="Refresh rebalancing scan"
+                onClick={() => void scanRebalancing()}
+                disabled={rebalancingLoading}
+                className="inline-flex items-center gap-2 rounded-xl border border-border bg-surface-alt px-3.5 py-2.5 text-xs font-bold text-secondary transition hover:border-purple/40 hover:text-purple disabled:opacity-50"
+              >
+                <RefreshCw size={14} className={rebalancingLoading ? 'animate-spin' : ''} /> Scan Multi-Markets
+              </button>
+            </div>
+          </div>
+
+          <div className="p-5 sm:p-6">
+            {/* Quick Summary Metrics */}
+            <div className="mb-5 grid gap-3 grid-cols-2 sm:grid-cols-4">
+              <div className="rounded-2xl border border-border bg-void/35 p-4">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-secondary">Mint &amp; Sell Ready</div>
+                <div className={`mt-2 font-mono text-2xl font-bold ${(rebalancing?.mintAndSellCount ?? 0) > 0 ? 'text-profit' : 'text-foreground'}`}>
+                  {rebalancingLoading && !rebalancing ? '—' : rebalancing?.mintAndSellCount ?? 0}
+                </div>
+                <div className="mt-1 text-[11px] text-muted">Bids total &gt; $1.00 (Instant profit)</div>
+              </div>
+
+              <div className="rounded-2xl border border-border bg-void/35 p-4">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-secondary">Discount Complete Sets</div>
+                <div className={`mt-2 font-mono text-2xl font-bold ${(rebalancing?.buyAllCount ?? 0) > 0 ? 'text-profit' : 'text-foreground'}`}>
+                  {rebalancingLoading && !rebalancing ? '—' : rebalancing?.buyAllCount ?? 0}
+                </div>
+                <div className="mt-1 text-[11px] text-muted">Asks total &lt; $1.00 (Guaranteed payout)</div>
+              </div>
+
+              <div className="rounded-2xl border border-border bg-void/35 p-4">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-secondary">Hype Overpriced Fields</div>
+                <div className="mt-2 font-mono text-2xl font-bold text-warn">
+                  {rebalancingLoading && !rebalancing ? '—' : rebalancing?.opportunities.filter(o => o.type === 'overpriced-basket').length ?? 0}
+                </div>
+                <div className="mt-1 text-[11px] text-muted">Prices sum &gt; $1.04 (Short edge)</div>
+              </div>
+
+              <div className="rounded-2xl border border-border bg-void/35 p-4">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-secondary">Events Scanned</div>
+                <div className="mt-2 font-mono text-2xl font-bold text-accent">
+                  {rebalancing?.eventsScanned ?? '—'}
+                </div>
+                <div className="mt-1 text-[11px] text-muted">Active Polymarket events</div>
+              </div>
+            </div>
+
+            {/* Loading state */}
+            {rebalancingLoading && !rebalancing && (
+              <div className="grid min-h-36 place-items-center rounded-2xl border border-dashed border-border bg-void/20">
+                <div className="text-center">
+                  <RefreshCw className="mx-auto mb-2 animate-spin text-purple" size={20} />
+                  <div className="text-sm font-semibold">Scanning Neg-Risk and Multi-Candidate Events</div>
+                  <div className="mt-1 text-xs text-secondary">Calculating basket sum totals across all candidates…</div>
+                </div>
+              </div>
+            )}
+
+            {/* Error state */}
+            {rebalancingError && (
+              <div className="flex items-start gap-3 rounded-2xl border border-loss/25 bg-loss/10 p-4 text-sm text-loss mb-4">
+                <AlertTriangle className="mt-0.5 shrink-0" size={17} />
+                <div>
+                  <div className="font-semibold">Rebalancing scan unavailable</div>
+                  <div className="mt-0.5 text-xs opacity-80">{rebalancingError}</div>
+                </div>
+              </div>
+            )}
+
+            {/* Events Grid */}
+            {!rebalancingLoading && !rebalancingError && rebalancing && rebalancing.opportunities.length > 0 && (
+              <div className="grid gap-4 lg:grid-cols-2">
+                {rebalancing.opportunities.slice(0, 6).map(opp => (
+                  <article key={opp.id} className="rounded-2xl border border-border bg-surface-alt/70 p-5 shadow-sm transition hover:border-purple/40">
+                    {/* Header */}
+                    <div className="flex flex-wrap items-start justify-between gap-2 border-b border-border/60 pb-3">
+                      <div>
+                        <div className="flex items-center gap-2 mb-1">
+                          {opp.type === 'mint-and-sell' && (
+                            <span className="badge-profit px-2.5 py-0.5 rounded text-[10px] font-bold uppercase">
+                              🟢 Mint &amp; Sell (+{opp.profitPercent.toFixed(1)}%)
+                            </span>
+                          )}
+                          {opp.type === 'buy-all-discount' && (
+                            <span className="badge-profit px-2.5 py-0.5 rounded text-[10px] font-bold uppercase">
+                              🟢 Buy All Discount (+{opp.profitPercent.toFixed(1)}%)
+                            </span>
+                          )}
+                          {opp.type === 'overpriced-basket' && (
+                            <span className="badge-warning px-2.5 py-0.5 rounded text-[10px] font-bold uppercase">
+                              🔶 Overpriced (+{opp.profitPercent.toFixed(1)}% Hype)
+                            </span>
+                          )}
+                          {opp.type === 'discounted-basket' && (
+                            <span className="rounded border border-purple/30 bg-purple/10 px-2.5 py-0.5 text-[10px] font-bold uppercase text-purple">
+                              🔷 Underpriced Basket
+                            </span>
+                          )}
+                          {opp.type === 'balanced' && (
+                            <span className="rounded border border-border bg-surface px-2.5 py-0.5 text-[10px] font-semibold text-secondary uppercase">
+                              ⚪ Balanced Field
+                            </span>
+                          )}
+                          <span className="text-[11px] text-muted">{opp.outcomeCount} candidates</span>
+                        </div>
+                        <h3 className="text-sm font-bold text-foreground line-clamp-1">{opp.title}</h3>
+                      </div>
+                      <a
+                        href={opp.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs font-semibold text-accent hover:underline flex items-center gap-1 shrink-0"
+                      >
+                        Polymarket <ArrowUpRight size={13} />
+                      </a>
+                    </div>
+
+                    {/* Math breakdown row */}
+                    <div className="my-3.5 grid grid-cols-3 gap-2 text-center text-xs">
+                      <div className="rounded-xl border border-border bg-surface p-2.5">
+                        <div className="text-[10px] uppercase font-semibold text-secondary">Price Sum</div>
+                        <div className={`mt-1 font-mono text-base font-bold ${opp.priceSum > 1.03 ? 'text-warn' : opp.priceSum < 0.97 ? 'text-purple' : 'text-foreground'}`}>
+                          ${opp.priceSum.toFixed(3)}
+                        </div>
+                        <div className="text-[10px] text-muted">{opp.diffFromDollar >= 0 ? `+${(opp.diffFromDollar * 100).toFixed(1)}%` : `${(opp.diffFromDollar * 100).toFixed(1)}%`} vs $1</div>
+                      </div>
+
+                      <div className="rounded-xl border border-border bg-surface p-2.5">
+                        <div className="text-[10px] uppercase font-semibold text-secondary">Cost to Buy All</div>
+                        <div className={`mt-1 font-mono text-base font-bold ${opp.askSum && opp.askSum < 1.0 ? 'text-profit font-extrabold' : 'text-foreground'}`}>
+                          {opp.askSum !== null ? `$${opp.askSum.toFixed(3)}` : 'Thin depth'}
+                        </div>
+                        <div className="text-[10px] text-muted">pays $1.00 at close</div>
+                      </div>
+
+                      <div className="rounded-xl border border-border bg-surface p-2.5">
+                        <div className="text-[10px] uppercase font-semibold text-secondary">Mint &amp; Sell Bids</div>
+                        <div className={`mt-1 font-mono text-base font-bold ${opp.bidSum && opp.bidSum > 1.0 ? 'text-profit font-extrabold' : 'text-foreground'}`}>
+                          {opp.bidSum !== null ? `$${opp.bidSum.toFixed(3)}` : 'Thin bids'}
+                        </div>
+                        <div className="text-[10px] text-muted">costs $1.00 to mint</div>
+                      </div>
+                    </div>
+
+                    {/* Top candidates preview */}
+                    <div className="mb-3">
+                      <div className="text-[10px] uppercase font-semibold text-secondary mb-1.5">Top Contenders:</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {opp.outcomes.slice(0, 5).map(o => (
+                          <span key={o.id} className="rounded-md border border-border bg-surface px-2 py-1 text-[11px] font-mono flex items-center gap-1.5">
+                            <span className="font-sans font-medium text-foreground truncate max-w-[120px]">{o.title}</span>
+                            <span className="font-bold text-accent">${o.price.toFixed(2)}</span>
+                          </span>
+                        ))}
+                        {opp.outcomeCount > 5 && (
+                          <span className="text-[10px] text-muted self-center">+{opp.outcomeCount - 5} more</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Step-by-Step Action Guidance */}
+                    <div className={`rounded-xl border p-3 text-xs leading-relaxed ${
+                      opp.type === 'mint-and-sell' || opp.type === 'buy-all-discount'
+                        ? 'border-profit/30 bg-profit/10 text-foreground'
+                        : 'border-border bg-surface text-secondary'
+                    }`}>
+                      <div className="font-semibold text-foreground mb-1">{opp.headline}</div>
+                      <p className="text-[11px] text-muted">{opp.explanation}</p>
+                      <div className="mt-2 text-[11px] font-medium text-foreground border-t border-border/40 pt-1.5 whitespace-pre-line">
+                        {opp.actionGuidance}
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+
+            <div className="mt-4 flex flex-col justify-between gap-2 border-t border-border pt-4 text-[10px] leading-4 text-muted sm:flex-row">
+              <span>Multi-outcome events resolve through Polymarket&apos;s Neg-Risk CTF contracts. Exactly one outcome redeems for $1.00 USDC.</span>
+              <span className="shrink-0">Last scan: {rebalancing ? new Date(rebalancing.generatedAt).toLocaleTimeString() : '—'}</span>
+            </div>
           </div>
         </section>
 
