@@ -392,6 +392,7 @@ export default function PredictionMarketDashboard() {
           <nav className="flex items-center gap-1 rounded-full border border-border bg-surface/80 p-1 text-xs font-semibold shadow-sm">
             <span className="rounded-full bg-accent px-4 py-2 text-white">Markets</span>
             <Link href="/arbitrage" className="rounded-full px-4 py-2 text-secondary hover:bg-surface-alt hover:text-foreground">Arbitrage lab</Link>
+            <Link href="/cross-platform" className="rounded-full px-4 py-2 text-secondary hover:bg-surface-alt hover:text-foreground">Cross-Platform</Link>
             <Link href="/crypto" className="hidden rounded-full px-4 py-2 text-secondary hover:bg-surface-alt hover:text-foreground sm:block">Crypto</Link>
           </nav>
         </header>

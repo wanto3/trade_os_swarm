@@ -236,9 +236,17 @@ export default function ArbitrageLabPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2 rounded-lg border border-border bg-surface-alt px-4 py-2.5 text-xs font-medium text-secondary">
-            <span className={loading ? 'h-2.5 w-2.5 animate-pulse rounded-full bg-warn' : 'live-dot h-2.5 w-2.5 rounded-full bg-profit'} />
-            {loading ? 'SCANNING' : `LIVE SCAN: ${scan ? new Date(scan.generatedAt).toLocaleTimeString() : '—'}`}
+          <div className="flex items-center gap-3">
+            <Link
+              href="/cross-platform"
+              className="rounded-lg border border-purple/30 bg-purple/10 px-3.5 py-2 text-xs font-semibold text-purple hover:bg-purple/20 transition-colors"
+            >
+              Cross-Platform (Poly &times; Kalshi) &rarr;
+            </Link>
+            <div className="flex items-center gap-2 rounded-lg border border-border bg-surface-alt px-4 py-2 text-xs font-medium text-secondary">
+              <span className={loading ? 'h-2.5 w-2.5 animate-pulse rounded-full bg-warn' : 'live-dot h-2.5 w-2.5 rounded-full bg-profit'} />
+              {loading ? 'SCANNING' : `LIVE SCAN: ${scan ? new Date(scan.generatedAt).toLocaleTimeString() : '—'}`}
+            </div>
           </div>
         </header>
 
