@@ -14,6 +14,7 @@ import type {
 
 type VenueFilter = 'all' | PredictionVenue
 type SortMode = 'riskReward' | 'volume' | 'tight' | 'balanced' | 'certainty' | 'upside' | 'closing'
+type RiskMode = 'protected' | 'explore'
 
 type DecisionTone = 'profit' | 'accent' | 'warn' | 'loss'
 
@@ -242,6 +243,7 @@ export default function PredictionMarketDashboard() {
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<VenueFilter>('all')
   const [sort, setSort] = useState<SortMode>('riskReward')
+  const [riskMode, setRiskMode] = useState<RiskMode>('protected')
   const [search, setSearch] = useState('')
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [research, setResearch] = useState<ResearchResult | null>(null)
@@ -308,22 +310,25 @@ export default function PredictionMarketDashboard() {
     const total = askTotal(market)
     return total !== null && Math.abs(total - 1) <= 0.025 && market.volume24h >= 5_000
   }).length, [markets])
+  const allLockedProfit = useMemo(() => arbitrage?.opportunities
+    .filter(item => item.status === 'opportunity' && item.fillable && item.netProfit > 0)
+    .sort((a, b) => b.netProfit - a.netProfit)
+    ?? [], [arbitrage])
+  const lockedProfit = useMemo(() => allLockedProfit.slice(0, 3), [allLockedProfit])
+  const lockedMarketIds = useMemo(() => new Set(allLockedProfit.map(item => item.marketId)), [allLockedProfit])
   const visible = useMemo(() => sortMarkets(markets.filter(market =>
+    (riskMode === 'explore' || lockedMarketIds.has(market.id)) &&
     (filter === 'all' || market.venue === filter) &&
     market.title.toLowerCase().includes(search.trim().toLowerCase()),
-  ), sort).slice(0, 40), [markets, filter, search, sort])
+  ), riskMode === 'protected' ? 'volume' : sort).slice(0, 40), [markets, riskMode, lockedMarketIds, filter, search, sort])
   const selected = visible.find(market => marketKey(market) === selectedKey) ?? visible[0] ?? null
   const selectedTotal = selected ? askTotal(selected) : null
   const selectedQuality = selected ? quoteQuality(selected) : null
-  const lockedProfit = useMemo(() => arbitrage?.opportunities
-    .filter(item => item.status === 'opportunity' && item.fillable && item.netProfit > 0)
-    .sort((a, b) => b.netProfit - a.netProfit)
-    .slice(0, 3) ?? [], [arbitrage])
   const closestSetups = useMemo(() => arbitrage?.opportunities
     .filter(item => item.status === 'near-miss' && item.fillable)
     .sort((a, b) => b.netProfit - a.netProfit)
     .slice(0, 3) ?? [], [arbitrage])
-  const selectedArbitrage = selected ? lockedProfit.find(item => item.marketId === selected.id) : null
+  const selectedArbitrage = selected ? allLockedProfit.find(item => item.marketId === selected.id) : null
   const selectedDecision = selectedArbitrage
     ? { action: 'BUY BOTH SIDES', reason: `${money(selectedArbitrage.netProfit)} estimated net profit after modeled costs for ${selectedArbitrage.requestedShares} matched shares. Recheck both books immediately before execution.`, tone: 'profit' as const }
     : selected ? researchedDecision(selected, research) : null
@@ -428,7 +433,7 @@ export default function PredictionMarketDashboard() {
 
           <div className="p-5 sm:p-6">
             <div className="mb-5 grid gap-3 sm:grid-cols-3">
-              <div className="rounded-2xl border border-border bg-void/35 p-4"><div className="flex items-center justify-between"><span className="text-[10px] font-bold uppercase tracking-wider text-secondary">Locked-profit now</span><LockKeyhole size={15} className={lockedProfit.length ? 'text-profit' : 'text-muted'} /></div><div className={`mt-2 text-3xl font-bold ${lockedProfit.length ? 'text-profit' : 'text-foreground'}`}>{arbitrageLoading && !arbitrage ? '—' : lockedProfit.length}</div><div className="mt-1 text-[11px] text-muted">fee-adjusted, fillable candidates</div></div>
+                <div className="rounded-2xl border border-border bg-void/35 p-4"><div className="flex items-center justify-between"><span className="text-[10px] font-bold uppercase tracking-wider text-secondary">Locked-profit now</span><LockKeyhole size={15} className={allLockedProfit.length ? 'text-profit' : 'text-muted'} /></div><div className={`mt-2 text-3xl font-bold ${allLockedProfit.length ? 'text-profit' : 'text-foreground'}`}>{arbitrageLoading && !arbitrage ? '—' : allLockedProfit.length}</div><div className="mt-1 text-[11px] text-muted">fee-adjusted, fillable candidates</div></div>
               <div className="rounded-2xl border border-border bg-void/35 p-4"><div className="flex items-center justify-between"><span className="text-[10px] font-bold uppercase tracking-wider text-secondary">Best net profit</span><DollarSign size={15} className="text-accent" /></div><div className="mt-2 text-3xl font-bold text-accent">{lockedProfit[0] ? money(lockedProfit[0].netProfit) : '—'}</div><div className="mt-1 text-[11px] text-muted">on {arbitrage?.requestedShares ?? 10} matched shares</div></div>
               <div className="rounded-2xl border border-border bg-void/35 p-4"><div className="flex items-center justify-between"><span className="text-[10px] font-bold uppercase tracking-wider text-secondary">Markets checked</span><Eye size={15} className="text-purple" /></div><div className="mt-2 text-3xl font-bold text-purple">{arbitrage?.scannedMarkets ?? '—'}</div><div className="mt-1 text-[11px] text-muted">full order-book scan</div></div>
             </div>
@@ -445,14 +450,14 @@ export default function PredictionMarketDashboard() {
               <div className="mt-4 flex items-center justify-between"><a href={item.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-bold text-profit">Open contract <ArrowUpRight size={12} /></a><Link href="/arbitrage" className="text-xs font-bold text-accent">Full execution check</Link></div>
             </article>)}</div>}
 
-            {!arbitrageLoading && !arbitrageError && lockedProfit.length === 0 && arbitrage && <div className="grid gap-4 lg:grid-cols-[.8fr_1.2fr]">
+            {!arbitrageLoading && !arbitrageError && allLockedProfit.length === 0 && arbitrage && <div className="grid gap-4 lg:grid-cols-[.8fr_1.2fr]">
               <div className="rounded-2xl border border-dashed border-border bg-void/25 p-5"><div className="mb-3 flex items-center justify-between gap-3"><ShieldCheck className="text-profit" size={23} /><span className="rounded-full border border-loss/30 bg-loss/10 px-2.5 py-1 text-[10px] font-bold text-loss">DECISION: DO NOT TRADE</span></div><div className="text-base font-bold">No locked-profit setup right now</div><p className="mt-2 text-xs leading-5 text-secondary">That is the correct answer—not a missed opportunity. None of the scanned books currently produces a positive payout after depth, fees, gas, and the execution buffer.</p><Link href="/arbitrage" className="mt-4 inline-flex items-center gap-1 text-xs font-bold text-accent">Open detailed arbitrage lab <ArrowUpRight size={12} /></Link></div>
-              <div className="rounded-2xl border border-border bg-void/25 p-5"><div className="mb-3 flex items-center justify-between"><div><div className="text-sm font-bold">Highest implied win chance</div><div className="mt-1 text-[11px] text-secondary">Liquid favorites between 70–97%. Likely does not automatically mean profitable.</div></div><span className="rounded-full bg-accent/10 px-2.5 py-1 text-[10px] font-bold text-accent">RESEARCH FIRST</span></div>
+              {riskMode === 'protected' ? <div className="rounded-2xl border border-profit/20 bg-profit/5 p-5"><div className="mb-3 flex items-center justify-between"><div><div className="text-sm font-bold">Capital Protection is active</div><div className="mt-1 text-[11px] text-secondary">Directional bets are hidden because even a 99% favorite can lose.</div></div><LockKeyhole className="text-profit" size={20} /></div><p className="text-xs leading-5 text-secondary">Stay disciplined and wait for a fully hedged opportunity, or deliberately switch to Explore Ideas to review trades where loss is possible.</p><button onClick={() => setRiskMode('explore')} className="mt-4 rounded-xl border border-border bg-surface-alt px-3.5 py-2.5 text-xs font-bold text-foreground hover:border-accent/35">Explore riskier ideas</button></div> : <div className="rounded-2xl border border-border bg-void/25 p-5"><div className="mb-3 flex items-center justify-between"><div><div className="text-sm font-bold">Highest implied win chance</div><div className="mt-1 text-[11px] text-secondary">Liquid favorites between 70–97%. Likely does not automatically mean profitable.</div></div><span className="rounded-full bg-accent/10 px-2.5 py-1 text-[10px] font-bold text-accent">RESEARCH FIRST</span></div>
                 <div className="space-y-2">{likelyFavorites.length ? likelyFavorites.map(({ market, favorite }) => <button key={marketKey(market)} onClick={() => { selectMarket(market); document.getElementById('decision-queue')?.scrollIntoView({ behavior: 'smooth' }) }} className="flex w-full items-center justify-between gap-4 rounded-xl border border-border bg-surface-alt/60 p-3 text-left transition hover:border-accent/35"><div className="min-w-0"><div className="truncate text-xs font-semibold">{market.title}</div><div className="mt-1 text-[10px] text-muted">market favorite: <span className="text-foreground">{favorite.outcome}</span> · gross upside {((1 - favorite.price) * 100).toFixed(1)}¢</div></div><div className="shrink-0 text-right"><div className="font-mono text-base font-bold text-accent">{(favorite.price * 100).toFixed(1)}%</div><div className="text-[10px] font-bold text-accent">RESEARCH</div></div></button>) : <div className="rounded-xl border border-dashed border-border p-4 text-center text-xs text-secondary">No liquid favorites meet the quality filter.</div>}</div>
-              </div>
+              </div>}
             </div>}
 
-            {!arbitrageLoading && !arbitrageError && lockedProfit.length === 0 && closestSetups.length > 0 && <details className="mt-4 rounded-2xl border border-border bg-void/20"><summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-xs font-bold">Closest arbitrage watchlist <span className="text-[10px] font-semibold text-warn">NOT PROFITABLE YET · {closestSetups.length} NEAR-MISSES</span></summary><div className="grid gap-2 border-t border-border p-3 md:grid-cols-3">{closestSetups.map(item => <a key={item.marketId} href={item.url} target="_blank" rel="noreferrer" className="rounded-xl border border-border bg-surface-alt/60 p-3 transition hover:border-warn/30"><div className="truncate text-xs font-semibold">{item.question}</div><div className="mt-2 flex items-center justify-between text-[10px]"><span className="text-muted">asks {item.combinedAveragePrice === null ? '—' : money(item.combinedAveragePrice)}</span><span className="font-mono font-bold text-loss">{money(item.netProfit)} net</span></div></a>)}</div></details>}
+            {!arbitrageLoading && !arbitrageError && allLockedProfit.length === 0 && closestSetups.length > 0 && <details className="mt-4 rounded-2xl border border-border bg-void/20"><summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-xs font-bold">Closest arbitrage watchlist <span className="text-[10px] font-semibold text-warn">NOT PROFITABLE YET · {closestSetups.length} NEAR-MISSES</span></summary><div className="grid gap-2 border-t border-border p-3 md:grid-cols-3">{closestSetups.map(item => <a key={item.marketId} href={item.url} target="_blank" rel="noreferrer" className="rounded-xl border border-border bg-surface-alt/60 p-3 transition hover:border-warn/30"><div className="truncate text-xs font-semibold">{item.question}</div><div className="mt-2 flex items-center justify-between text-[10px]"><span className="text-muted">asks {item.combinedAveragePrice === null ? '—' : money(item.combinedAveragePrice)}</span><span className="font-mono font-bold text-loss">{money(item.netProfit)} net</span></div></a>)}</div></details>}
 
             <div className="mt-4 flex flex-col justify-between gap-2 border-t border-border pt-4 text-[10px] leading-4 text-muted sm:flex-row"><span>“Locked” describes the payout math only—not guaranteed execution. Quotes and available size can disappear between legs.</span><span className="shrink-0">Last scan {arbitrage ? new Date(arbitrage.generatedAt).toLocaleTimeString() : '—'}</span></div>
           </div>
@@ -464,20 +469,23 @@ export default function PredictionMarketDashboard() {
           <div className="glass-panel min-w-0 overflow-hidden rounded-3xl">
             <div className="border-b border-border p-5 sm:p-6">
               <div className="flex flex-wrap items-start justify-between gap-4">
-                <div><div className="mb-1 flex items-center gap-2"><Layers3 className="text-accent" size={18} /><h2 className="text-lg font-bold">Decision queue</h2></div><p className="text-xs leading-5 text-secondary">Ranked for review—not recommendations to trade.</p></div>
+                <div><div className="mb-1 flex items-center gap-2"><Layers3 className="text-accent" size={18} /><h2 className="text-lg font-bold">Decision queue</h2></div><p className="text-xs leading-5 text-secondary">{riskMode === 'protected' ? 'Only fully hedged, positive-after-cost candidates are shown.' : 'Directional ideas are ranked for research—not recommendations to trade.'}</p></div>
                 <div className="flex items-center gap-2 text-xs text-secondary"><span className={`h-2 w-2 rounded-full ${snapshot?.sources.polymarket.ok && snapshot?.sources.kalshi.ok ? 'bg-profit' : 'bg-warn'}`} />{snapshot ? `${quoteCounts.polymarket} Polymarket · ${quoteCounts.kalshi} Kalshi quoted` : 'Connecting…'}</div>
               </div>
+              <div className="mt-5 grid grid-cols-2 gap-2 rounded-2xl border border-border bg-void/35 p-1.5">
+                <button onClick={() => { setRiskMode('protected'); setSelectedKey(null) }} className={`flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold transition ${riskMode === 'protected' ? 'bg-profit text-void shadow-lg shadow-profit/10' : 'text-secondary hover:bg-surface-alt hover:text-foreground'}`}><LockKeyhole size={14} /> Capital Protection</button>
+                <button onClick={() => { setRiskMode('explore'); setSelectedKey(null) }} className={`flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold transition ${riskMode === 'explore' ? 'bg-accent text-white shadow-lg shadow-accent/10' : 'text-secondary hover:bg-surface-alt hover:text-foreground'}`}><Sparkles size={14} /> Explore Ideas</button>
+              </div>
+              {riskMode === 'protected' && <div className="mt-3 flex items-start gap-2 rounded-xl border border-profit/15 bg-profit/5 px-3.5 py-2.5 text-[11px] leading-5 text-secondary"><ShieldCheck className="mt-0.5 shrink-0 text-profit" size={14} /><span><strong className="text-foreground">Strict rule:</strong> if both outcomes cannot be bought below the guaranteed payout after modeled costs and available depth, the decision is DO NOT TRADE.</span></div>}
+              {riskMode === 'explore' && <div className="mt-3 rounded-xl border border-accent/15 bg-accent/5 px-3.5 py-2.5 text-[11px] leading-5 text-secondary"><strong className="text-foreground">Recommended ranking:</strong> Best chance + return favors liquid, tightly quoted favorites around 70–85%, where the potential payout is still meaningful. It is a screening score—not proof that the favorite will win.</div>}
               <div className="mt-5 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
                 <label className="relative block"><Search className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-muted" size={16} /><input aria-label="Search markets" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search a topic, team, or event" className="!rounded-xl !bg-void/45 !py-3 !pl-10" /></label>
-                <div className="flex items-center gap-2">
+                {riskMode === 'explore' && <div className="flex items-center gap-2">
                   <SlidersHorizontal className="hidden text-muted sm:block" size={15} />
                   <select aria-label="Sort markets" value={sort} onChange={event => setSort(event.target.value as SortMode)} className="!w-auto !min-w-40 !rounded-xl !bg-void/45 !py-3">
                     <option value="riskReward">Best chance + return</option><option value="certainty">Highest implied chance</option><option value="upside">Highest potential return</option><option value="volume">Most active</option><option value="tight">Tightest quotes</option><option value="balanced">Most uncertain</option><option value="closing">Closing soon</option>
                   </select>
-                </div>
-              </div>
-              <div className="mt-3 rounded-xl border border-accent/15 bg-accent/5 px-3.5 py-2.5 text-[11px] leading-5 text-secondary">
-                <strong className="text-foreground">Recommended:</strong> Best chance + return favors liquid, tightly quoted favorites around 70–85%, where the potential payout is still meaningful. It is a screening score—not proof that the favorite will win.
+                </div>}
               </div>
               <div className="mt-3 flex gap-2">
                 {(['all', 'polymarket', 'kalshi'] as VenueFilter[]).map(value => <button key={value} onClick={() => changeFilter(value)} className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition ${filter === value ? 'bg-foreground text-void' : 'border border-border bg-void/30 text-secondary hover:text-foreground'}`}>{value === 'all' ? 'All markets' : sourceLabel(value)}</button>)}
@@ -485,10 +493,10 @@ export default function PredictionMarketDashboard() {
             </div>
 
             <div className="space-y-2 p-3 sm:p-4">
-              {loading && !snapshot ? <div className="grid min-h-72 place-items-center"><div className="text-center"><RefreshCw className="mx-auto mb-3 animate-spin text-accent" size={22} /><div className="text-sm font-semibold">Reading live markets</div><div className="mt-1 text-xs text-secondary">Comparing quotes and liquidity…</div></div></div> : visible.length === 0 ? <div className="grid min-h-72 place-items-center text-center"><div><Search className="mx-auto mb-3 text-muted" size={24} /><div className="font-semibold">No matching markets</div><div className="mt-1 text-sm text-secondary">Try a broader search or another venue.</div></div></div> : visible.map((market, index) => {
+              {(loading && !snapshot) || (riskMode === 'protected' && arbitrageLoading && !arbitrage) ? <div className="grid min-h-72 place-items-center"><div className="text-center"><RefreshCw className="mx-auto mb-3 animate-spin text-accent" size={22} /><div className="text-sm font-semibold">{riskMode === 'protected' ? 'Checking for fully hedged trades' : 'Reading live markets'}</div><div className="mt-1 text-xs text-secondary">Comparing quotes, costs, and available depth…</div></div></div> : visible.length === 0 ? <div className="grid min-h-72 place-items-center text-center"><div><ShieldCheck className="mx-auto mb-3 text-profit" size={26} /><div className="font-semibold">{riskMode === 'protected' ? 'DO NOT TRADE right now' : 'No matching markets'}</div><div className="mt-1 max-w-sm text-sm leading-6 text-secondary">{riskMode === 'protected' ? 'No fully hedged opportunity currently survives fees, depth, and the execution buffer. Waiting protects your capital.' : 'Try a broader search or another venue.'}</div></div></div> : visible.map((market, index) => {
                 const active = selected ? marketKey(selected) === marketKey(market) : false
                 const quality = quoteQuality(market)
-                const locked = lockedProfit.find(item => item.marketId === market.id)
+                const locked = allLockedProfit.find(item => item.marketId === market.id)
                 const decision: DecisionGuidance = locked
                   ? { action: 'BUY BOTH SIDES', reason: `${money(locked.netProfit)} modeled net profit.`, tone: 'profit' }
                   : baseDecision(market)
