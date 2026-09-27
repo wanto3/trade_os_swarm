@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   calculateCompleteSetArbitrage,
   consumeAsks,
+  findBestCompleteSetSize,
 } from '../../lib/services/polymarket-arbitrage.service'
 
 describe('Polymarket complete-set arbitrage', () => {
@@ -77,5 +78,40 @@ describe('Polymarket complete-set arbitrage', () => {
     expect(result.fillable).toBe(true)
     expect(result.grossProfit).toBeCloseTo(-0.4)
     expect(result.netProfit).toBeCloseTo(-0.4)
+  })
+
+  it('finds the most profitable size before deeper liquidity becomes expensive', () => {
+    const result = findBestCompleteSetSize({
+      yesAsks: [
+        { price: 0.45, size: 20 },
+        { price: 0.55, size: 100 },
+      ],
+      noAsks: [
+        { price: 0.50, size: 20 },
+        { price: 0.52, size: 100 },
+      ],
+      maxShares: 50,
+      feeRate: 0,
+      gasBuffer: 0.03,
+      executionBufferBps: 0,
+    })
+
+    expect(result.evaluatedSizes).toBe(50)
+    expect(result.calculation.requestedShares).toBe(20)
+    expect(result.calculation.netProfit).toBeCloseTo(0.97)
+  })
+
+  it('can find a profitable larger size when a fixed cost makes small trades unprofitable', () => {
+    const result = findBestCompleteSetSize({
+      yesAsks: [{ price: 0.495, size: 100 }],
+      noAsks: [{ price: 0.495, size: 100 }],
+      maxShares: 10,
+      feeRate: 0,
+      gasBuffer: 0.03,
+      executionBufferBps: 0,
+    })
+
+    expect(result.calculation.requestedShares).toBe(10)
+    expect(result.calculation.netProfit).toBeCloseTo(0.07)
   })
 })

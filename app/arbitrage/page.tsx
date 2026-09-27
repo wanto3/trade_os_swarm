@@ -56,6 +56,7 @@ interface ArbitrageOpportunity {
 interface ScanResult {
   generatedAt: string
   paperOnly: true
+  smartSizing: boolean
   requestedShares: number
   marketLimit: number
   scannedMarkets: number
@@ -107,9 +108,10 @@ function statusLabel(status: ArbitrageOpportunity['status']): string {
 }
 
 export default function ArbitrageLabPage() {
-  const [sharesInput, setSharesInput] = useState(10)
-  const [marketLimitInput, setMarketLimitInput] = useState(100)
-  const [query, setQuery] = useState({ shares: 10, marketLimit: 100 })
+  const [sharesInput, setSharesInput] = useState(100)
+  const [marketLimitInput, setMarketLimitInput] = useState(250)
+  const [smartSizing, setSmartSizing] = useState(true)
+  const [query, setQuery] = useState({ shares: 100, marketLimit: 250, smartSizing: true })
   const [scan, setScan] = useState<ScanResult | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -124,6 +126,7 @@ export default function ArbitrageLabPage() {
       const params = new URLSearchParams({
         shares: String(query.shares),
         marketLimit: String(query.marketLimit),
+        smartSizing: String(query.smartSizing),
       })
       const response = await fetch(`/api/arbitrage?${params}`, { cache: 'no-store' })
       const payload = await response.json()
@@ -159,10 +162,11 @@ export default function ArbitrageLabPage() {
     const next = {
       shares: Math.min(10_000, Math.max(1, Number(sharesInput) || 10)),
       marketLimit: Math.min(250, Math.max(10, Math.floor(Number(marketLimitInput) || 100))),
+      smartSizing,
     }
     setSharesInput(next.shares)
     setMarketLimitInput(next.marketLimit)
-    if (next.shares === query.shares && next.marketLimit === query.marketLimit) {
+    if (next.shares === query.shares && next.marketLimit === query.marketLimit && next.smartSizing === query.smartSizing) {
       void runScan()
     } else {
       setQuery(next)
@@ -225,7 +229,7 @@ export default function ArbitrageLabPage() {
               </div>
               <div className="flex flex-wrap items-end gap-4">
                 <label className="grid gap-1.5 text-xs font-medium text-secondary">
-                  Matched pairs to buy
+                  Maximum matched pairs
                   <input
                     type="number"
                     min={1}
@@ -234,6 +238,10 @@ export default function ArbitrageLabPage() {
                     onChange={event => setSharesInput(Number(event.target.value))}
                     className="w-32 rounded-lg border border-border bg-surface-alt px-3 py-2 text-sm text-foreground outline-none focus:border-accent"
                   />
+                </label>
+                <label className="flex h-[38px] cursor-pointer items-center gap-2 rounded-lg border border-profit/30 bg-profit/5 px-3 text-xs font-semibold text-foreground">
+                  <input type="checkbox" checked={smartSizing} onChange={event => setSmartSizing(event.target.checked)} className="h-4 w-4 accent-profit" />
+                  Smart sizing
                 </label>
                 <label className="grid gap-1.5 text-xs font-medium text-secondary">
                   Markets to scan
@@ -263,7 +271,7 @@ export default function ArbitrageLabPage() {
               <Metric label="Markets Scanned" value={scan?.scannedMarkets ?? 0} detail={`${scan?.eligibleBinaryMarkets ?? 0} binary books`} />
               <Metric label="Order Books" value={scan?.booksReceived ?? 0} detail={`of ${scan?.booksRequested ?? 0} requested`} />
               <Metric label="Profitable" value={scan?.profitableCount ?? 0} detail="after estimated costs" accent={Boolean(scan?.profitableCount)} />
-              <Metric label="Trade Size" value={`${scan?.requestedShares ?? query.shares} complete sets`} detail={`${scan?.requestedShares ?? query.shares} YES + ${scan?.requestedShares ?? query.shares} NO`} />
+              <Metric label="Size Search" value={scan?.smartSizing ? `1–${scan.requestedShares} sets` : `${scan?.requestedShares ?? query.shares} sets`} detail={scan?.smartSizing ? 'best executable size selected' : 'fixed size'} />
             </div>
           </div>
 
@@ -275,6 +283,9 @@ export default function ArbitrageLabPage() {
                 <div className="rounded-lg border border-profit/20 bg-profit/5 p-4">
                   <div className="font-semibold text-foreground">Buy equal share counts—not equal dollars</div>
                   <div className="mt-2 text-xs leading-5">For 10 matched shares, buy <strong className="text-foreground">10 YES + 10 NO</strong>. One complete pair pays $1, so the guaranteed total payout is <strong className="text-foreground">$10.00</strong>.</div>
+                </div>
+                <div className="rounded-lg border border-accent/20 bg-accent/5 p-4 text-xs leading-5">
+                  <strong className="text-foreground">Smart sizing:</strong> tests many sizes up to your maximum and keeps the size with the highest net profit after depth, fees, and buffers.
                 </div>
                 <div className="rounded-lg border border-border bg-surface-alt p-4 text-center text-xs font-medium text-foreground">
                   $10 payout − both purchase costs − fees/buffers = net profit
@@ -305,7 +316,7 @@ export default function ArbitrageLabPage() {
             <div className="mb-4 flex items-center justify-between">
               <div>
                 <h2 className="text-lg font-semibold">Executable Opportunities</h2>
-                <p className="mt-1 text-sm text-secondary">Ranked by estimated net profit at the selected size.</p>
+                <p className="mt-1 text-sm text-secondary">Ranked by estimated net profit at the smartest executable size.</p>
               </div>
               <button
                 onClick={() => setShowOnlyPositive(value => !value)}
@@ -325,7 +336,7 @@ export default function ArbitrageLabPage() {
                   <div className="max-w-md px-6">
                     <CheckCircle2 className="mx-auto mb-4 h-10 w-10 text-profit" />
                     <h3 className="text-lg font-semibold text-foreground">DO NOT TRADE right now</h3>
-                    <p className="mt-2 text-sm leading-6 text-secondary">No complete set currently costs less than its guaranteed payout after fees and buffers. Buying both sides would lock in no profit or a loss.</p>
+                    <p className="mt-2 text-sm leading-6 text-secondary">No complete set currently costs less than its guaranteed payout after fees and buffers. Smart Scan tested sizes from 1 to {scan?.requestedShares ?? query.shares} pairs across {scan?.scannedMarkets ?? query.marketLimit} markets.</p>
                     <button onClick={() => setShowOnlyPositive(false)} className="mt-4 rounded-lg border border-border bg-surface-alt px-3.5 py-2 text-xs font-semibold text-secondary hover:text-foreground">Explain using near misses</button>
                   </div>
                 </div>
@@ -341,6 +352,7 @@ export default function ArbitrageLabPage() {
                             </span>
                             {opportunity.feeSource !== 'live' && <span className="badge-warning px-2.5 py-1 rounded-md text-xs font-medium uppercase tracking-wider">Fee Fallback</span>}
                             {opportunity.negRisk && <span className="badge-neutral px-2.5 py-1 rounded-md text-xs font-medium uppercase tracking-wider">Neg Risk</span>}
+                            {scan?.smartSizing && <span className="rounded-md border border-accent/30 bg-accent/10 px-2.5 py-1 text-xs font-medium uppercase tracking-wider text-accent">Best size: {opportunity.requestedShares}</span>}
                           </div>
                           
                           <a href={opportunity.url} target="_blank" rel="noreferrer" className="inline-flex items-start gap-2 text-base font-semibold text-foreground hover:text-accent leading-snug">

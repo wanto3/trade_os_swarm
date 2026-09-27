@@ -7,9 +7,10 @@ export const runtime = 'nodejs'
 export async function GET(request: NextRequest) {
   const requestedShares = Number(request.nextUrl.searchParams.get('shares') || 10)
   const marketLimit = Number(request.nextUrl.searchParams.get('marketLimit') || 100)
+  const smartSizing = request.nextUrl.searchParams.get('smartSizing') !== 'false'
 
   try {
-    const result = await scanCompleteSetArbitrage({ requestedShares, marketLimit })
+    const result = await scanCompleteSetArbitrage({ requestedShares, marketLimit, smartSizing })
     return NextResponse.json(result, {
       headers: { 'Cache-Control': 'no-store, max-age=0' },
     })

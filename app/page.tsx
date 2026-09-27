@@ -334,7 +334,7 @@ export default function PredictionMarketDashboard() {
     setArbitrageLoading(true)
     setArbitrageError(null)
     try {
-      const response = await fetch('/api/arbitrage?shares=10&marketLimit=100', { cache: 'no-store' })
+      const response = await fetch('/api/arbitrage?shares=100&marketLimit=250&smartSizing=true', { cache: 'no-store' })
       const data = await response.json()
       if (!response.ok || data.success === false) throw new Error(data.error ?? `HTTP ${response.status}`)
       setArbitrage(data as ArbitrageScanSummary)
@@ -626,7 +626,7 @@ export default function PredictionMarketDashboard() {
           <div className="p-5 sm:p-6">
             <div className="mb-5 grid gap-3 sm:grid-cols-3">
                 <div className="rounded-2xl border border-border bg-void/35 p-4"><div className="flex items-center justify-between"><span className="text-[10px] font-bold uppercase tracking-wider text-secondary">Locked-profit now</span><LockKeyhole size={15} className={allLockedProfit.length ? 'text-profit' : 'text-muted'} /></div><div className={`mt-2 text-3xl font-bold ${allLockedProfit.length ? 'text-profit' : 'text-foreground'}`}>{arbitrageLoading && !arbitrage ? '—' : allLockedProfit.length}</div><div className="mt-1 text-[11px] text-muted">fee-adjusted, fillable candidates</div></div>
-              <div className="rounded-2xl border border-border bg-void/35 p-4"><div className="flex items-center justify-between"><span className="text-[10px] font-bold uppercase tracking-wider text-secondary">Best net profit</span><DollarSign size={15} className="text-accent" /></div><div className="mt-2 text-3xl font-bold text-accent">{lockedProfit[0] ? money(lockedProfit[0].netProfit) : '—'}</div><div className="mt-1 text-[11px] text-muted">on {arbitrage?.requestedShares ?? 10} matched shares</div></div>
+              <div className="rounded-2xl border border-border bg-void/35 p-4"><div className="flex items-center justify-between"><span className="text-[10px] font-bold uppercase tracking-wider text-secondary">Best net profit</span><DollarSign size={15} className="text-accent" /></div><div className="mt-2 text-3xl font-bold text-accent">{lockedProfit[0] ? money(lockedProfit[0].netProfit) : '—'}</div><div className="mt-1 text-[11px] text-muted">{lockedProfit[0] ? `smart-sized at ${lockedProfit[0].requestedShares} matched shares` : 'smart sizing tested up to 100 pairs'}</div></div>
               <div className="rounded-2xl border border-border bg-void/35 p-4"><div className="flex items-center justify-between"><span className="text-[10px] font-bold uppercase tracking-wider text-secondary">Markets checked</span><Eye size={15} className="text-purple" /></div><div className="mt-2 text-3xl font-bold text-purple">{arbitrage?.scannedMarkets ?? '—'}</div><div className="mt-1 text-[11px] text-muted">full order-book scan</div></div>
             </div>
 

@@ -58,6 +58,7 @@ export interface ArbitrageOpportunity extends CompleteSetCalculation {
 export interface ArbitrageScanResult {
   generatedAt: string
   paperOnly: true
+  smartSizing: boolean
   requestedShares: number
   marketLimit: number
   scannedMarkets: number
@@ -117,6 +118,11 @@ interface Candidate {
   yesBook: OrderBook
   noBook: OrderBook
   preliminary: CompleteSetCalculation
+}
+
+export interface SmartSizeResult {
+  calculation: CompleteSetCalculation
+  evaluatedSizes: number
 }
 
 function finiteNumber(value: unknown, fallback = 0): number {
@@ -240,6 +246,46 @@ export function calculateCompleteSetArbitrage(input: {
   }
 }
 
+function adaptiveShareSizes(maxShares: number): number[] {
+  const upper = Math.max(1, Math.floor(finiteNumber(maxShares, 1)))
+  if (upper <= 250) return Array.from({ length: upper }, (_, index) => index + 1)
+
+  // Stay dense at small bankrolls, then sample progressively wider sizes.
+  const sizes = new Set<number>(Array.from({ length: 100 }, (_, index) => index + 1))
+  for (let index = 1; index <= 150; index++) {
+    const progress = index / 150
+    sizes.add(Math.max(1, Math.round(1 + (upper - 1) * progress * progress)))
+  }
+  sizes.add(upper)
+  return Array.from(sizes).sort((a, b) => a - b)
+}
+
+/** Find the executable share count with the highest absolute net profit. */
+export function findBestCompleteSetSize(input: {
+  yesAsks: OrderLevel[]
+  noAsks: OrderLevel[]
+  maxShares: number
+  feeRate: number
+  gasBuffer?: number
+  executionBufferBps?: number
+}): SmartSizeResult {
+  const sizes = adaptiveShareSizes(input.maxShares)
+  const calculations = sizes.map(requestedShares => calculateCompleteSetArbitrage({
+    yesAsks: input.yesAsks,
+    noAsks: input.noAsks,
+    requestedShares,
+    feeRate: input.feeRate,
+    gasBuffer: input.gasBuffer,
+    executionBufferBps: input.executionBufferBps,
+  }))
+  const fillable = calculations.filter(calculation => calculation.fillable)
+  const calculation = fillable.length
+    ? fillable.reduce((best, current) => current.netProfit > best.netProfit ? current : best)
+    : calculations[calculations.length - 1]
+
+  return { calculation, evaluatedSizes: sizes.length }
+}
+
 import { ProxyAgent } from 'undici';
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -287,9 +333,11 @@ function marketUrl(market: GammaMarket): string {
 export async function scanCompleteSetArbitrage(options?: {
   requestedShares?: number
   marketLimit?: number
+  smartSizing?: boolean
 }): Promise<ArbitrageScanResult> {
   const requestedShares = Math.min(10_000, Math.max(1, finiteNumber(options?.requestedShares, 10)))
   const marketLimit = Math.min(250, Math.max(10, Math.floor(finiteNumber(options?.marketLimit, 100))))
+  const smartSizing = options?.smartSizing !== false
   const warnings: string[] = []
 
   const params = new URLSearchParams({
@@ -325,12 +373,15 @@ export async function scanCompleteSetArbitrage(options?: {
     const yesBook = booksByToken.get(item.tokenIds[0])
     const noBook = booksByToken.get(item.tokenIds[1])
     if (!yesBook || !noBook) continue
-    const preliminary = calculateCompleteSetArbitrage({
-      yesAsks: yesBook.asks || [],
-      noAsks: noBook.asks || [],
-      requestedShares,
-      feeRate: DEFAULT_FEE_RATE,
-    })
+    const preliminary = smartSizing
+      ? findBestCompleteSetSize({
+          yesAsks: yesBook.asks || [], noAsks: noBook.asks || [],
+          maxShares: requestedShares, feeRate: DEFAULT_FEE_RATE,
+        }).calculation
+      : calculateCompleteSetArbitrage({
+          yesAsks: yesBook.asks || [], noAsks: noBook.asks || [],
+          requestedShares, feeRate: DEFAULT_FEE_RATE,
+        })
     candidates.push({ ...item, yesBook, noBook, preliminary })
   }
 
@@ -341,7 +392,7 @@ export async function scanCompleteSetArbitrage(options?: {
   })
 
   // Fee lookups are reserved for the closest markets to keep the scanner fast.
-  const rankedCandidates = candidates.slice(0, 30)
+  const rankedCandidates = candidates.slice(0, 60)
   const feeLookups = await Promise.allSettled(rankedCandidates.map(candidate =>
     fetchJson<ClobMarketInfo>(`${CLOB_URL}/clob-markets/${candidate.conditionId}`),
   ))
@@ -353,12 +404,15 @@ export async function scanCompleteSetArbitrage(options?: {
       : null
     const feeRate = liveFeeRate ?? DEFAULT_FEE_RATE
     const feeSource = liveFeeRate === null ? 'conservative-fallback' : 'live'
-    const calculation = calculateCompleteSetArbitrage({
-      yesAsks: candidate.yesBook.asks || [],
-      noAsks: candidate.noBook.asks || [],
-      requestedShares,
-      feeRate,
-    })
+    const calculation = smartSizing
+      ? findBestCompleteSetSize({
+          yesAsks: candidate.yesBook.asks || [], noAsks: candidate.noBook.asks || [],
+          maxShares: requestedShares, feeRate,
+        }).calculation
+      : calculateCompleteSetArbitrage({
+          yesAsks: candidate.yesBook.asks || [], noAsks: candidate.noBook.asks || [],
+          requestedShares, feeRate,
+        })
     const bestYes = consumeAsks(candidate.yesBook.asks || [], 1, 0).averagePrice
     const bestNo = consumeAsks(candidate.noBook.asks || [], 1, 0).averagePrice
     const bestAskSum = bestYes !== null && bestNo !== null ? round(bestYes + bestNo) : null
@@ -397,13 +451,17 @@ export async function scanCompleteSetArbitrage(options?: {
     warnings.push(`${fallbackFees} displayed markets used the conservative 7% fee-rate fallback.`)
   }
   if (opportunities.every(item => item.status !== 'opportunity')) {
-    warnings.push('No net-positive complete-set arbitrage was executable at the requested size in this snapshot.')
+    warnings.push(smartSizing
+      ? `No net-positive complete-set arbitrage was executable at any tested size from 1 to ${requestedShares} pairs in this snapshot.`
+      : 'No net-positive complete-set arbitrage was executable at the requested size in this snapshot.')
   }
+  if (smartSizing) warnings.push(`Smart sizing tested multiple trade sizes from 1 to ${requestedShares} pairs and reports each market's highest-net-profit size.`)
   warnings.push('Paper simulation only. Separate order legs are not atomic and displayed liquidity can disappear.')
 
   return {
     generatedAt: new Date().toISOString(),
     paperOnly: true,
+    smartSizing,
     requestedShares,
     marketLimit,
     scannedMarkets: markets.length,
