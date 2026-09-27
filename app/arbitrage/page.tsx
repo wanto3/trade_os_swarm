@@ -5,7 +5,6 @@ import Link from 'next/link'
 import {
   AlertTriangle,
   ArrowLeft,
-  ArrowLeftRight,
   Beaker,
   CheckCircle2,
   ExternalLink,
@@ -116,7 +115,6 @@ export default function ArbitrageLabPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [autoRefresh, setAutoRefresh] = useState(false)
-  const [showOnlyPositive, setShowOnlyPositive] = useState(true)
   const [paperFills, setPaperFills] = useState<PaperFill[]>([])
 
   const runScan = useCallback(async () => {
@@ -149,12 +147,14 @@ export default function ArbitrageLabPage() {
     return () => window.clearInterval(timer)
   }, [autoRefresh, runScan])
 
-  const displayed = useMemo(() => {
-    if (!scan) return []
-    return showOnlyPositive
-      ? scan.opportunities.filter(item => item.status === 'opportunity')
-      : scan.opportunities
-  }, [scan, showOnlyPositive])
+  const profitable = useMemo(
+    () => scan?.opportunities.filter(item => item.status === 'opportunity') ?? [],
+    [scan],
+  )
+  const diagnostics = useMemo(
+    () => scan?.opportunities.filter(item => item.status !== 'opportunity') ?? [],
+    [scan],
+  )
 
   const simulatedProfit = paperFills.reduce((sum, fill) => sum + fill.netProfit, 0)
 
@@ -318,12 +318,9 @@ export default function ArbitrageLabPage() {
                 <h2 className="text-lg font-semibold">Executable Opportunities</h2>
                 <p className="mt-1 text-sm text-secondary">Ranked by estimated net profit at the smartest executable size.</p>
               </div>
-              <button
-                onClick={() => setShowOnlyPositive(value => !value)}
-                className={`rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${showOnlyPositive ? 'border-profit/40 bg-profit/10 text-profit' : 'border-border bg-surface-alt text-secondary hover:text-foreground'}`}
-              >
-                {showOnlyPositive ? 'Show Losing Examples' : 'Hide Losing Examples'}
-              </button>
+              <div className="rounded-lg border border-profit/30 bg-profit/10 px-4 py-2 text-sm font-semibold text-profit">
+                {profitable.length} live profitable
+              </div>
             </div>
             
             <div>
@@ -331,18 +328,35 @@ export default function ArbitrageLabPage() {
                 <div className="grid min-h-[320px] place-items-center rounded-xl border border-border bg-surface text-center text-secondary">
                   <div><RefreshCw className="mx-auto mb-4 h-8 w-8 animate-spin text-accent" /><p>Reading live YES and NO books…</p></div>
                 </div>
-              ) : displayed.length === 0 ? (
-                <div className="grid min-h-[280px] place-items-center rounded-xl border border-dashed border-border bg-surface text-center">
-                  <div className="max-w-md px-6">
+              ) : profitable.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-border bg-surface p-6 md:p-8">
+                  <div className="mx-auto max-w-2xl text-center">
                     <CheckCircle2 className="mx-auto mb-4 h-10 w-10 text-profit" />
-                    <h3 className="text-lg font-semibold text-foreground">DO NOT TRADE right now</h3>
-                    <p className="mt-2 text-sm leading-6 text-secondary">No complete set currently costs less than its guaranteed payout after fees and buffers. Smart Scan tested sizes from 1 to {scan?.requestedShares ?? query.shares} pairs across {scan?.scannedMarkets ?? query.marketLimit} markets.</p>
-                    <button onClick={() => setShowOnlyPositive(false)} className="mt-4 rounded-lg border border-border bg-surface-alt px-3.5 py-2 text-xs font-semibold text-secondary hover:text-foreground">Explain using near misses</button>
+                    <h3 className="text-lg font-semibold text-foreground">No profitable live trade right now</h3>
+                    <p className="mt-2 text-sm leading-6 text-secondary">Decision: <strong className="text-foreground">wait and do not buy both sides.</strong> The scanner tested sizes from 1 to {scan?.requestedShares ?? query.shares} pairs across {scan?.scannedMarkets ?? query.marketLimit} markets. Every live pair would lose money after estimated costs.</p>
+                  </div>
+
+                  <div className="mx-auto mt-7 max-w-2xl rounded-xl border border-profit/30 bg-profit/5 p-5 text-left">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h4 className="font-semibold text-foreground">What a real positive setup would look like</h4>
+                      <span className="rounded-md border border-warn/40 bg-warn/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-warn">Example only — not live</span>
+                    </div>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                      <div className="rounded-lg border border-border bg-surface-alt p-3 text-sm"><span className="text-secondary">Buy 10 YES at 46¢</span><strong className="float-right font-mono text-foreground">$4.60</strong></div>
+                      <div className="rounded-lg border border-border bg-surface-alt p-3 text-sm"><span className="text-secondary">Buy 10 NO at 51¢</span><strong className="float-right font-mono text-foreground">$5.10</strong></div>
+                    </div>
+                    <div className="mt-3 grid grid-cols-[1fr_auto] gap-x-5 gap-y-2 rounded-lg border border-border bg-surface-alt p-4 text-sm">
+                      <span className="text-secondary">Payout from 10 complete pairs</span><strong className="font-mono text-foreground">$10.00</strong>
+                      <span className="text-secondary">Purchase cost</span><strong className="font-mono text-loss">−$9.70</strong>
+                      <span className="text-secondary">Example fees and buffers</span><strong className="font-mono text-loss">−$0.08</strong>
+                      <span className="border-t border-border pt-2 font-bold text-foreground">Modeled net profit</span><strong className="border-t border-border pt-2 font-mono text-lg text-profit">+$0.22 (2.27%)</strong>
+                    </div>
+                    <p className="mt-3 text-xs leading-5 text-muted">The live list will show a card only when the actual order books produce positive net math like this. This example is educational and cannot be traded.</p>
                   </div>
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {displayed.map(opportunity => (
+                  {profitable.map(opportunity => (
                     <article key={opportunity.marketId} className="card-base p-5 bg-surface rounded-xl border border-border transition-colors hover:border-accent/40 shadow-sm">
                       <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
                         <div className="min-w-0 flex-1">
@@ -444,6 +458,29 @@ export default function ArbitrageLabPage() {
                 </div>
               )}
             </div>
+
+            {!loading && diagnostics.length > 0 && (
+              <details className="mt-5 rounded-xl border border-border bg-surface-alt/60">
+                <summary className="cursor-pointer select-none px-5 py-4 text-sm font-semibold text-secondary hover:text-foreground">
+                  Scanner diagnostics — {diagnostics.length} rejected losing or unfillable setups
+                </summary>
+                <div className="border-t border-border p-4">
+                  <div className="mb-3 rounded-lg border border-loss/20 bg-loss/5 p-3 text-xs leading-5 text-secondary">
+                    <strong className="text-loss">Not opportunities. Do not trade these.</strong> They are shown only so you can verify why the scanner rejected them.
+                  </div>
+                  <div className="space-y-2">
+                    {diagnostics.slice(0, 10).map(item => (
+                      <div key={item.marketId} className="grid gap-2 rounded-lg border border-border bg-surface p-3 text-xs sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center">
+                        <span className="truncate text-secondary" title={item.question}>{item.question}</span>
+                        <span className="font-mono text-muted">paid ${item.acquisitionCost.toFixed(4)} → payout ${item.payout.toFixed(4)}</span>
+                        <strong className="font-mono text-loss">{money(item.netProfit)}</strong>
+                      </div>
+                    ))}
+                  </div>
+                  {diagnostics.length > 10 && <p className="mt-3 text-center text-xs text-muted">Showing the 10 closest rejected setups out of {diagnostics.length}.</p>}
+                </div>
+              </details>
+            )}
           </div>
 
           <div className="card-base flex flex-col p-6 bg-surface rounded-xl border border-border shadow-sm xl:sticky xl:top-6 h-fit">
@@ -508,16 +545,6 @@ function Metric({ label, value, detail, accent = false }: { label: string; value
       <div className="text-xs font-semibold text-secondary uppercase tracking-wider">{label}</div>
       <div className={`mt-2 font-mono text-2xl font-bold ${accent ? 'text-profit' : 'text-foreground'}`}>{value}</div>
       <div className="mt-1.5 text-xs text-muted font-medium">{detail}</div>
-    </div>
-  )
-}
-
-function Quote({ label, value, worst }: { label: string; value: number | null; worst?: number | null }) {
-  return (
-    <div className="rounded-lg border border-border bg-surface-alt p-3">
-      <div className="truncate text-xs font-semibold text-secondary uppercase tracking-wider" title={label}>{label}</div>
-      <div className="mt-1.5 font-mono text-sm font-medium text-accent">{value === null ? '—' : `$${value.toFixed(4)}`}</div>
-      {worst !== undefined && worst !== null && <div className="mt-1 text-[10px] text-muted font-medium">worst ${worst.toFixed(3)}</div>}
     </div>
   )
 }
